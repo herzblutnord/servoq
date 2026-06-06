@@ -1,6 +1,9 @@
 /target/
-/vendor/reference-kdab-servo-webview/
 *.kdev4
 *.user
 .idea/
 .DS_Store
+
+# Reference repositories, not part of ServoQ source
+/vendor/reference-kdab-servo-webview/
+/vendor/reference-ladybird/
