@@ -15,7 +15,7 @@ class BookmarksBar;
 class BrowserWindow;
 class FindInPageWidget;
 class LocationEdit;
-class WebContentPlaceholder;
+class WebContentView;
 
 class Tab final : public QWidget {
 public:
@@ -62,7 +62,7 @@ private:
     QWidget* m_toolbar { nullptr };
     BookmarksBar* m_bookmarks_bar { nullptr };
     LocationEdit* m_location_edit { nullptr };
-    WebContentPlaceholder* m_view { nullptr };
+    WebContentView* m_view { nullptr };
     FindInPageWidget* m_find_in_page { nullptr };
     QLabel* m_hover_label { nullptr };
     QToolButton* m_hamburger_button { nullptr };

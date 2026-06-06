@@ -7,3 +7,5 @@
 # Reference repositories, not part of ServoQ source
 /vendor/reference-kdab-servo-webview/
 /vendor/reference-ladybird/
+
+/.claude/

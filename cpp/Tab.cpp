@@ -7,7 +7,7 @@
 #include "Icon.h"
 #include "LocationEdit.h"
 #include "Settings.h"
-#include "WebContentPlaceholder.h"
+#include "WebContentView.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QAction>
@@ -36,11 +36,15 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     , m_toolbar(new QWidget(m_toolbar_container))
     , m_bookmarks_bar(new BookmarksBar(m_toolbar_container))
     , m_location_edit(new LocationEdit(m_toolbar))
-    , m_view(new WebContentPlaceholder(this))
+    , m_view(new WebContentView(this))
     , m_find_in_page(new FindInPageWidget(this))
     , m_hover_label(new QLabel(this))
     , m_loading_animation_timer(new QTimer(this))
 {
+    // Wire WebContentView to this Tab so delegate callbacks can reach on_* handlers.
+    m_view->setTab(this);
+    m_view->setTabId(m_controller_id);
+
     auto* tab_layout = new QVBoxLayout(this);
     tab_layout->setContentsMargins(0, 0, 0, 0);
     tab_layout->setSpacing(0);
@@ -120,6 +124,9 @@ void Tab::setHamburgerButtonVisible(bool visible)
 void Tab::navigate(QString const& url)
 {
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
+    // Queue URL so create_webview (called from showEvent) uses it if the engine
+    // WebView has not been created yet.
+    m_view->setInitialUrl(normalized_url);
     on_load_start(normalized_url);
     servoq::load_url(m_controller_id, normalized_url.toStdString());
     applyControllerState();
@@ -189,7 +196,7 @@ void Tab::on_url_change(QString const& url)
 {
     m_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
     m_location_edit->setUrl(m_url);
-    m_view->setUrl(m_url);
+    m_view->setUrl(m_url); // keeps placeholder label in sync
 }
 
 void Tab::on_title_change(QString const& title)
