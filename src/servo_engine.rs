@@ -15,7 +15,7 @@ mod engine {
 
     use dpi::PhysicalSize;
     use euclid::{Box2D, Point2D, Scale};
-    use keyboard_types::{Code, Key, KeyState, Location, Modifiers};
+    use servo::{Code, Key, KeyState, Location, Modifiers, NamedKey};
     use servo::{
         DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
@@ -357,8 +357,8 @@ mod engine {
     pub fn forward_wheel(id: i32, dx: f64, dy: f64, x: f32, y: f32) {
         use servo::input_events::WheelMode;
         let delta = WheelDelta {
-            x: dx,
-            y: dy,
+            x: -dx,
+            y: -dy,
             z: 0.0,
             mode: WheelMode::DeltaPixel,
         };
@@ -421,48 +421,48 @@ mod engine {
     fn qt_key_to_key(key_char: u32, qt_key: i32) -> Key {
         // Named keys by Qt::Key hex values
         match qt_key {
-            0x01000000 => Key::Escape,
-            0x01000001 => Key::Tab,
-            0x01000002 => Key::Backtab,
-            0x01000003 => Key::Backspace,
-            0x01000004 | 0x01000005 => Key::Enter,
-            0x01000010 => Key::Home,
-            0x01000011 => Key::End,
-            0x01000012 => Key::ArrowLeft,
-            0x01000013 => Key::ArrowUp,
-            0x01000014 => Key::ArrowRight,
-            0x01000015 => Key::ArrowDown,
-            0x01000016 => Key::PageUp,
-            0x01000017 => Key::PageDown,
-            0x01000020 => Key::Shift,
-            0x01000021 => Key::Control,
-            0x01000022 => Key::Meta,
-            0x01000023 => Key::Alt,
-            0x01000025 => Key::CapsLock,
-            0x01000030 => Key::F1,
-            0x01000031 => Key::F2,
-            0x01000032 => Key::F3,
-            0x01000033 => Key::F4,
-            0x01000034 => Key::F5,
-            0x01000035 => Key::F6,
-            0x01000036 => Key::F7,
-            0x01000037 => Key::F8,
-            0x01000038 => Key::F9,
-            0x01000039 => Key::F10,
-            0x0100003a => Key::F11,
-            0x0100003b => Key::F12,
-            0x01000060 => Key::Delete,
-            0x01000061 => Key::Insert,
-            0x01000006 => Key::ScrollLock,
-            0x01000008 => Key::Pause,
-            0x01000007 => Key::Print,
+            0x01000000 => Key::Named(NamedKey::Escape),
+            0x01000001 => Key::Named(NamedKey::Tab),
+            0x01000002 => Key::Named(NamedKey::Tab), // Qt::Key_Backtab, Shift is carried in modifiers
+            0x01000003 => Key::Named(NamedKey::Backspace),
+            0x01000004 | 0x01000005 => Key::Named(NamedKey::Enter),
+            0x01000006 => Key::Named(NamedKey::Insert),
+            0x01000007 => Key::Named(NamedKey::Delete),
+
+            0x01000010 => Key::Named(NamedKey::Home),
+            0x01000011 => Key::Named(NamedKey::End),
+            0x01000012 => Key::Named(NamedKey::ArrowLeft),
+            0x01000013 => Key::Named(NamedKey::ArrowUp),
+            0x01000014 => Key::Named(NamedKey::ArrowRight),
+            0x01000015 => Key::Named(NamedKey::ArrowDown),
+            0x01000016 => Key::Named(NamedKey::PageUp),
+            0x01000017 => Key::Named(NamedKey::PageDown),
+
+            0x01000020 => Key::Named(NamedKey::Shift),
+            0x01000021 => Key::Named(NamedKey::Control),
+            0x01000022 => Key::Named(NamedKey::Meta),
+            0x01000023 => Key::Named(NamedKey::Alt),
+            0x01000025 => Key::Named(NamedKey::CapsLock),
+
+            0x01000030 => Key::Named(NamedKey::F1),
+            0x01000031 => Key::Named(NamedKey::F2),
+            0x01000032 => Key::Named(NamedKey::F3),
+            0x01000033 => Key::Named(NamedKey::F4),
+            0x01000034 => Key::Named(NamedKey::F5),
+            0x01000035 => Key::Named(NamedKey::F6),
+            0x01000036 => Key::Named(NamedKey::F7),
+            0x01000037 => Key::Named(NamedKey::F8),
+            0x01000038 => Key::Named(NamedKey::F9),
+            0x01000039 => Key::Named(NamedKey::F10),
+            0x0100003a => Key::Named(NamedKey::F11),
+            0x0100003b => Key::Named(NamedKey::F12),
             _ => {
                 if let Some(c) = char::from_u32(key_char) {
                     if !c.is_control() {
                         return Key::Character(c.to_string().into());
                     }
                 }
-                Key::Unidentified
+                Key::Named(NamedKey::Unidentified)
             }
         }
     }
