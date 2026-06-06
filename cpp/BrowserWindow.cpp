@@ -1,5 +1,6 @@
 #include "BrowserWindow.h"
 #include "BookmarksBar.h"
+#include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
 #include "Tab.h"
@@ -28,6 +29,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     resize(1180, 780);
 
     createMenus();
+    updateMenuBarVisibility();
 
     m_tabs->onCurrentChanged = [this](int) { updateCurrentTabState(); };
     m_tabs->onTabCloseRequested = [this](int index) { closeTab(index); };
@@ -137,6 +139,17 @@ void BrowserWindow::createMenus()
         setVerticalTabsExpandOnHover(enabled);
     });
     view_menu->addAction(m_vertical_tabs_hover_expand_action);
+
+    if (show_menubar_option_available()) {
+        view_menu->addSeparator();
+        m_show_menu_bar_action = new QAction("Show Menu Bar", this);
+        m_show_menu_bar_action->setCheckable(true);
+        m_show_menu_bar_action->setChecked(m_show_menu_bar);
+        connect(m_show_menu_bar_action, &QAction::toggled, this, [this](bool visible) {
+            setShowMenuBar(visible);
+        });
+        view_menu->addAction(m_show_menu_bar_action);
+    }
     m_hamburger_menu->addMenu(view_menu);
 
     auto* help_menu = menuBar()->addMenu("&Help");
@@ -159,6 +172,7 @@ void BrowserWindow::createNewTab(QString const& url)
     auto* tab = new Tab(this);
     auto index = m_tabs->addTab(tab, tab->title());
     m_tabs->setCurrentIndex(index);
+    tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     if (url != QStringLiteral("about:blank"))
         tab->navigate(url);
     updateCurrentTabState();
@@ -184,8 +198,10 @@ void BrowserWindow::setHorizontalTabs()
     m_tabs->setVerticalTabsExpandOnHover(false);
     if (m_horizontal_tabs_action)
         m_horizontal_tabs_action->setChecked(true);
-    if (m_vertical_tabs_hover_expand_action)
+    if (m_vertical_tabs_hover_expand_action) {
+        m_vertical_tabs_hover_expand_action->setChecked(false);
         m_vertical_tabs_hover_expand_action->setEnabled(false);
+    }
 }
 
 void BrowserWindow::setVerticalTabsCollapsed()
@@ -205,12 +221,30 @@ void BrowserWindow::setVerticalTabsExpanded()
     if (m_vertical_tabs_expanded_action)
         m_vertical_tabs_expanded_action->setChecked(true);
     if (m_vertical_tabs_hover_expand_action)
-        m_vertical_tabs_hover_expand_action->setEnabled(false);
+        m_vertical_tabs_hover_expand_action->setEnabled(true);
 }
 
 void BrowserWindow::setVerticalTabsExpandOnHover(bool enabled)
 {
     m_tabs->setVerticalTabsExpandOnHover(enabled);
+}
+
+void BrowserWindow::setShowMenuBar(bool visible)
+{
+    m_show_menu_bar = visible && show_menubar_option_available();
+    if (m_show_menu_bar_action && m_show_menu_bar_action->isChecked() != m_show_menu_bar)
+        m_show_menu_bar_action->setChecked(m_show_menu_bar);
+    updateMenuBarVisibility();
+}
+
+void BrowserWindow::updateMenuBarVisibility()
+{
+    auto show_menu_bar = show_menubar_option_available() && m_show_menu_bar;
+    menuBar()->setVisible(show_menu_bar);
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto* tab = m_tabs->tab(i))
+            tab->setHamburgerButtonVisible(!show_menu_bar);
+    }
 }
 
 void BrowserWindow::updateCurrentTabState()

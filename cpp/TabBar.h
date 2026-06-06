@@ -81,6 +81,7 @@ private:
     void startTabDrag(int index);
     void startHoverAnimation(int tab_index, qreal target_progress);
     void setHoveredTabIndex(int index);
+    void updateTabButtonGeometry();
     QSize verticalSizeHint(int tab_count) const;
     int maxVerticalScrollOffset() const;
     void setVerticalScrollOffset(int offset);

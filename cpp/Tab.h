@@ -27,6 +27,7 @@ public:
 
     void setToolbarContainerInTabLayout(bool in_tab_layout);
     void setVerticalTabsEnabled(bool enabled);
+    void setHamburgerButtonVisible(bool visible);
     void navigate(QString const& url);
     void focusLocationEditor();
     void showFindInPage();

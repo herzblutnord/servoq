@@ -253,6 +253,7 @@ TabBar::TabBar(TabWidget* parent)
     });
     connect(this, &QTabBar::currentChanged, this, [this](int index) {
         ensureTabVisible(index);
+        updateTabButtonGeometry();
     });
 }
 
@@ -291,6 +292,7 @@ void TabBar::refreshTabLayout()
 {
     setVerticalScrollOffset(m_vertical_scroll_offset);
     updateGeometry();
+    updateTabButtonGeometry();
     update();
 }
 
@@ -331,6 +333,7 @@ void TabBar::resizeEvent(QResizeEvent* event)
     QTabBar::resizeEvent(event);
     setVerticalScrollOffset(m_vertical_scroll_offset);
     ensureTabVisible(currentIndex());
+    updateTabButtonGeometry();
 }
 
 void TabBar::paintEvent(QPaintEvent*)
@@ -601,7 +604,101 @@ void TabBar::setHoveredTabIndex(int index)
         startHoverAnimation(previous, 0.0);
     if (index >= 0)
         startHoverAnimation(index, 1.0);
+    updateTabButtonGeometry();
     update();
+}
+
+void TabBar::updateTabButtonGeometry()
+{
+    auto prepare_button = [&](QWidget* button) {
+        if (!button)
+            return;
+        button->installEventFilter(this);
+    };
+
+    auto place_expanded_button = [&](int index, QTabBar::ButtonPosition position, QRect shape_rect) {
+        auto* button = tabButton(index, position);
+        if (!button)
+            return;
+        prepare_button(button);
+        auto should_be_visible = position != QTabBar::RightSide || index == currentIndex() || index == m_hovered_tab_index;
+        bool did_update_button = false;
+        if (button->isVisible() != should_be_visible) {
+            button->setVisible(should_be_visible);
+            did_update_button = true;
+        }
+
+        auto button_size = button->size();
+        if (button_size.isEmpty())
+            button_size = button->sizeHint();
+        if (button_size.isEmpty())
+            return;
+
+        auto x = position == QTabBar::RightSide ? shape_rect.right() - button_size.width() - 6 : shape_rect.left() + 6;
+        auto y = shape_rect.top() + ((shape_rect.height() - button_size.height()) / 2);
+        QRect button_geometry { { x, y }, button_size };
+        if (button->geometry() != button_geometry) {
+            button->setGeometry(button_geometry);
+            did_update_button = true;
+        }
+        if (did_update_button)
+            button->raise();
+    };
+
+    auto place_collapsed_button = [&](int index, QTabBar::ButtonPosition position, QRect tab_rect, QRect shape_rect) {
+        auto* button = tabButton(index, position);
+        if (!button)
+            return;
+        prepare_button(button);
+        auto should_be_visible = position == QTabBar::LeftSide || index == m_hovered_tab_index;
+        bool did_update_button = false;
+        if (button->isVisible() != should_be_visible) {
+            button->setVisible(should_be_visible);
+            did_update_button = true;
+        }
+
+        auto button_size = button->size();
+        if (button_size.isEmpty())
+            button_size = button->sizeHint();
+        if (button_size.isEmpty())
+            return;
+
+        QPoint button_position;
+        if (position == QTabBar::RightSide) {
+            button_position = {
+                std::max(tab_rect.left(), shape_rect.left() - 5),
+                std::max(tab_rect.top(), shape_rect.top() - 5),
+            };
+        } else {
+            auto x = std::min(tab_rect.right() - button_size.width() + 1, shape_rect.right() - button_size.width() + 5);
+            auto y = std::min(tab_rect.bottom() - button_size.height() + 1, shape_rect.bottom() - button_size.height() + 5);
+            button_position = { x, y };
+        }
+
+        QRect button_geometry { button_position, button_size };
+        if (button->geometry() != button_geometry) {
+            button->setGeometry(button_geometry);
+            did_update_button = true;
+        }
+        if (did_update_button)
+            button->raise();
+    };
+
+    for (int index = 0; index < count(); ++index) {
+        auto tab_rect = visualTabRect(index);
+        if (!tab_rect.isValid())
+            continue;
+
+        if (m_tab_layout == TabLayout::VerticalCollapsed) {
+            auto shape_rect = collapsedVerticalTabShapeRect(tab_rect).toAlignedRect();
+            place_collapsed_button(index, QTabBar::LeftSide, tab_rect, shape_rect);
+            place_collapsed_button(index, QTabBar::RightSide, tab_rect, shape_rect);
+        } else {
+            auto shape_rect = (m_tab_layout == TabLayout::Horizontal ? horizontalTabCardShapeRect(tab_rect) : tabCardShapeRect(tab_rect)).toAlignedRect();
+            place_expanded_button(index, QTabBar::LeftSide, shape_rect);
+            place_expanded_button(index, QTabBar::RightSide, shape_rect);
+        }
+    }
 }
 
 QSize TabBar::verticalSizeHint(int tab_count) const

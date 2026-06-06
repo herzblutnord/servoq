@@ -1,5 +1,6 @@
 #include "Tab.h"
 #include "BookmarksBar.h"
+#include "ChromeLayout.h"
 #include "BrowserWindow.h"
 #include "ChromeStyle.h"
 #include "FindInPageWidget.h"
@@ -20,7 +21,6 @@
 namespace ServoQ {
 
 namespace {
-constexpr int ToolbarHeight = 42;
 constexpr int ToolbarHorizontalMargin = 12;
 constexpr int ToolbarVerticalMargin = 2;
 }
@@ -46,7 +46,7 @@ Tab::Tab(BrowserWindow* window)
     toolbar_container_layout->setSpacing(0);
 
     m_toolbar->setObjectName("LadybirdNavigationToolbar");
-    m_toolbar->setFixedHeight(ToolbarHeight);
+    m_toolbar->setFixedHeight(browser_chrome_layout_policy().toolbar_height);
     toolbar_container_layout->addWidget(m_toolbar);
     toolbar_container_layout->addWidget(m_bookmarks_bar);
 
@@ -93,6 +93,11 @@ void Tab::setVerticalTabsEnabled(bool enabled)
 {
     m_toolbar->setProperty("verticalTabsEnabled", enabled);
     m_toolbar->layout()->invalidate();
+}
+
+void Tab::setHamburgerButtonVisible(bool visible)
+{
+    m_hamburger_button->setVisible(visible);
 }
 
 void Tab::navigate(QString const& url)
@@ -145,7 +150,7 @@ void Tab::buildToolbar()
 
     auto* toolbar_layout = new QHBoxLayout(m_toolbar);
     toolbar_layout->setContentsMargins(ToolbarHorizontalMargin, ToolbarVerticalMargin, ToolbarHorizontalMargin, ToolbarVerticalMargin);
-    toolbar_layout->setSpacing(6);
+    toolbar_layout->setSpacing(0);
 
     auto* navigation_cluster = new QWidget(m_toolbar);
     auto* navigation_layout = new QHBoxLayout(navigation_cluster);
@@ -194,7 +199,7 @@ void Tab::buildToolbar()
 
     auto* location_container = new QWidget(m_toolbar);
     auto* location_layout = new QHBoxLayout(location_container);
-    location_layout->setContentsMargins(32, 0, 32, 0);
+    location_layout->setContentsMargins(0, 0, 32, 0);
     location_layout->setSpacing(0);
     location_layout->addWidget(m_location_edit);
 

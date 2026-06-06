@@ -17,6 +17,7 @@ public:
     QMenu* hamburgerMenu() const { return m_hamburger_menu; }
     Tab* currentTab() const;
     void tabStateChanged(Tab* tab);
+    bool showMenuBar() const { return m_show_menu_bar; }
 
 protected:
     bool event(QEvent* event) override;
@@ -30,6 +31,8 @@ private:
     void setVerticalTabsCollapsed();
     void setVerticalTabsExpanded();
     void setVerticalTabsExpandOnHover(bool enabled);
+    void setShowMenuBar(bool visible);
+    void updateMenuBarVisibility();
     void updateCurrentTabState();
     void updateChromeStyle();
 
@@ -42,7 +45,9 @@ private:
     QAction* m_vertical_tabs_collapsed_action { nullptr };
     QAction* m_vertical_tabs_expanded_action { nullptr };
     QAction* m_vertical_tabs_hover_expand_action { nullptr };
+    QAction* m_show_menu_bar_action { nullptr };
     bool m_is_updating_chrome_style { false };
+    bool m_show_menu_bar { false };
 };
 
 }
