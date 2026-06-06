@@ -11,7 +11,12 @@ fn main() {
             .qml_file("qml/BookmarkBar.qml")
             .qml_file("qml/FindInPageBar.qml")
             .qml_file("qml/WebViewPlaceholder.qml")
-            .qml_file("qml/ChromeButton.qml"),
+            .qml_file("qml/ChromeButton.qml")
+            .qml_file("qml/LocationBar.qml")
+            .qml_file("qml/TabButton.qml")
+            .qml_file("qml/MenuButton.qml")
+            .qml_file("qml/ToolbarSeparator.qml")
+            .qml_file("qml/WindowControls.qml"),
     )
     .qt_module("Network")
     .files(["src/browser_controller.rs"])

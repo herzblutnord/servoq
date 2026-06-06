@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 
 Item {
@@ -9,16 +8,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: "#08090d"
-
-        Rectangle {
-            anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: "#151b28" }
-                GradientStop { position: 0.38; color: "#0b0f17" }
-                GradientStop { position: 1.0; color: "#08090d" }
-            }
-        }
+        color: "#141618"
 
         ColumnLayout {
             anchors.fill: parent
@@ -40,46 +30,42 @@ Item {
                 controller: root.controller
             }
 
-            Item {
+            WebViewPlaceholder {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-
-                WebViewPlaceholder {
-                    anchors.fill: parent
-                    controller: root.controller
-                }
-
-                FindInPageBar {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.topMargin: 18
-                    anchors.rightMargin: 22
-                    width: Math.min(parent.width - 44, 520)
-                    controller: root.controller
-                    visible: root.controller.find_in_page_visible
-                }
+                controller: root.controller
             }
 
-            Rectangle {
+            FindInPageBar {
                 Layout.fillWidth: true
-                implicitHeight: root.controller.status_text.length > 0 ? 28 : 0
-                visible: root.controller.status_text.length > 0
-                color: "#0b0e14"
-                border.color: "#1e2533"
-                border.width: 1
+                visible: root.controller.find_in_page_visible
+                controller: root.controller
+            }
+        }
 
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: 14
-                    anchors.right: parent.right
-                    anchors.rightMargin: 14
-                    text: root.controller.status_text
-                    color: "#9aa7ba"
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
+        Rectangle {
+            id: statusBubble
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: root.controller.find_in_page_visible ? 42 : 0
+            width: Math.min(parent.width * 0.62, Math.max(180, statusText.implicitWidth + 10))
+            height: 22
+            visible: root.controller.status_text.length > 0
+            color: "#1d1f23"
+            border.width: 1
+            border.color: "#373a3f"
+            radius: 0
+
+            Text {
+                id: statusText
+                anchors.fill: parent
+                anchors.leftMargin: 4
+                anchors.rightMargin: 4
+                text: root.controller.status_text
+                color: "#eef1f6"
+                font.pixelSize: 12
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
             }
         }
     }

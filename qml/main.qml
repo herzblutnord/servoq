@@ -7,11 +7,11 @@ ApplicationWindow {
 
     width: 1280
     height: 820
-    minimumWidth: 900
-    minimumHeight: 620
+    minimumWidth: 860
+    minimumHeight: 560
     visible: true
-    color: "#08090d"
-    title: browser.title.length > 0 ? browser.title : "ServoQ"
+    color: "#141618"
+    title: browser.title.length > 0 ? browser.title + " - ServoQ" : "ServoQ"
 
     BrowserController {
         id: browser

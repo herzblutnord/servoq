@@ -5,30 +5,43 @@ Control {
     id: control
 
     property alias text: label.text
-    property color foreground: enabled ? "#e8edf7" : "#6f7785"
-    property color hoverColor: "#2a3140"
-    property color pressColor: "#343d50"
+    property color foreground: enabled ? "#eef1f6" : "#9aa3b0"
+    property color hoverColor: "#26292d"
+    property color pressColor: "#313439"
+    property color borderColor: "#373a3f"
     property color baseColor: "transparent"
-    property int radius: 9
+    property int radius: 17
+    property int fontSize: 14
+    property bool destructive: false
 
     signal clicked
 
-    implicitWidth: Math.max(34, label.implicitWidth + 18)
-    implicitHeight: 34
-    enabled: true
+    implicitWidth: 36
+    implicitHeight: 36
+    opacity: enabled ? 1.0 : 0.55
 
     background: Rectangle {
         radius: control.radius
-        color: mouse.pressed ? control.pressColor : mouse.containsMouse ? control.hoverColor : control.baseColor
-        border.color: mouse.containsMouse ? "#3d4658" : "transparent"
-        border.width: 1
+        color: {
+            if (mouse.pressed && control.destructive)
+                return "#c42b1c"
+            if (mouse.containsMouse && control.destructive)
+                return "#c42b1c"
+            if (mouse.pressed)
+                return control.pressColor
+            if (mouse.containsMouse)
+                return control.hoverColor
+            return control.baseColor
+        }
+        border.width: control.destructive && mouse.containsMouse ? 0 : 1
+        border.color: mouse.containsMouse || mouse.pressed ? control.borderColor : "transparent"
     }
 
     contentItem: Text {
         id: label
-        color: control.foreground
-        font.pixelSize: 14
-        font.weight: Font.DemiBold
+        color: control.destructive && mouse.containsMouse ? "white" : control.foreground
+        font.pixelSize: control.fontSize
+        font.weight: Font.Medium
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
