@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+    <qresource prefix="/Icons">
+        <!-- Copied from vendor/reference-ladybird/UI/Icons/ladybird.png (BSD-2-Clause, Ladybird project). -->
+        <file alias="ladybird.png">icons/ladybird.png</file>
+    </qresource>
+</RCC>
