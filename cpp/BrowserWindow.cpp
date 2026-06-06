@@ -3,6 +3,7 @@
 #include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
+#include "Settings.h"
 #include "Tab.h"
 #include "TabBar.h"
 #include "servoq/src/bridge.rs.h"
@@ -15,6 +16,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QStatusBar>
+#include <QCloseEvent>
 
 namespace ServoQ {
 
@@ -26,12 +28,19 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
     setMinimumSize(900, 640);
-    resize(1180, 780);
+    resize(Settings::the()->last_size());
+    if (auto last_position = Settings::the()->last_position(); last_position.has_value())
+        move(*last_position);
 
     createMenus();
+    applySettings();
     updateMenuBarVisibility();
 
-    m_tabs->onCurrentChanged = [this](int) { updateCurrentTabState(); };
+    m_tabs->onCurrentChanged = [this](int) {
+        if (auto* tab = currentTab())
+            tab->applyControllerState();
+        updateCurrentTabState();
+    };
     m_tabs->onTabCloseRequested = [this](int index) { closeTab(index); };
     m_tabs->onNewTabRequested = [this] { createNewTab(); };
     m_tabs->setNewTabAction(m_new_tab_action);
@@ -40,6 +49,8 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     statusBar()->showMessage("Servo renderer placeholder is idle");
     updateChromeStyle();
     createInitialTab();
+    if (Settings::the()->is_maximized())
+        showMaximized();
 }
 
 Tab* BrowserWindow::currentTab() const
@@ -50,10 +61,17 @@ Tab* BrowserWindow::currentTab() const
 void BrowserWindow::tabStateChanged(Tab* tab)
 {
     auto index = m_tabs->indexOf(tab);
-    if (index >= 0)
+    if (index >= 0) {
         m_tabs->setTabText(index, tab->title());
+        m_tabs->tabBar()->setTabIcon(index, tab->tabIcon());
+    }
     if (tab == currentTab())
         updateCurrentTabState();
+}
+
+bool BrowserWindow::showMenuBar() const
+{
+    return show_menubar_option_available() && Settings::the()->show_menu_bar();
 }
 
 bool BrowserWindow::event(QEvent* event)
@@ -98,16 +116,17 @@ void BrowserWindow::createMenus()
     m_hamburger_menu->addMenu(edit_menu);
 
     auto* view_menu = menuBar()->addMenu("&View");
-    auto* toggle_bookmarks_action = new QAction("Toggle &Bookmarks Bar", this);
-    toggle_bookmarks_action->setCheckable(true);
-    toggle_bookmarks_action->setChecked(true);
-    connect(toggle_bookmarks_action, &QAction::triggered, this, [this](bool visible) {
+    m_toggle_bookmarks_action = new QAction("Toggle &Bookmarks Bar", this);
+    m_toggle_bookmarks_action->setCheckable(true);
+    m_toggle_bookmarks_action->setChecked(Settings::the()->show_bookmarks_bar());
+    connect(m_toggle_bookmarks_action, &QAction::triggered, this, [this](bool visible) {
+        Settings::the()->set_show_bookmarks_bar(visible);
         for (int i = 0; i < m_tabs->count(); ++i) {
             if (auto* tab = m_tabs->tab(i); tab && tab->bookmarksBar())
                 tab->bookmarksBar()->setVisible(visible);
         }
     });
-    view_menu->addAction(toggle_bookmarks_action);
+    view_menu->addAction(m_toggle_bookmarks_action);
 
     view_menu->addSeparator();
     auto* tab_layout_group = new QActionGroup(this);
@@ -115,7 +134,7 @@ void BrowserWindow::createMenus()
 
     m_horizontal_tabs_action = new QAction("&Horizontal Tabs", this);
     m_horizontal_tabs_action->setCheckable(true);
-    m_horizontal_tabs_action->setChecked(true);
+    m_horizontal_tabs_action->setChecked(!Settings::the()->vertical_tabs_enabled());
     tab_layout_group->addAction(m_horizontal_tabs_action);
     connect(m_horizontal_tabs_action, &QAction::triggered, this, [this] { setHorizontalTabs(); });
     view_menu->addAction(m_horizontal_tabs_action);
@@ -144,7 +163,7 @@ void BrowserWindow::createMenus()
         view_menu->addSeparator();
         m_show_menu_bar_action = new QAction("Show Menu Bar", this);
         m_show_menu_bar_action->setCheckable(true);
-        m_show_menu_bar_action->setChecked(m_show_menu_bar);
+        m_show_menu_bar_action->setChecked(Settings::the()->show_menu_bar());
         connect(m_show_menu_bar_action, &QAction::toggled, this, [this](bool visible) {
             setShowMenuBar(visible);
         });
@@ -159,6 +178,14 @@ void BrowserWindow::createMenus()
     m_hamburger_menu->addMenu(help_menu);
 }
 
+void BrowserWindow::closeEvent(QCloseEvent* event)
+{
+    Settings::the()->set_last_position(pos());
+    Settings::the()->set_last_size(size());
+    Settings::the()->set_is_maximized(isMaximized());
+    QMainWindow::closeEvent(event);
+}
+
 void BrowserWindow::createInitialTab()
 {
     createNewTab(QStringLiteral("about:blank"));
@@ -168,8 +195,8 @@ void BrowserWindow::createInitialTab()
 
 void BrowserWindow::createNewTab(QString const& url)
 {
-    servoq::new_tab();
-    auto* tab = new Tab(this);
+    auto tab_id = servoq::create_tab();
+    auto* tab = new Tab(this, tab_id);
     auto index = m_tabs->addTab(tab, tab->title());
     m_tabs->setCurrentIndex(index);
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
@@ -183,7 +210,9 @@ void BrowserWindow::closeTab(int index)
     if (index < 0 || index >= m_tabs->count())
         return;
 
-    servoq::close_tab(index);
+    auto* tab = m_tabs->tab(index);
+    auto tab_id = tab ? tab->controllerId() : 0;
+    servoq::close_tab(tab_id);
     if (m_tabs->count() == 1) {
         close();
         return;
@@ -196,6 +225,9 @@ void BrowserWindow::setHorizontalTabs()
 {
     m_tabs->setVerticalTabsEnabled(false);
     m_tabs->setVerticalTabsExpandOnHover(false);
+    Settings::the()->set_vertical_tabs_enabled(false);
+    Settings::the()->set_vertical_tabs_expanded(false);
+    Settings::the()->set_vertical_tabs_expand_on_hover(false);
     if (m_horizontal_tabs_action)
         m_horizontal_tabs_action->setChecked(true);
     if (m_vertical_tabs_hover_expand_action) {
@@ -208,6 +240,8 @@ void BrowserWindow::setVerticalTabsCollapsed()
 {
     m_tabs->setVerticalTabsEnabled(true);
     m_tabs->setVerticalTabsExpanded(false);
+    Settings::the()->set_vertical_tabs_enabled(true);
+    Settings::the()->set_vertical_tabs_expanded(false);
     if (m_vertical_tabs_collapsed_action)
         m_vertical_tabs_collapsed_action->setChecked(true);
     if (m_vertical_tabs_hover_expand_action)
@@ -218,6 +252,8 @@ void BrowserWindow::setVerticalTabsExpanded()
 {
     m_tabs->setVerticalTabsEnabled(true);
     m_tabs->setVerticalTabsExpanded(true);
+    Settings::the()->set_vertical_tabs_enabled(true);
+    Settings::the()->set_vertical_tabs_expanded(true);
     if (m_vertical_tabs_expanded_action)
         m_vertical_tabs_expanded_action->setChecked(true);
     if (m_vertical_tabs_hover_expand_action)
@@ -227,23 +263,53 @@ void BrowserWindow::setVerticalTabsExpanded()
 void BrowserWindow::setVerticalTabsExpandOnHover(bool enabled)
 {
     m_tabs->setVerticalTabsExpandOnHover(enabled);
+    Settings::the()->set_vertical_tabs_expand_on_hover(enabled);
 }
 
 void BrowserWindow::setShowMenuBar(bool visible)
 {
-    m_show_menu_bar = visible && show_menubar_option_available();
-    if (m_show_menu_bar_action && m_show_menu_bar_action->isChecked() != m_show_menu_bar)
-        m_show_menu_bar_action->setChecked(m_show_menu_bar);
+    Settings::the()->set_show_menu_bar(visible && show_menubar_option_available());
+    if (m_show_menu_bar_action && m_show_menu_bar_action->isChecked() != Settings::the()->show_menu_bar())
+        m_show_menu_bar_action->setChecked(Settings::the()->show_menu_bar());
     updateMenuBarVisibility();
 }
 
 void BrowserWindow::updateMenuBarVisibility()
 {
-    auto show_menu_bar = show_menubar_option_available() && m_show_menu_bar;
+    auto show_menu_bar = showMenuBar();
     menuBar()->setVisible(show_menu_bar);
     for (int i = 0; i < m_tabs->count(); ++i) {
         if (auto* tab = m_tabs->tab(i))
             tab->setHamburgerButtonVisible(!show_menu_bar);
+    }
+}
+
+void BrowserWindow::applySettings()
+{
+    auto vertical_tabs_enabled = Settings::the()->vertical_tabs_enabled();
+    auto vertical_tabs_expanded = Settings::the()->vertical_tabs_expanded();
+    m_tabs->setVerticalTabsEnabled(vertical_tabs_enabled);
+    m_tabs->setVerticalTabsExpanded(vertical_tabs_expanded);
+    m_tabs->setVerticalTabsExpandOnHover(Settings::the()->vertical_tabs_expand_on_hover());
+    if (m_horizontal_tabs_action)
+        m_horizontal_tabs_action->setChecked(!vertical_tabs_enabled);
+    if (m_vertical_tabs_collapsed_action)
+        m_vertical_tabs_collapsed_action->setChecked(vertical_tabs_enabled && !vertical_tabs_expanded);
+    if (m_vertical_tabs_expanded_action)
+        m_vertical_tabs_expanded_action->setChecked(vertical_tabs_enabled && vertical_tabs_expanded);
+    if (m_vertical_tabs_hover_expand_action) {
+        m_vertical_tabs_hover_expand_action->setEnabled(vertical_tabs_enabled);
+        m_vertical_tabs_hover_expand_action->setChecked(Settings::the()->vertical_tabs_expand_on_hover());
+    }
+    if (m_toggle_bookmarks_action)
+        m_toggle_bookmarks_action->setChecked(Settings::the()->show_bookmarks_bar());
+}
+
+void BrowserWindow::refreshBookmarksBars()
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto* tab = m_tabs->tab(i); tab && tab->bookmarksBar())
+            tab->bookmarksBar()->rebuild();
     }
 }
 
@@ -253,7 +319,7 @@ void BrowserWindow::updateCurrentTabState()
     if (!tab)
         return;
     setWindowTitle(QStringLiteral("%1 - ServoQ").arg(tab->title()));
-    statusBar()->showMessage(QString::fromStdString(std::string(servoq::status_text())));
+    statusBar()->showMessage(QString::fromStdString(std::string(servoq::status_text(tab->controllerId()))));
 }
 
 void BrowserWindow::updateChromeStyle()

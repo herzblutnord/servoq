@@ -1,6 +1,7 @@
 #include "BookmarksBar.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
+#include "Settings.h"
 
 #include <QAction>
 #include <QEvent>
@@ -22,13 +23,16 @@ BookmarksBar::BookmarksBar(QWidget* parent)
 void BookmarksBar::rebuild()
 {
     clear();
-    auto add_bookmark = [this](QString const& text, QString const& url) {
-        auto* action = addAction(create_chrome_icon(ChromeIcon::Globe, palette()), text);
+    auto add_bookmark = [this](QString const& title, QString const& url) {
+        auto* action = addAction(create_chrome_icon(ChromeIcon::Globe, palette()), title);
         action->setToolTip(url);
     };
-    add_bookmark("Ladybird", "https://ladybird.org/");
-    add_bookmark("Servo", "https://servo.org/");
-    add_bookmark("Qt", "https://www.qt.io/");
+    for (auto const& entry : Settings::the()->bookmarks()) {
+        auto parts = entry.split(QStringLiteral("\t"));
+        if (parts.size() < 2)
+            continue;
+        add_bookmark(parts.first(), parts.last());
+    }
 
     for (auto* action : actions()) {
         if (auto* button = qobject_cast<QToolButton*>(widgetForAction(action))) {

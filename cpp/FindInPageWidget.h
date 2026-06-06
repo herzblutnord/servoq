@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <functional>
 
 class QCheckBox;
 class QLabel;
@@ -13,6 +14,8 @@ class FindInPageWidget final : public QWidget {
 public:
     explicit FindInPageWidget(QWidget* parent = nullptr);
     QString query() const;
+    std::function<void()> onShown;
+    std::function<void()> onHidden;
 
 protected:
     bool event(QEvent* event) override;

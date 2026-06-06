@@ -3,6 +3,7 @@
 #include <QMainWindow>
 
 class QAction;
+class QCloseEvent;
 class QMenu;
 
 namespace ServoQ {
@@ -17,10 +18,11 @@ public:
     QMenu* hamburgerMenu() const { return m_hamburger_menu; }
     Tab* currentTab() const;
     void tabStateChanged(Tab* tab);
-    bool showMenuBar() const { return m_show_menu_bar; }
+    bool showMenuBar() const;
 
 protected:
     bool event(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void createMenus();
@@ -33,6 +35,8 @@ private:
     void setVerticalTabsExpandOnHover(bool enabled);
     void setShowMenuBar(bool visible);
     void updateMenuBarVisibility();
+    void applySettings();
+    void refreshBookmarksBars();
     void updateCurrentTabState();
     void updateChromeStyle();
 
@@ -45,9 +49,9 @@ private:
     QAction* m_vertical_tabs_collapsed_action { nullptr };
     QAction* m_vertical_tabs_expanded_action { nullptr };
     QAction* m_vertical_tabs_hover_expand_action { nullptr };
+    QAction* m_toggle_bookmarks_action { nullptr };
     QAction* m_show_menu_bar_action { nullptr };
     bool m_is_updating_chrome_style { false };
-    bool m_show_menu_bar { false };
 };
 
 }

@@ -45,6 +45,7 @@ fn main() {
         "cpp/WebContentPlaceholder.cpp",
         "cpp/ChromeStyle.cpp",
         "cpp/Icon.cpp",
+        "cpp/Settings.cpp",
     ]);
     build.file(resources_cpp);
 

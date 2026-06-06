@@ -1,7 +1,6 @@
 #include "FindInPageWidget.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
-#include "servoq/src/bridge.rs.h"
 
 #include <QCheckBox>
 #include <QEvent>
@@ -103,14 +102,16 @@ void FindInPageWidget::focusInEvent(QFocusEvent* event)
 void FindInPageWidget::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
-    servoq::show_find_in_page();
+    if (onShown)
+        onShown();
     m_find_text->setFocus();
 }
 
 void FindInPageWidget::hideEvent(QHideEvent* event)
 {
     QWidget::hideEvent(event);
-    servoq::hide_find_in_page();
+    if (onHidden)
+        onHidden();
 }
 
 void FindInPageWidget::updateChromeStyle()
