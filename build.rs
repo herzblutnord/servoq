@@ -40,6 +40,7 @@ fn main() {
         "cpp/Tab.cpp",
         "cpp/TabBar.cpp",
         "cpp/LocationEdit.cpp",
+        "cpp/WebViewURL.cpp",
         "cpp/BookmarksBar.cpp",
         "cpp/FindInPageWidget.cpp",
         "cpp/WebContentPlaceholder.cpp",

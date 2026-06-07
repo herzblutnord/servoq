@@ -1,6 +1,7 @@
 #include "LocationEdit.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
+#include "WebViewURL.h"
 
 #include <QAction>
 #include <QEvent>
@@ -16,7 +17,7 @@ LocationEdit::LocationEdit(QWidget* parent)
 {
     setObjectName("LadybirdLocationEdit");
     setMinimumHeight(32);
-    setPlaceholderText("Search or enter address");
+    setPlaceholderText("Enter web address");
     setClearButtonEnabled(false);
 
     m_leading_icon->setObjectName("LadybirdLocationIcon");
@@ -39,9 +40,14 @@ LocationEdit::LocationEdit(QWidget* parent)
 
 void LocationEdit::setUrl(QString const& url)
 {
-    m_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
+    setUrl(std::optional<QString> { url.isEmpty() ? QStringLiteral("about:blank") : url });
+}
+
+void LocationEdit::setUrl(std::optional<QString> url)
+{
+    m_url = std::move(url);
     if (!hasFocus())
-        setText(m_url == QStringLiteral("about:blank") ? QString() : m_url);
+        setText(m_url.has_value() ? WebViewURL::url_for_display(*m_url) : text());
 }
 
 void LocationEdit::setTrailingAction(QAction* action)
@@ -54,7 +60,7 @@ void LocationEdit::setTrailingAction(QAction* action)
 void LocationEdit::focusInEvent(QFocusEvent* event)
 {
     QLineEdit::focusInEvent(event);
-    setText(m_url == QStringLiteral("about:blank") ? QString() : m_url);
+    setText(m_url.has_value() && *m_url != QStringLiteral("about:blank") ? *m_url : QString());
     selectAll();
 }
 

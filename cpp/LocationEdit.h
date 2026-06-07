@@ -2,6 +2,7 @@
 
 #include <QLineEdit>
 #include <QToolButton>
+#include <optional>
 
 namespace ServoQ {
 
@@ -10,7 +11,8 @@ public:
     explicit LocationEdit(QWidget* parent = nullptr);
 
     void setUrl(QString const& url);
-    QString url() const { return m_url; }
+    void setUrl(std::optional<QString> url);
+    std::optional<QString> url() const { return m_url; }
     void setTrailingAction(QAction* action);
 
 protected:
@@ -24,7 +26,7 @@ private:
 
     QToolButton* m_leading_icon { nullptr };
     QToolButton* m_trailing_action { nullptr };
-    QString m_url { QStringLiteral("about:blank") };
+    std::optional<QString> m_url { QStringLiteral("about:blank") };
     bool m_is_updating_chrome_style { false };
 };
 

@@ -264,7 +264,7 @@ mod engine {
         debug_log_detail(
             "create_webview",
             id,
-            format!("url={url} size={w}x{h} scale={scale}"),
+            format!("raw_url={url_str} final_url_to_servo={url} size={w}x{h} scale={scale}"),
         );
 
         ENGINE.with(|state| {
@@ -343,7 +343,11 @@ mod engine {
 
     pub fn load_url(id: i32, url_str: &str) {
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
-        debug_log_detail("load_url", id, &url);
+        debug_log_detail(
+            "load_url",
+            id,
+            format!("raw_url={url_str} final_url_to_servo={url}"),
+        );
         if let Some(wv) = clone_webview(id) {
             wv.load(url);
         } else {
