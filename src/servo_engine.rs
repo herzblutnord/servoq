@@ -282,7 +282,7 @@ mod engine {
         size: PhysicalSize<u32>,
         scale: f32,
     ) {
-        if !perf_enabled() || GL_INFO_LOGGED.swap(true, Ordering::AcqRel) {
+        if GL_INFO_LOGGED.swap(true, Ordering::AcqRel) {
             return;
         }
         if let Err(error) = context.make_current() {
@@ -889,6 +889,32 @@ mod engine {
         wl_surface: u64,
         size: PhysicalSize<u32>,
     ) -> Result<Rc<WindowRenderingContext>, String> {
+        eprintln!(
+            "SERVOQ_WAYLAND display=0x{wl_display:x} surface=0x{wl_surface:x} size={}x{}",
+            size.width, size.height
+        );
+
+        // Root-cause fix: Surfman's Adapter::Software::set_environment_variables(), called
+        // during SoftwareRenderingContext creation in init_servo(), sets LIBGL_ALWAYS_SOFTWARE=1
+        // in the process environment. Mesa reads this env var inside eglInitialize() — not at
+        // eglCreateContext time — to decide which GL driver to load. If it is set at that point,
+        // Mesa loads LLVMpipe instead of the hardware driver (AMD/radeonsi).
+        //
+        // Surfman's HardwarePrime adapter clears LIBGL_ALWAYS_SOFTWARE later, in
+        // create_context_descriptor(), but that runs after eglInitialize() — too late.
+        //
+        // Clearing it here, before Connection::from_display_handle() triggers eglInitialize(),
+        // ensures Mesa selects the hardware driver for this Wayland window EGL display.
+        // The SoftwareRenderingContext's own EGL display was already initialised before the
+        // env var was set, so clearing it here does not affect software-mode operation.
+        if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() {
+            std::env::remove_var("LIBGL_ALWAYS_SOFTWARE");
+            eprintln!(
+                "[servoq] cleared LIBGL_ALWAYS_SOFTWARE before Wayland EGL display init \
+                 (set by software rendering context; would cause LLVMpipe selection)"
+            );
+        }
+
         let display_ptr = NonNull::new(wl_display as *mut c_void)
             .ok_or_else(|| "wl_display pointer is null".to_string())?;
         let surface_ptr = NonNull::new(wl_surface as *mut c_void)

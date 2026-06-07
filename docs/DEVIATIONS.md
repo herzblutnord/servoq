@@ -198,6 +198,9 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Servo wake events posted into Qt are coalesced with an atomic pending flag so background Servo threads cannot flood the Qt event queue with redundant `tick_servo()` calls | servoshell uses a winit event-loop proxy and `ControlFlow::Wait` rather than polling |
 | Optional `SERVOQ_PERF=1` instrumentation logs Rust tick time, software frame readback/delivery bytes, skipped readbacks, Wayland frame-ready count, Wayland present count, make-current/paint/present timing, Qt wake coalescing, Qt embedded-window update/expose counts, and accidental software paint/drawImage counts | ServoQ diagnostic-only instrumentation; disabled by default |
 | `SERVOQ_PERF=1` Wayland mode logs GL/EGL identity once after the context is current: EGL vendor/version/client APIs, GL vendor/renderer/version/GLSL version, GLES-vs-desktop-GL, surface size, DPR, and `software_gl=true/false`; it warns for llvmpipe/softpipe/software renderers | Hardware-vs-software GL diagnosis |
+| Wayland mode GL/EGL identity is logged unconditionally once the context is current, not only when `SERVOQ_PERF=1`, so future hardware-vs-software GL regressions are visible on normal `SERVOQ_RENDERER=wayland-window` runs | `log_wayland_gl_info_once()` |
+| **Wayland LLVMpipe root cause (confirmed)**: `SoftwareRenderingContext::new()` was still called during `init_servo()` even when the active runtime renderer was `SERVOQ_RENDERER=wayland-window`. Surfman's software adapter (`Adapter::Software::set_environment_variables()`) sets `LIBGL_ALWAYS_SOFTWARE=1` as a process-wide environment side effect. Later, when the Wayland window path called `Connection::from_display_handle()` / `WindowRenderingContext::new()`, Mesa read `LIBGL_ALWAYS_SOFTWARE=1` during `eglInitialize()` and selected LLVMpipe instead of AMD/radeonsi. Surfman's hardware adapter clears the variable later, but that happens after EGL initialization, too late to affect driver selection | servo_engine.rs, Surfman/Mesa EGL behavior |
+| **Wayland LLVMpipe fix**: `create_wayland_rendering_context()` clears `LIBGL_ALWAYS_SOFTWARE` before `WindowRenderingContext::new()` and before `Connection::from_display_handle()` can trigger `eglInitialize()`. It logs when the variable was present/cleared and logs the Wayland `wl_display*` / `wl_surface*` addresses for diagnosis. Expected success output is `SERVOQ_GL ... gl_renderer="AMD Radeon Graphics (... radeonsi ...)" software_gl=false` | servo_engine.rs |
 | Servo creation now matches servoshell more closely: `ServoBuilder::opts(Opts::default())`, `.preferences(...)`, `.protocol_registry(ProtocolRegistry::default())`, `.event_loop_waker(...)`, `build()`, then `servo.setup_logging()` | servoshell `desktop/app.rs` ServoBuilder sequence |
 | `EngineState` owns a shared `UserContentManager`, and each `WebViewBuilder` receives `.user_content_manager(...)` like servoshell | servoshell `ServoShellWindow::create_toplevel_webview()` |
 | `SERVOQ_WR_DEBUG=1` toggles Servo WebRender profiler debug and sampling profiler for new WebViews, for diagnosing where slow `webview.paint()` time is spent | servoshell WebRender debug actions |
@@ -214,7 +217,22 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Software renderer remains the fallback and keeps the fixed resize model: Qt logical size × DPR is sent as physical size, DPR is passed separately through `set_hidpi_scale_factor()`, and `webview.resize(PhysicalSize)` drives Servo viewport updates | Servo 0.2.0 `WebView::resize()` contract |
 | Wayland window renderer is intentionally Wayland-only. No X11/XCB/Xlib/XWayland path is implemented. If Qt is not running on Wayland, if native handles are unavailable, or if Servo's `WindowRenderingContext` creation fails, ServoQ prints a warning and keeps the software renderer. | Project platform constraint |
 
-Release profiling commands for unresolved Wayland `webview.paint()` slowness:
+Wayland renderer hardware-GL sanity check:
+
+```bash
+SERVOQ_RENDERER=wayland-window cargo run --release --features servo-engine
+SERVOQ_PERF=1 SERVOQ_RENDERER=wayland-window cargo run --release --features servo-engine
+```
+
+Expected GL line:
+
+```text
+SERVOQ_GL ... gl_renderer="AMD Radeon Graphics (... radeonsi ...)" software_gl=false
+```
+
+If `gl_renderer` ever regresses to `llvmpipe` / `software_gl=true`, first check for `LIBGL_ALWAYS_SOFTWARE=1` being set before `WindowRenderingContext::new()` / `eglInitialize()`. Do not start by optimizing QImage/readback or Servo paint scheduling.
+
+Release profiling commands for unresolved Wayland `webview.paint()` slowness after hardware GL is confirmed:
 
 ```bash
 cargo build --release --features servo-engine
