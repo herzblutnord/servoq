@@ -390,18 +390,20 @@ QToolButton#LadybirdWindowButton:hover { background: %2; }
 QToolButton#LadybirdWindowButton:pressed { background: %12; }
 QToolButton#LadybirdCloseWindowButton:hover { color: %6; background: %5; }
 QToolButton#LadybirdCloseWindowButton:pressed { color: %6; background: %5; }
-)").arg(background,    // %1
-        hover,         // %2
-        ctrl_border,   // %3
-        text,          // %4
-        close_hover,   // %5
-        close_text,    // %6
-        QString(),     // %7 (unused)
-        strip_sep,     // %8
-        sidebar_sep,   // %9
-        sidebar_sep_hover, // %10
-        vtab_active_bg,// %11
-        pressed);      // %12
+)").arg(background,        // %1
+        hover,             // %2
+        ctrl_border,       // %3
+        text,              // %4
+        close_hover,       // %5
+        close_text,        // %6
+        // %7 absent from stylesheet — no arg; next arg fills %8 (lowest remaining).
+        // Qt variadic arg() replaces lowest %N each step; a QString() here would
+        // shift %8 to empty string and leave 'pressed' with no placeholder.
+        strip_sep,         // %8
+        sidebar_sep,       // %9
+        sidebar_sep_hover) // %10
+     .arg(vtab_active_bg,  // %11
+          pressed);        // %12
 }
 
 QString web_placeholder_style_sheet(QPalette const& palette)

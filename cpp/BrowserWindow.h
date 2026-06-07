@@ -49,6 +49,7 @@ private:
     void updateChromeStyle();
 
     TabWidget* m_tabs { nullptr };
+    Tab* m_active_tab { nullptr };
     QMenu* m_hamburger_menu { nullptr };
     QAction* m_new_tab_action { nullptr };
     QAction* m_close_tab_action { nullptr };

@@ -29,5 +29,7 @@ void notify_status_changed(::std::int32_t tab_id, ::rust::Str text);
 
 // Called when Servo panics / crashes during event loop spin. [ladybird: WebContentView crash signal]
 void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason);
+void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url);
+bool content_blocking_enabled();
 
 } // namespace servoq

@@ -348,6 +348,17 @@ void TabBar::resizeEvent(QResizeEvent* event)
     updateTabButtonGeometry();
 }
 
+// [ladybird: TabBar.cpp:427-432] — Qt calls tabLayoutChange() when tab geometry is
+// recalculated (initial show, tab insert/remove, layout mode change). Without this
+// override the close button stays at its construction-time position until the next
+// resizeEvent or hover, causing the "wrong position on first render" bug.
+void TabBar::tabLayoutChange()
+{
+    QTabBar::tabLayoutChange();
+    setVerticalScrollOffset(m_vertical_scroll_offset);
+    updateTabButtonGeometry();
+}
+
 void TabBar::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);

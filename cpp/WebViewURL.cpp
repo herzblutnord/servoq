@@ -187,7 +187,7 @@ QString url_for_display(QString const& raw_url)
         return raw_url;
 
     QString display;
-    auto user_info = url.userInfo(QUrl::FullyDecoded);
+    auto user_info = url.userInfo(QUrl::PrettyDecoded); // FullyDecoded not permitted here
     if (!user_info.isEmpty())
         display += user_info + QLatin1Char('@');
 

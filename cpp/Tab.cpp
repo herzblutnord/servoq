@@ -84,7 +84,7 @@ Tab::Tab(BrowserWindow* window, int controller_id)
 
     // Wire BookmarksBar URL-open callbacks — [ladybird: BookmarksBar.cpp:223-225]
     m_bookmarks_bar->setOpenUrlCallback([this](QString const& url) { navigate(url); });
-    m_bookmarks_bar->setOpenUrlInNewTabCallback([this, window](QString const& url) {
+    m_bookmarks_bar->setOpenUrlInNewTabCallback([window](QString const& url) {
         if (window) window->createNewTab(url);
     });
 
@@ -95,7 +95,8 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     tab_layout->addWidget(m_view, 1);
     tab_layout->addWidget(m_find_in_page);
 
-    m_hover_label->setContentsMargins(5, 2, 5, 2);
+    m_hover_label->setContentsMargins(4, 2, 4, 2); // [ladybird: Tab.cpp:141]
+    m_hover_label->setAutoFillBackground(true);     // [ladybird: Tab.cpp:142]
     m_hover_label->hide();
     m_loading_animation_timer->setInterval(80);
     connect(m_loading_animation_timer, &QTimer::timeout, this, [this] {
@@ -151,6 +152,11 @@ void Tab::setVerticalTabsEnabled(bool enabled)
 void Tab::setHamburgerButtonVisible(bool visible)
 {
     m_hamburger_button->setVisible(visible);
+}
+
+void Tab::setActive(bool active)
+{
+    servoq::set_webview_active(m_controller_id, active);
 }
 
 void Tab::navigate(QString const& url)
@@ -315,6 +321,7 @@ void Tab::on_favicon_change(QIcon const& icon)
         m_window->tabStateChanged(this);
 }
 
+// [ladybird: Tab.cpp:253-260] — link hover updates the hover label and status text.
 void Tab::on_link_hover(QString const& url)
 {
     if (url.isEmpty()) {
@@ -324,7 +331,30 @@ void Tab::on_link_hover(QString const& url)
     }
     m_hover_label->setText(url);
     setStatusText(url);
+    updateHoverLabel();
     m_hover_label->show();
+}
+
+// [ladybird: Tab.cpp:748-763] — position the hover label at the bottom-left of the
+// tab, eliding text to half the tab width. If the mouse is over the label, shift it
+// to the right side so it doesn't obscure the hovered link.
+void Tab::updateHoverLabel()
+{
+    auto elided = QFontMetrics(m_hover_label->font()).elidedText(
+        m_hover_label->text(), Qt::ElideRight, width() / 2 - 10);
+    m_hover_label->setText(elided);
+    m_hover_label->resize(m_hover_label->sizeHint());
+
+    int label_y = height() - m_hover_label->height();
+    if (m_find_in_page->isVisible())
+        label_y -= m_find_in_page->height();
+
+    int label_x = 0;
+    if (m_hover_label->underMouse() && m_hover_label->x() == 0)
+        label_x = width() / 2 + (width() / 2 - m_hover_label->width());
+
+    m_hover_label->move(label_x, label_y);
+    m_hover_label->raise();
 }
 
 QToolButton* Tab::createToolbarButton(QAction* action)
@@ -468,4 +498,3 @@ void Tab::refreshBookmarkIcon()
 }
 
 }
-

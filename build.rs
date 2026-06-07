@@ -21,7 +21,11 @@ fn main() {
     } else {
         "moc"
     };
-    for header in &["cpp/BookmarkStore.h", "cpp/BookmarksBar.h"] {
+    for header in &[
+        "cpp/BookmarkStore.h",
+        "cpp/BookmarksBar.h",
+        "cpp/WebContentView.h",
+    ] {
         let stem = std::path::Path::new(header)
             .file_stem()
             .unwrap()
@@ -80,7 +84,7 @@ fn main() {
     build.file(resources_cpp);
 
     // Compile MOC-generated files for Q_OBJECT classes
-    for stem in &["BookmarkStore", "BookmarksBar"] {
+    for stem in &["BookmarkStore", "BookmarksBar", "WebContentView"] {
         build.file(out_dir.join(format!("moc_{stem}.cpp")));
     }
 

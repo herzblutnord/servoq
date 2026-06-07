@@ -55,6 +55,9 @@ public:
     bool show_bookmarks_bar() const;
     void set_show_bookmarks_bar(bool show_bookmarks_bar);
 
+    bool content_blocking_enabled() const;
+    void set_content_blocking_enabled(bool enabled);
+
     QStringList bookmarks() const;
     void set_bookmarks(QStringList const& bookmarks);
     bool has_bookmark(QString const& url) const;

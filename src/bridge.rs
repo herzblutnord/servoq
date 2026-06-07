@@ -13,6 +13,8 @@ pub mod ffi {
         fn notify_load_finished(tab_id: i32);
         fn notify_status_changed(tab_id: i32, text: &str);
         fn notify_webview_crashed(tab_id: i32, reason: &str);
+        fn notify_request_blocked(tab_id: i32, url: &str);
+        fn content_blocking_enabled() -> bool;
     }
 
     extern "Rust" {
@@ -51,6 +53,8 @@ pub mod ffi {
         fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32);
         fn forward_focus(id: i32, focused: bool);
         fn forward_resize(id: i32, w: i32, h: i32, scale: f32);
+        fn forward_theme_change(id: i32, dark: bool);
+        fn set_webview_active(id: i32, active: bool);
     }
 }
 
@@ -77,7 +81,8 @@ pub use crate::servo_engine::{
 // Engine-lifecycle and input functions (always present; no-ops when feature is off)
 pub use crate::servo_engine::{
     close_webview, create_webview, forward_focus, forward_key, forward_mouse_button,
-    forward_mouse_move, forward_resize, forward_wheel, tick_webview,
+    forward_mouse_move, forward_resize, forward_theme_change, forward_wheel, set_webview_active,
+    tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off

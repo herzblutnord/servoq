@@ -4,13 +4,15 @@
 // WebContentView (vendor/reference-ladybird/UI/Qt/WebContentView.h:47-78):
 // identical event-surface, set_zoom_level, show/hideEvent, focus events.
 //
-// Engine calls live behind the bridge; the widget is feature-agnostic:
-//   - no frame received yet  → shows the placeholder (WebContentPlaceholder)
-//   - frame received         → blits the RGBA QImage in paintEvent
+// Engine calls live behind the bridge:
+//   - before first frame  → black background; no placeholder widget
+//   - frame received      → blits the RGBA QImage in paintEvent
+//   - engine crashed      → paints inline crash message in paintEvent
 
 #pragma once
 
 #include <QImage>
+#include <QString>
 #include <QWidget>
 
 class QKeyEvent;
@@ -21,9 +23,9 @@ class QWheelEvent;
 namespace ServoQ {
 
 class Tab;
-class WebContentPlaceholder;
 
 class WebContentView final : public QWidget {
+    Q_OBJECT
 public:
     explicit WebContentView(QWidget* parent = nullptr);
     ~WebContentView() override;
@@ -34,7 +36,7 @@ public:
     int tabId() const { return m_tab_id; }
     Tab* tab() const { return m_tab; }
 
-    // Placeholder display (shown until first engine frame arrives).
+    // No-ops kept for Tab.cpp call-site compatibility; no placeholder is shown.
     void setUrl(QString const& url);
     void setStatus(QString const& status);
 
@@ -44,11 +46,16 @@ public:
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
 
-    // Called when Servo panics. Shows an inline crash page. [ladybird: WebContentView crash signal]
+    // Called when Servo panics. Renders inline crash message. [ladybird: WebContentView crash signal]
     void receiveWebViewCrash(QString const& reason);
+    void receiveRequestBlocked(QString const& url);
+    void notifyThemeChange();
 
     // Matches Ladybird WebContentView::set_zoom_level (WebContentView.h:81).
     void set_zoom_level(double zoom_level);
+
+signals:
+    void request_blocked(QString const& url_string);
 
     // Ladybird WebContentView.h:56-78 event surface
 protected:
@@ -79,8 +86,8 @@ private:
     QString m_initial_url { QStringLiteral("about:blank") };
     bool m_webview_created { false };
 
-    WebContentPlaceholder* m_placeholder { nullptr };
-    bool m_placeholder_visible { true };
+    bool m_crashed { false };
+    QString m_crash_reason;
 
     QImage m_frame {};
     QTimer* m_engine_tick_timer { nullptr };

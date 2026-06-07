@@ -119,10 +119,79 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Legacy `Settings` bookmark list migrated to `BookmarkStore` on first launch | BookmarksBar.cpp constructor |
 | Qt6 MOC runs on `BookmarkStore.h` and `BookmarksBar.h` in `build.rs` | build.rs |
 
+### Bug 0 — Nerd Font fvar SIGSEGV (and follow-up CJK crash)
+
+| Fix | Reference |
+|-----|-----------|
+| `install_servoq_fontconfig()` writes `$XDG_CACHE_HOME/servoq/fonts.conf` before `ServoBuilder`; sets `FONTCONFIG_FILE` | servo_engine.rs — first line of `create_webview` |
+| Root cause: Nerd Fonts have a corrupt `fvar` table; HarfBuzz reads garbage `axisCount`/`axes.length` on PUA codepoint fallback → SIGSEGV in `hb_face_reference_table` — not catchable by `catch_unwind` | coredump |
+| Follow-up root cause: `FONTCONFIG_FILE` bypasses fontconfig's automatic user-config loading, so `$XDG_CONFIG_HOME/fontconfig/` was absent from Servo's font chain. NotoSansCJK lost → Servo fell through to "Noto Sans Symbols" for U+300E etc., which also has a corrupt fvar → SIGSEGV | Fix 1 |
+| Fixed: fonts.conf now explicitly `<include>`s system (`/etc/fonts/fonts.conf`) **and** user (`$XDG_CONFIG_HOME/fontconfig/conf.d` + `fonts.conf`) chains | servo_engine.rs |
+| Belt-and-suspenders: "Noto Sans Symbols" and "Noto Sans Symbols 2" excluded by family name in addition to the `*NerdFont*` filename glob | servo_engine.rs |
+| fc-match verification: `FONTCONFIG_FILE=~/.cache/servoq/fonts.conf fc-match ':charset=300e'` → **Noto Sans CJK JP** ✓ | verified |
+
+### Bug 2+3 Follow-up — Status Bar Double Display
+
+| Fix | Reference |
+|-----|-----------|
+| Removed `statusBar()->showMessage(servoq::status_text(...))` from `BrowserWindow::updateCurrentTabState()`. Reference BrowserWindow has no statusBar link-hover calls; status text goes only to the in-view `m_hover_label` | BrowserWindow.cpp (reference: no statusBar usage) |
+
+### Bug C — Hidden Tab Still Delivering Frames
+
+| Fix | Reference |
+|-----|-----------|
+| `deliver_frame()` now checks `view->isVisible()` before calling `receiveFrame()`. Servo shares one event loop across all tabs; `set_throttled(true)` is advisory and doesn't immediately suppress `notify_new_frame_ready`. Without the guard, hidden tabs still deliver frames, wasting CPU and racing with the visible tab's render state | WebContentView.cpp |
+
+### Bug 1 — Close Button Wrong Position on First Render
+
+| Fix | Reference |
+|-----|-----------|
+| `TabBar::tabLayoutChange()` override added; calls `setVerticalScrollOffset()` + `updateTabButtonGeometry()` so close button geometry is refreshed whenever Qt re-lays out the tab bar (initial show, tab insert/remove) | TabBar.cpp:427-432 |
+
+### Bug 2 — Remove Placeholder / Idle Text
+
+| Fix | Reference |
+|-----|-----------|
+| `WebContentPlaceholder` widget removed from `WebContentView`; widget shows blank background until first Servo frame | Tab.cpp:158 — `m_view` added directly to layout, no placeholder |
+| Crash display replaced with inline `paintEvent` text (no QWidget child) — `m_crashed` + `m_crash_reason` fields track state | WebContentView.cpp |
+| Stale "Servo renderer placeholder is idle" `statusBar()->showMessage()` removed from `BrowserWindow` constructor | BrowserWindow.cpp:84 |
+
+### Bug 3 — Status Bar Text at Top-Left of WebView
+
+| Fix | Reference |
+|-----|-----------|
+| `Tab::updateHoverLabel()` implemented: positions `m_hover_label` at bottom-left via `move(0, height() - label->height())`; shifts to right side when mouse hovers over label | Tab.cpp:748-763 |
+| Called from `on_link_hover()` after `setText()` | Tab.cpp:253-260 |
+| `m_hover_label->setAutoFillBackground(true)` added in constructor | Tab.cpp:142 |
+
+### Bug 4 — Stylesheet Missing .arg() Arguments
+
+| Fix | Reference |
+|-----|-----------|
+| Removed `QString()` phantom for unused `%7` from `tab_widget_style_sheet()` `.arg()` chain. Qt's variadic `arg()` replaces the LOWEST `%N` per argument; `%7` absent from stylesheet meant `QString()` consumed `%8` and shifted all subsequent colors one position, leaving `pressed` with no placeholder | ChromeStyle.cpp:393-404 |
+
+### Bug 5 — QUrl::userInfo() FullyDecoded Warning
+
+| Fix | Reference |
+|-----|-----------|
+| `url.userInfo(QUrl::FullyDecoded)` → `url.userInfo(QUrl::PrettyDecoded)` in `WebViewURL.cpp`; Qt docs prohibit `FullyDecoded` in `userInfo()` | WebViewURL.cpp:190 |
+
+### Bug 6 — Initial Viewport Sizing
+
+| Fix | Reference |
+|-----|-----------|
+| `ServoDelegate::initial_resize_done: Cell<bool>` added; on first `notify_new_frame_ready` (compositor proven alive), re-sends stored `physical_size` + `hidpi_scale_factor` to ensure pre-spin resize is honoured | servo_engine.rs |
+| G2: `viewport_meta_enabled = true` already set in `servo_preferences()` — verified, no change needed | servo_engine.rs:87 |
+| G3: Lambda capture `[this, window]` → `[window]` in Tab.cpp BookmarksBar callback; `this` was unused | Tab.cpp:87 |
+
 ### Track A — HiDPI Rendering
 
 | Fix | Reference |
 |-----|-----------|
+| `WebContentView::startEngineIfNeeded()` passes physical pixels (`width() * devicePixelRatioF()`, `height() * devicePixelRatioF()`) and Qt DPR to Servo creation | WebContentView.cpp:761-765 |
+| `ServoBuilder` now enables `Preferences::viewport_meta_enabled` and `Preferences::dom_indexeddb_enabled` before `build()` | Servo 0.2.0 `Preferences` API |
+| Existing-webview creation and resize now call `webview.set_hidpi_scale_factor(Scale::new(dpr))` before `webview.resize(PhysicalSize)` and cache physical size for later repaint requests | Servo 0.2.0 `WebView` API |
+| `set_page_zoom(id, zoom)` now forces a public-API repaint path by issuing same-size `webview.resize(cached_physical_size)` after `webview.set_page_zoom(zoom)` | Servo 0.2.0 `WebView` API |
 | `paintEvent`: sets `m_frame.setDevicePixelRatio(devicePixelRatioF())` then draws with `painter.drawImage(QPoint(0,0), m_frame)` — no manual `painter.scale()` | WebContentView.cpp:690,696 |
 | `event()`: handles `QEvent::DevicePixelRatioChange` by calling `forwardResizeToEngine()` + `update()` so moving window to a different-DPI monitor reflows the engine frame | WebContentView.cpp:712-714 |
 
@@ -148,6 +217,25 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | `m_closed_tabs: QVector<QPair<QString,QString>>` (url, title) stack, capped at 10 entries | BrowserWindow.h |
 | `closeTab()` pushes URL+title before removal; enables `m_reopen_tab_action` | BrowserWindow.cpp |
 | `m_reopen_tab_action` (Ctrl+Shift+T) pops the stack and calls `createNewTab(url)` | BrowserWindow.cpp |
+
+### Track B — Servo 0.2.0 API Wiring
+
+| Fix | Reference |
+|-----|-----------|
+| Servo preferences now enable `dom_fontface_enabled` and `layout_variable_fonts_enabled`; local Servo 0.2.0 exposes no CJK-specific preference fields, so system font discovery remains Servo/fontconfig default | Servo 0.2.0 `Preferences` API |
+| Theme changes forward from `WebContentView` to `webview.notify_theme_change(Theme::Dark/Light)` on `QStyleHints::colorSchemeChanged`, `PaletteChange`, `ApplicationPaletteChange`, and `ThemeChange`; initial theme is sent after WebView creation | WebContentView.cpp:100-105,990-994 |
+| Active-tab changes call Servo `show()`, `set_throttled(false)`, and `focus()`; inactive tabs call `blur()`, `set_throttled(true)`, and `hide()` | BrowserWindow.cpp:696-702; WebContentView.cpp:774-783 |
+| `WebContentView::focusInEvent` / `focusOutEvent` continue forwarding to Servo `focus()` / `blur()` | WebContentView.cpp:646-653 |
+
+### Track C — Content Blocking
+
+| Fix | Reference |
+|-----|-----------|
+| `load_url()` now uses Servo `WebView::load_request(UrlRequest::new(url))`, preserving the new request API path | Servo 0.2.0 `WebView::load_request` / `UrlRequest` API |
+| `ServoDelegate::request_navigation()` denies blocked main-frame / iframe navigations; `ServoDelegate::load_web_resource()` intercepts blocked subresources with an empty response | Servo 0.2.0 `WebViewDelegate::request_navigation` / `load_web_resource` API |
+| Static content-blocking list: `doubleclick.net`, `googlesyndication.com`, `ads.twitter.com`, `facebook.net/en_US/fbevents.js` | ContentBlocker.cpp:29-58,233-236 |
+| `WebContentView` emits `request_blocked(QString const& url_string)` via Rust-to-C++ `notify_request_blocked(tab_id, url)` callback | ServoQ bridge |
+| Settings menu contains `QCheckBox "Block trackers and ads"` and persists `content_blocking/enabled`, default on | Settings.cpp:17,27-34 |
 
 ### Feature 4 — Permanent Storage Audit
 
@@ -184,6 +272,9 @@ Intentional deviations required by the Servo embedding architecture or platform 
 | Bookmark store uses local JSON file (not `LibWebView::BookmarkStore`) | No LibWebView dependency; behavior-equivalent: `QSaveFile` atomic writes, `QStandardPaths::AppDataLocation` |
 | "Not secure" indicator uses leading icon only; no cert chain dialog on click | Servo bridge does not expose TLS certificate details |
 | `m_reset_zoom_action` text sourced from `Tab` (not `view().reset_zoom_action()`) | ServoQ has no `LibWebView` action infrastructure; behavior-equivalent |
+| Servo 0.2.0 local crate has no public `WebViewBuilder::size(...)`; initial physical viewport size is supplied through `SoftwareRenderingContext::new(PhysicalSize::new(...))`, which `WebView::viewport_details()` reads at construction | Servo API mismatch between provided docs and local crate |
+| Servo 0.2.0 local crate keeps `WebView::set_animating()` `pub(crate)`; ServoQ uses public same-size `webview.resize()` after page zoom to mark the renderer for repaint | Servo API visibility mismatch between provided docs and local crate |
+| Servo 0.2.0 local crate keeps `WebView::set_focused()` `pub(crate)`; ServoQ uses public `webview.focus()` / `webview.blur()` for focus routing | Servo API visibility mismatch between provided docs and local crate |
 
 ---
 
@@ -197,6 +288,7 @@ Features that cannot be ported because the required infrastructure is missing.
 | `focusInEvent` pre-fills search query from selected text | servo 0.2.0 `WebView::selected_text()` does not exist; no selection-change callback in `WebViewDelegate` |
 | Print (Ctrl+P) | Not implemented in Servo bridge |
 | DevTools / Inspect panel | No DevTools integration |
+| Dynamic filter list (uBlock-style EasyList parsing) | Would require a filter parser crate and rule-list update/storage plumbing |
 | Color scheme / Contrast / Motion menus | `LibWebView::Application` accessibility menus |
 | New window action | Multiple windows not yet supported in ServoQ |
 | Tab audio indicator button | servo 0.2.0 has no general audio-playing signal; `WebViewDelegate::notify_media_session_event(MediaSessionEvent)` only fires for pages using the Media Session API — `PlaybackStateChange(MediaSessionPlaybackState)` variants are `Playing`/`Paused`/`None_`, not a reliable tab-audio indicator |

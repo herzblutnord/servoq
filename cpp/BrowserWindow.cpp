@@ -11,6 +11,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCheckBox>
 #include <QEvent>
 #include <QFileDialog>
 #include <QKeySequence>
@@ -19,6 +20,7 @@
 #include <QShortcut>
 #include <QStatusBar>
 #include <QUrl>
+#include <QWidgetAction>
 #include <QCloseEvent>
 #include <QDebug>
 #include <QWheelEvent>
@@ -59,8 +61,17 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     updateMenuBarVisibility();
 
     m_tabs->onCurrentChanged = [this](int) {
+        auto* previous_tab = m_active_tab;
+        auto* next_tab = currentTab();
+        if (previous_tab && previous_tab != next_tab) {
+            // [ladybird: BrowserWindow.cpp:696-702] inactive tab becomes hidden.
+            previous_tab->setActive(false);
+        }
+        m_active_tab = next_tab;
         if (auto* tab = currentTab()) {
             debug_log("tab_switch", tab->controllerId(), QStringLiteral("active=1"));
+            // [ladybird: BrowserWindow.cpp:701-702] active tab becomes visible.
+            tab->setActive(true);
             tab->applyControllerState();
         }
         updateCurrentTabState();
@@ -70,7 +81,6 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     m_tabs->setNewTabAction(m_new_tab_action);
     setCentralWidget(m_tabs);
 
-    statusBar()->showMessage("Servo renderer placeholder is idle");
     updateChromeStyle();
     createInitialTab();
     if (Settings::the()->is_maximized())
@@ -284,6 +294,17 @@ void BrowserWindow::createMenus()
     }
     m_hamburger_menu->addMenu(view_menu);
 
+    auto* settings_menu = menuBar()->addMenu("&Settings");
+    auto* content_blocking_action = new QWidgetAction(this);
+    auto* content_blocking_checkbox = new QCheckBox("Block trackers and ads", this);
+    content_blocking_checkbox->setChecked(Settings::the()->content_blocking_enabled());
+    connect(content_blocking_checkbox, &QCheckBox::toggled, this, [](bool enabled) {
+        Settings::the()->set_content_blocking_enabled(enabled);
+    });
+    content_blocking_action->setDefaultWidget(content_blocking_checkbox);
+    settings_menu->addAction(content_blocking_action);
+    m_hamburger_menu->addMenu(settings_menu);
+
     auto* help_menu = menuBar()->addMenu("&Help");
     auto* about_action = new QAction("About ServoQ", this);
     about_action->setEnabled(false);
@@ -353,6 +374,10 @@ void BrowserWindow::closeTab(int index)
             m_closed_tabs.removeFirst();
         if (m_reopen_tab_action)
             m_reopen_tab_action->setEnabled(true);
+        if (tab == m_active_tab) {
+            tab->setActive(false);
+            m_active_tab = nullptr;
+        }
     }
 
     m_tabs->removeTab(index);
@@ -493,7 +518,8 @@ void BrowserWindow::updateCurrentTabState()
     if (!tab)
         return;
     setWindowTitle(QStringLiteral("%1 - ServoQ").arg(tab->title()));
-    statusBar()->showMessage(QString::fromStdString(std::string(servoq::status_text(tab->controllerId()))));
+    // Status/link-hover text is shown by Tab's in-view m_hover_label [ladybird: Tab.cpp:748-763].
+    // Reference BrowserWindow does not route link hover to statusBar().
 }
 
 void BrowserWindow::updateChromeStyle()

@@ -120,6 +120,16 @@ void Settings::set_show_bookmarks_bar(bool show_bookmarks_bar)
     m_qsettings.setValue(QStringLiteral("chrome/show_bookmarks_bar"), show_bookmarks_bar);
 }
 
+bool Settings::content_blocking_enabled() const
+{
+    return m_qsettings.value(QStringLiteral("content_blocking/enabled"), QVariant(true)).toBool();
+}
+
+void Settings::set_content_blocking_enabled(bool enabled)
+{
+    m_qsettings.setValue(QStringLiteral("content_blocking/enabled"), enabled);
+}
+
 QStringList Settings::bookmarks() const
 {
     return m_qsettings.value(QStringLiteral("bookmarks/items"), QStringList {

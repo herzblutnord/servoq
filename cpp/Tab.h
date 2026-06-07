@@ -33,6 +33,7 @@ public:
     void setToolbarContainerInTabLayout(bool in_tab_layout);
     void setVerticalTabsEnabled(bool enabled);
     void setHamburgerButtonVisible(bool visible);
+    void setActive(bool active);
     void updateToggleVerticalTabsIcon(); // [ladybird: Tab.cpp:794-797]
     void navigate(QString const& url);
     void location_edit_return_pressed();
@@ -62,6 +63,7 @@ private:
     void set_loading(bool is_loading);
     void refreshBookmarkIcon();
     void updateZoomAction(); // [ladybird: Tab.cpp:233 — reset_zoom_action text/visibility]
+    void updateHoverLabel(); // [ladybird: Tab.cpp:748-763] — positions label at bottom-left
 
     BrowserWindow* m_window { nullptr };
     int m_controller_id { 0 };

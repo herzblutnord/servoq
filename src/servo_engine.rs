@@ -20,8 +20,9 @@ mod engine {
     use servo::{
         DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
-        RenderingContext, Servo, ServoBuilder, SoftwareRenderingContext, WebView, WebViewBuilder,
-        WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
+        NavigationRequest, Preferences, RenderingContext, Servo, ServoBuilder,
+        SoftwareRenderingContext, Theme, UrlRequest, WebResourceLoad, WebResourceResponse, WebView,
+        WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
     };
     use url::Url;
 
@@ -61,7 +62,7 @@ mod engine {
             return;
         }
         LOG_ONCE.call_once(|| {
-            eprintln!("SERVOQ_DEBUG servo_builder opts=default preferences=default protocol_registry=default rendering_context=SoftwareRenderingContext event_loop_waker=ServoDefaultEventLoopWaker");
+            eprintln!("SERVOQ_DEBUG servo_builder opts=default preferences=viewport_meta_enabled+dom_indexeddb_enabled protocol_registry=default rendering_context=SoftwareRenderingContext event_loop_waker=ServoDefaultEventLoopWaker");
             match std::env::current_exe() {
                 Ok(path) => eprintln!("SERVOQ_DEBUG current_exe={}", path.display()),
                 Err(error) => eprintln!("SERVOQ_DEBUG current_exe_error={error}"),
@@ -80,6 +81,124 @@ mod engine {
         });
     }
 
+    // Fix 1: Write servoq-fonts.conf that:
+    //   1. Includes the system config chain (/etc/fonts/fonts.conf + conf.d/).
+    //   2. Re-includes the user config chain (XDG fontconfig/) — REQUIRED because
+    //      setting FONTCONFIG_FILE bypasses fontconfig's automatic user-config
+    //      loading. Without this, CJK font priorities (NotoSansCJK) from the user
+    //      chain are lost. Servo then falls through to "Noto Sans Symbols" for
+    //      U+300E etc., which also has a corrupt fvar table → SIGSEGV.
+    //   3. Excludes *NerdFont* files (filename glob) — crash on PUA codepoints.
+    //   4. Excludes "Noto Sans Symbols" / "Noto Sans Symbols 2" by family name
+    //      as belt-and-suspenders: they crash on CJK fallback regardless of cause.
+    fn install_servoq_fontconfig() {
+        static FONTCONFIG_ONCE: Once = Once::new();
+        FONTCONFIG_ONCE.call_once(|| {
+            let cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+                format!("{home}/.cache")
+            });
+            let xdg_config_home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+                format!("{home}/.config")
+            });
+            let dir = std::path::PathBuf::from(&cache_home).join("servoq");
+            let path = dir.join("fonts.conf");
+
+            // NOTE: prefix="xdg" in fontconfig resolves relative to XDG_CONFIG_HOME.
+            // We use absolute paths for the user chain to avoid any ambiguity.
+            let xml = format!(
+                r#"<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+
+  <!-- 1. System config (includes /etc/fonts/conf.d/) -->
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+
+  <!-- 2. User config — MUST be included explicitly because FONTCONFIG_FILE
+       bypasses fontconfig's automatic user config loading. These are the
+       same paths fontconfig normally auto-loads from XDG_CONFIG_HOME.
+       Without this, NotoSansCJK is absent from Servo's font list for CJK
+       codepoints and Servo falls through to "Noto Sans Symbols" which also
+       crashes HarfBuzz on its fvar table. -->
+  <include ignore_missing="yes">{xdg_config_home}/fontconfig/conf.d</include>
+  <include ignore_missing="yes">{xdg_config_home}/fontconfig/fonts.conf</include>
+
+  <!-- 3. Exclude known-crashing fonts from Servo's font fallback.
+       Confirmed via coredump: Thread 1 SIGSEGV in hb_face_reference_table
+       <- hb_sanitize_context_t::reference_table<OT::fvar>
+       <- hb_font_set_variations. Root cause: corrupt/incompatible fvar table. -->
+  <selectfont>
+    <!-- Nerd Fonts (all variants by filename pattern) — crash on PUA codepoints -->
+    <rejectfont><glob>*NerdFont*.ttf</glob></rejectfont>
+    <rejectfont><glob>*NerdFont*.otf</glob></rejectfont>
+    <rejectfont><glob>*NerdFont*.ttc</glob></rejectfont>
+    <!-- Noto Sans Symbols — crashes on CJK fallback regardless of trigger -->
+    <rejectfont>
+      <pattern>
+        <patelt name="family"><string>Noto Sans Symbols</string></patelt>
+      </pattern>
+    </rejectfont>
+    <rejectfont>
+      <pattern>
+        <patelt name="family"><string>Noto Sans Symbols 2</string></patelt>
+      </pattern>
+    </rejectfont>
+  </selectfont>
+
+</fontconfig>
+"#,
+                xdg_config_home = xdg_config_home,
+            );
+
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("[servoq] fontconfig: failed to create dir {dir:?}: {e}");
+                return;
+            }
+            if let Err(e) = std::fs::write(&path, &xml) {
+                eprintln!("[servoq] fontconfig: failed to write {path:?}: {e}");
+                return;
+            }
+            // A1: print config contents + resolved XDG_CONFIG_HOME for log inspection
+            eprintln!("[servoq] fontconfig: XDG_CONFIG_HOME={xdg_config_home:?}");
+            eprintln!("[servoq] fontconfig: config at {path:?}:\n{xml}");
+            // SAFETY: single-threaded at this point (Qt main thread, once guard).
+            #[allow(deprecated)]
+            std::env::set_var("FONTCONFIG_FILE", &path);
+        });
+    }
+
+    fn servo_preferences() -> Preferences {
+        let mut preferences = Preferences::default();
+        preferences.viewport_meta_enabled = true;
+        preferences.dom_indexeddb_enabled = true;
+        preferences.dom_fontface_enabled = true;
+        preferences.layout_variable_fonts_enabled = true;
+        preferences
+    }
+
+    fn domain_matches(host: &str, domain: &str) -> bool {
+        host == domain || host.ends_with(&format!(".{domain}"))
+    }
+
+    fn should_block_url(url: &Url) -> bool {
+        let Some(host) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
+            return false;
+        };
+        domain_matches(&host, "doubleclick.net")
+            || domain_matches(&host, "googlesyndication.com")
+            || domain_matches(&host, "ads.twitter.com")
+            || (domain_matches(&host, "facebook.net") && url.path() == "/en_US/fbevents.js")
+    }
+
+    fn content_blocking_enabled() -> bool {
+        crate::bridge::ffi::content_blocking_enabled()
+    }
+
+    fn notify_request_blocked(tab_id: i32, url: &Url) {
+        crate::bridge::ffi::notify_request_blocked(tab_id, url.as_str());
+    }
+
     struct TabEntry {
         webview: WebView,
         // Cached values updated by delegate callbacks
@@ -87,6 +206,8 @@ mod engine {
         title: String,
         loading: bool,
         status_text: String,
+        physical_size: PhysicalSize<u32>,
+        hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     }
 
     struct EngineState {
@@ -100,6 +221,11 @@ mod engine {
         tab_id: i32,
         rendering_context: Rc<SoftwareRenderingContext>,
         animating: Cell<bool>,
+        // G1: resize() before the first spin_event_loop() is silently discarded
+        // because the paint thread hasn't started processing messages yet. On the
+        // first notify_new_frame_ready (compositor is live), re-send the stored
+        // physical size so the layout thread relays with the correct viewport.
+        initial_resize_done: Cell<bool>,
     }
 
     impl WebViewDelegate for ServoDelegate {
@@ -112,6 +238,27 @@ mod engine {
                 debug_log("ignored_frame_closed_webview", self.tab_id);
                 return;
             }
+
+            // G1: first callback proves the compositor is alive; re-send stored size
+            // so any resize() calls issued before the first spin are honoured.
+            if !self.initial_resize_done.get() {
+                self.initial_resize_done.set(true);
+                let (size, scale) = ENGINE.with(|s| {
+                    s.borrow()
+                        .as_ref()
+                        .and_then(|e| e.tabs.get(&self.tab_id))
+                        .map(|t| (t.physical_size, t.hidpi_scale_factor))
+                        .unwrap_or((PhysicalSize::new(1, 1), Scale::new(1.0)))
+                });
+                webview.set_hidpi_scale_factor(scale);
+                webview.resize(size);
+                debug_log_detail(
+                    "initial_resize",
+                    self.tab_id,
+                    format!("{}x{} scale={}", size.width, size.height, scale.0),
+                );
+            }
+
             webview.paint();
             let size = self.rendering_context.size();
             let w = size.width;
@@ -241,6 +388,24 @@ mod engine {
             eprintln!("Servo WebView crashed: {reason}");
             crate::bridge::ffi::notify_webview_crashed(self.tab_id, &reason);
         }
+
+        fn request_navigation(&self, _webview: WebView, navigation_request: NavigationRequest) {
+            if content_blocking_enabled() && should_block_url(&navigation_request.url) {
+                notify_request_blocked(self.tab_id, &navigation_request.url);
+                navigation_request.deny();
+                return;
+            }
+            navigation_request.allow();
+        }
+
+        fn load_web_resource(&self, _webview: WebView, load: WebResourceLoad) {
+            let url = load.request().url.clone();
+            if content_blocking_enabled() && should_block_url(&url) {
+                notify_request_blocked(self.tab_id, &url);
+                let intercepted = load.intercept(WebResourceResponse::new(url));
+                intercepted.finish();
+            }
+        }
     }
 
     // ---- thread-local engine state -------------------------
@@ -268,6 +433,7 @@ mod engine {
     // ---- public functions -----------------------------------
 
     pub fn create_webview(id: i32, url_str: &str, w: i32, h: i32, scale: f32) {
+        install_servoq_fontconfig(); // A1: must run before ServoBuilder and any fontconfig call
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
@@ -282,37 +448,40 @@ mod engine {
             let engine = state.get_or_insert_with(|| EngineState {
                 servo: {
                     log_embedder_setup_once();
-                    ServoBuilder::default().build()
+                    ServoBuilder::default()
+                        .preferences(servo_preferences())
+                        .build()
                 },
                 tabs: HashMap::new(),
             });
 
+            let size = PhysicalSize::new(w, h);
+            let scale_factor = Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
+
             if let Some(tab) = engine.tabs.get_mut(&id) {
                 debug_log("create_webview_existing", id);
-                tab.webview.resize(PhysicalSize::new(w, h));
-                tab.webview.set_hidpi_scale_factor(
-                    Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale),
-                );
+                tab.physical_size = size;
+                tab.hidpi_scale_factor = scale_factor;
+                tab.webview.set_hidpi_scale_factor(scale_factor);
+                tab.webview.resize(size);
                 return;
             }
 
             let rendering_context = Rc::new(
-                SoftwareRenderingContext::new(PhysicalSize::new(w, h))
-                    .expect("SoftwareRenderingContext::new failed"),
+                SoftwareRenderingContext::new(size).expect("SoftwareRenderingContext::new failed"),
             );
 
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: id,
                 rendering_context: rendering_context.clone(),
                 animating: Cell::new(false),
+                initial_resize_done: Cell::new(false),
             });
 
             let rc_ctx: Rc<dyn RenderingContext> = rendering_context.clone();
             let webview = WebViewBuilder::new(&engine.servo, rc_ctx)
                 .url(url.clone())
-                .hidpi_scale_factor(Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(
-                    scale,
-                ))
+                .hidpi_scale_factor(scale_factor)
                 .delegate(delegate)
                 .build();
 
@@ -324,6 +493,8 @@ mod engine {
                     title: "New Tab".to_string(),
                     loading: false,
                     status_text: String::new(),
+                    physical_size: size,
+                    hidpi_scale_factor: scale_factor,
                 },
             );
         });
@@ -375,7 +546,7 @@ mod engine {
             format!("raw_url={url_str} final_url_to_servo={url}"),
         );
         if let Some(wv) = clone_webview(id) {
-            wv.load(url);
+            wv.load_request(UrlRequest::new(url));
         } else {
             crate::servo_controller::load_url(id, url_str);
         }
@@ -548,12 +719,39 @@ mod engine {
         }
     }
 
+    pub fn forward_theme_change(id: i32, dark: bool) {
+        if let Some(wv) = clone_webview(id) {
+            wv.notify_theme_change(if dark { Theme::Dark } else { Theme::Light });
+        }
+    }
+
+    pub fn set_webview_active(id: i32, active: bool) {
+        if let Some(wv) = clone_webview(id) {
+            if active {
+                wv.show();
+                wv.set_throttled(false);
+                wv.focus();
+            } else {
+                wv.blur();
+                wv.set_throttled(true);
+                wv.hide();
+            }
+        }
+    }
+
     // [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out/reset_zoom on view()
     // Servo 0.2.0: WebView::set_page_zoom(f32) — clamped to [0.1, 10.0] internally
     pub fn set_page_zoom(id: i32, zoom: f32) {
-        if let Some(wv) = clone_webview(id) {
-            wv.set_page_zoom(zoom);
-        }
+        ENGINE.with(|s| {
+            let s = s.borrow();
+            let Some(entry) = s.as_ref().and_then(|e| e.tabs.get(&id)) else {
+                return;
+            };
+            entry.webview.set_page_zoom(zoom);
+            // Servo 0.2.0 keeps WebView::set_animating() crate-private. A same-size
+            // resize uses public API and marks the painter for repaint after zoom.
+            entry.webview.resize(entry.physical_size);
+        });
     }
 
     pub fn page_zoom(id: i32) -> f32 {
@@ -580,8 +778,10 @@ mod engine {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
                 if let Some(t) = e.tabs.get_mut(&id) {
-                    t.webview.resize(size);
+                    t.physical_size = size;
+                    t.hidpi_scale_factor = scale_factor;
                     t.webview.set_hidpi_scale_factor(scale_factor);
+                    t.webview.resize(size);
                 }
             }
         });
@@ -792,6 +992,16 @@ pub fn forward_focus(_id: i32, _focused: bool) {
 pub fn forward_resize(_id: i32, _w: i32, _h: i32, _scale: f32) {
     #[cfg(feature = "servo-engine")]
     engine::forward_resize(_id, _w, _h, _scale);
+}
+
+pub fn forward_theme_change(_id: i32, _dark: bool) {
+    #[cfg(feature = "servo-engine")]
+    engine::forward_theme_change(_id, _dark);
+}
+
+pub fn set_webview_active(_id: i32, _active: bool) {
+    #[cfg(feature = "servo-engine")]
+    engine::set_webview_active(_id, _active);
 }
 
 pub fn set_page_zoom(_id: i32, _zoom: f32) {

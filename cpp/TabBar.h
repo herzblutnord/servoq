@@ -60,6 +60,7 @@ protected:
     QSize minimumSizeHint() const override;
     QSize tabSizeHint(int index) const override;
     void resizeEvent(QResizeEvent* event) override;
+    void tabLayoutChange() override; // [ladybird: TabBar.cpp:427-432]
     void paintEvent(QPaintEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
