@@ -119,6 +119,36 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Legacy `Settings` bookmark list migrated to `BookmarkStore` on first launch | BookmarksBar.cpp constructor |
 | Qt6 MOC runs on `BookmarkStore.h` and `BookmarksBar.h` in `build.rs` | build.rs |
 
+### Track A — HiDPI Rendering
+
+| Fix | Reference |
+|-----|-----------|
+| `paintEvent`: sets `m_frame.setDevicePixelRatio(devicePixelRatioF())` then draws with `painter.drawImage(QPoint(0,0), m_frame)` — no manual `painter.scale()` | WebContentView.cpp:690,696 |
+| `event()`: handles `QEvent::DevicePixelRatioChange` by calling `forwardResizeToEngine()` + `update()` so moving window to a different-DPI monitor reflows the engine frame | WebContentView.cpp:712-714 |
+
+### Track A — WebView Crash Handler
+
+| Fix | Reference |
+|-----|-----------|
+| `ServoDelegate::notify_crashed()` implemented: forwards reason string to C++ via `bridge::ffi::notify_webview_crashed(tab_id, &reason)` | servo_engine.rs |
+| `tick_webview` wraps `servo.spin_event_loop()` in `std::panic::catch_unwind`; on panic, extracts message and calls `notify_webview_crashed` | servo_engine.rs |
+| C++ `notify_webview_crashed(tab_id, reason)` callback calls `view->receiveWebViewCrash(text)` on the owning `WebContentView` | servo_callbacks.h |
+| `WebContentView::receiveWebViewCrash()`: stops tick timer, clears frame, shows placeholder with "⚠ Web content crashed: …" message | WebContentView.cpp |
+
+### Track B — Open File (Ctrl+O)
+
+| Fix | Reference |
+|-----|-----------|
+| `Open File…` action with `QKeySequence::Open` shortcut; uses `QFileDialog::getOpenFileName` + `QUrl::fromLocalFile().toString()` to navigate current tab | BrowserWindow.cpp |
+
+### Track B — Reopen Last Closed Tab (Ctrl+Shift+T)
+
+| Fix | Reference |
+|-----|-----------|
+| `m_closed_tabs: QVector<QPair<QString,QString>>` (url, title) stack, capped at 10 entries | BrowserWindow.h |
+| `closeTab()` pushes URL+title before removal; enables `m_reopen_tab_action` | BrowserWindow.cpp |
+| `m_reopen_tab_action` (Ctrl+Shift+T) pops the stack and calls `createNewTab(url)` | BrowserWindow.cpp |
+
 ### Feature 4 — Permanent Storage Audit
 
 | Verified | Reference |
@@ -164,13 +194,11 @@ Features that cannot be ported because the required infrastructure is missing.
 | Feature | Blocker |
 |---------|---------|
 | Autocomplete with search engine integration | `LibWebView::Autocomplete`, `WebView::Application::settings().search_engine()` |
-| `focusInEvent` pre-fills search query from selected text | `WebContentView::selected_text()` not wired to Servo bridge |
-| Ctrl+Shift+T reopen recently closed tab/window | No history store in ServoQ |
-| Open File dialog (Ctrl+O) | No file URL handler in Servo bridge |
+| `focusInEvent` pre-fills search query from selected text | servo 0.2.0 `WebView::selected_text()` does not exist; no selection-change callback in `WebViewDelegate` |
 | Print (Ctrl+P) | Not implemented in Servo bridge |
 | DevTools / Inspect panel | No DevTools integration |
 | Color scheme / Contrast / Motion menus | `LibWebView::Application` accessibility menus |
 | New window action | Multiple windows not yet supported in ServoQ |
-| Tab audio indicator button | Audio detection not exposed in Servo bridge |
-| `update_result_label` with real match counts | Find-in-page match count API not exposed in Servo bridge |
-| `focusInEvent` select-in-page text → find bar | `WebContentView::selected_text()` not wired |
+| Tab audio indicator button | servo 0.2.0 has no general audio-playing signal; `WebViewDelegate::notify_media_session_event(MediaSessionEvent)` only fires for pages using the Media Session API — `PlaybackStateChange(MediaSessionPlaybackState)` variants are `Playing`/`Paused`/`None_`, not a reliable tab-audio indicator |
+| `update_result_label` with real match counts | servo 0.2.0 `WebView` has no `find()`, `find_next()`, `find_previous()` methods; `WebViewDelegate` has no `notify_find_result` / `notify_find_match_count` callback |
+| `focusInEvent` select-in-page text → find bar | servo 0.2.0 `WebView` has no `selected_text()` method; `WebViewDelegate` has no selection-change callback |

@@ -44,6 +44,9 @@ public:
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
 
+    // Called when Servo panics. Shows an inline crash page. [ladybird: WebContentView crash signal]
+    void receiveWebViewCrash(QString const& reason);
+
     // Matches Ladybird WebContentView::set_zoom_level (WebContentView.h:81).
     void set_zoom_level(double zoom_level);
 

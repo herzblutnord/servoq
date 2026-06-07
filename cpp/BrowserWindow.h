@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QPair>
+#include <QString>
+#include <QVector>
 
 class QAction;
 class QCloseEvent;
@@ -56,6 +59,8 @@ private:
     QAction* m_vertical_tabs_hover_expand_action { nullptr };
     QAction* m_toggle_bookmarks_action { nullptr };
     QAction* m_show_menu_bar_action { nullptr };
+    QAction* m_reopen_tab_action { nullptr }; // [ladybird: BrowserWindow.cpp reopen last closed tab]
+    QVector<QPair<QString, QString>> m_closed_tabs; // url, title stack; capped at 10
     bool m_is_updating_chrome_style { false };
 };
 

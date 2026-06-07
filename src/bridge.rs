@@ -12,6 +12,7 @@ pub mod ffi {
         fn notify_load_started(tab_id: i32, url: &str);
         fn notify_load_finished(tab_id: i32);
         fn notify_status_changed(tab_id: i32, text: &str);
+        fn notify_webview_crashed(tab_id: i32, reason: &str);
     }
 
     extern "Rust" {

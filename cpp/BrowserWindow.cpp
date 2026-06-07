@@ -12,11 +12,13 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QEvent>
+#include <QFileDialog>
 #include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
 #include <QShortcut>
 #include <QStatusBar>
+#include <QUrl>
 #include <QCloseEvent>
 #include <QDebug>
 #include <QWheelEvent>
@@ -117,6 +119,34 @@ void BrowserWindow::createMenus()
     connect(m_close_tab_action, &QAction::triggered, this, [this] { closeTab(m_tabs->currentIndex()); });
     file_menu->addAction(m_close_tab_action);
     m_hamburger_menu->addAction(m_close_tab_action);
+
+    // [ladybird: BrowserWindow.cpp — reopen last closed tab, Ctrl+Shift+T]
+    m_reopen_tab_action = new QAction("&Reopen Last Tab", this);
+    m_reopen_tab_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
+    m_reopen_tab_action->setEnabled(false); // disabled until a tab is closed
+    connect(m_reopen_tab_action, &QAction::triggered, this, [this] {
+        if (m_closed_tabs.isEmpty()) return;
+        auto [url, title] = m_closed_tabs.takeLast(); // pop from top of stack
+        createNewTab(url);
+        m_reopen_tab_action->setEnabled(!m_closed_tabs.isEmpty());
+    });
+    file_menu->addAction(m_reopen_tab_action);
+    m_hamburger_menu->addAction(m_reopen_tab_action);
+
+    // [ladybird: BrowserWindow.cpp ~line 260 — Ctrl+O open local file]
+    auto* open_file_action = new QAction("&Open File…", this);
+    open_file_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Open));
+    connect(open_file_action, &QAction::triggered, this, [this] {
+        if (auto* tab = currentTab()) {
+            // [ladybird: BrowserWindow.cpp:263] filter matches common web file types
+            auto path = QFileDialog::getOpenFileName(this, QStringLiteral("Open File"), {},
+                QStringLiteral("Web files (*.html *.htm *.xhtml *.svg *.xml *.txt *.pdf);;All files (*)"));
+            if (!path.isEmpty())
+                tab->navigate(QUrl::fromLocalFile(path).toString());
+        }
+    });
+    file_menu->addAction(open_file_action);
+    m_hamburger_menu->addAction(open_file_action);
 
     // [ladybird: BrowserWindow.cpp:360 — Ctrl+D add bookmark]
     auto* add_bookmark_action = new QAction("Add &Bookmark…", this);
@@ -315,6 +345,16 @@ void BrowserWindow::closeTab(int index)
     auto* tab = m_tabs->tab(index);
     auto tab_id = tab ? tab->controllerId() : 0;
     debug_log("close_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(tab == currentTab() ? 1 : 0));
+
+    // [ladybird: BrowserWindow.cpp reopen last closed tab] push before removal, cap at 10
+    if (tab) {
+        m_closed_tabs.append({ tab->url(), tab->title() });
+        if (m_closed_tabs.size() > 10)
+            m_closed_tabs.removeFirst();
+        if (m_reopen_tab_action)
+            m_reopen_tab_action->setEnabled(true);
+    }
+
     m_tabs->removeTab(index);
     servoq::close_tab(tab_id);
     updateCurrentTabState();

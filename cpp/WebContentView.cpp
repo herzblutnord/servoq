@@ -140,6 +140,20 @@ void WebContentView::receiveFrame(QImage const& frame)
     update();
 }
 
+// Show an inline crash page when Servo panics. [ladybird: WebContentView crash signal]
+// We cannot render HTML (Servo has crashed), so we re-show the placeholder with an error status.
+void WebContentView::receiveWebViewCrash(QString const& reason)
+{
+    m_engine_tick_timer->stop();
+    m_frame = {};                   // discard stale frame
+    if (!m_placeholder_visible) {
+        m_placeholder->show();
+        m_placeholder_visible = true;
+    }
+    m_placeholder->setStatus(QStringLiteral("⚠ Web content crashed: ") + reason);
+    update();
+}
+
 // Matches Ladybird WebContentView::set_zoom_level (WebContentView.h:81).
 // TODO: forward to webview.set_page_zoom() once per-tab zoom is wired.
 void WebContentView::set_zoom_level(double /*zoom_level*/) {}
@@ -173,16 +187,20 @@ void WebContentView::forwardResizeToEngine()
     servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
 }
 
-// paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708):
-//   painter.scale(1/dpr, 1/dpr); painter.drawImage(QPoint(0,0), bitmap, srcRect);
-// When no frame is available the placeholder child paints itself automatically.
+// paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708).
+// Use Qt's idiomatic HiDPI path: set devicePixelRatio on the image so Qt maps
+// physical-pixel image dimensions to the widget's logical rect automatically.
+// This avoids the painter.scale(1/dpr) trick which breaks when DPR changes
+// between frame delivery and the repaint. [ladybird: WebContentView.cpp:676-708]
 void WebContentView::paintEvent(QPaintEvent*)
 {
     if (!m_frame.isNull()) {
+        // Update DPR on the cached frame so Qt draws it at the correct scale
+        // even if devicePixelRatioF() changed since the frame was received.
+        m_frame.setDevicePixelRatio(devicePixelRatioF()); // [ladybird: WebContentView.cpp:690]
         QPainter painter(this);
-        qreal dpr = devicePixelRatioF();
-        painter.scale(1.0 / dpr, 1.0 / dpr);
-        painter.drawImage(QPoint(0, 0), m_frame);
+        // Draw to the logical widget rect; Qt accounts for DPI internally.
+        painter.drawImage(QPoint(0, 0), m_frame); // [ladybird: WebContentView.cpp:696]
         return;
     }
     // No frame yet: placeholder child widget handles its own painting.
@@ -330,6 +348,7 @@ void WebContentView::focusOutEvent(QFocusEvent* event)
 }
 
 // event() — ensures Tab key reaches keyPressEvent instead of Qt focus navigation;
+// handles DevicePixelRatioChange for multi-monitor DPI transitions;
 // mirrors Ladybird WebContentView::event() (vendor 964-1009).
 bool WebContentView::event(QEvent* ev)
 {
@@ -340,6 +359,11 @@ bool WebContentView::event(QEvent* ev)
     if (ev->type() == QEvent::KeyRelease) {
         keyReleaseEvent(static_cast<QKeyEvent*>(ev));
         return true;
+    }
+    // [ladybird: WebContentView.cpp:712-714] — DPR change when window moves between monitors
+    if (ev->type() == QEvent::DevicePixelRatioChange) {
+        forwardResizeToEngine(); // sends new physical size + new hidpi scale factor
+        update();                // repaint stale frame with updated DPR until new frame arrives
     }
     return QWidget::event(ev);
 }
@@ -433,6 +457,18 @@ void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)
     }
     debug_log("notify_status_changed", tab_id, status);
     view->tab()->on_link_hover(status);
+}
+
+void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason)
+{
+    auto* view = find_view(tab_id);
+    if (!view) {
+        debug_log("ignored_crashed_missing_view", tab_id);
+        return;
+    }
+    auto text = QString::fromUtf8(reason.data(), static_cast<qsizetype>(reason.size()));
+    debug_log("notify_webview_crashed", tab_id, text);
+    view->receiveWebViewCrash(text);
 }
 
 } // namespace servoq

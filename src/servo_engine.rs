@@ -231,6 +231,16 @@ mod engine {
             debug_log_detail("animating", self.tab_id, animating);
             self.animating.set(animating);
         }
+
+        // [ladybird: WebContentView crash signal] — Servo crashed; notify the Qt side so it can
+        // show an error page. Matches the reference notify_crashed() contract.
+        fn notify_crashed(&self, _webview: WebView, reason: String, _backtrace: Option<String>) {
+            if !tab_exists(self.tab_id) {
+                return;
+            }
+            eprintln!("Servo WebView crashed: {reason}");
+            crate::bridge::ffi::notify_webview_crashed(self.tab_id, &reason);
+        }
     }
 
     // ---- thread-local engine state -------------------------
@@ -335,9 +345,25 @@ mod engine {
 
     // spin_event_loop() is called after dropping the ENGINE borrow (clone_servo()).
     // This allows delegate callbacks fired inside spin_event_loop to borrow ENGINE.
-    pub fn tick_webview(_id: i32) {
+    // catch_unwind guards against Servo panicking during font loading or similar
+    // background operations — a Rust panic must NOT cross the FFI boundary into C++.
+    // [ladybird: WebContentView crash signal, B2 fix]
+    pub fn tick_webview(id: i32) {
         if let Some(servo) = clone_servo() {
-            servo.spin_event_loop();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                servo.spin_event_loop();
+            }));
+            if let Err(e) = result {
+                let reason = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic in servo event loop".to_string()
+                };
+                eprintln!("Servo panic caught: {reason}");
+                crate::bridge::ffi::notify_webview_crashed(id, &reason);
+            }
         }
     }
 
