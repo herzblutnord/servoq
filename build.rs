@@ -90,6 +90,25 @@ fn main() {
 
     build.compile("servoq-qt-widgets");
 
+    // On Linux, statically linked HarfBuzz symbols are exported by default from
+    // the executable.  libfreetype.so.6 imports hb_* symbols and the dynamic
+    // linker would resolve them to our bundled HarfBuzz 8.4.0 instead of the
+    // system libharfbuzz.so.0 (14.2.1 on Arch).  The struct layout of hb_face_t
+    // changed between those versions, so FreeType writes callback pointers at
+    // offsets from 14.2.1 but our 8.4.0 reads them at different offsets ->
+    // garbage function pointer -> SIGSEGV in hb_face_reference_table.
+    //
+    // --exclude-libs,ALL marks every symbol that came from a static archive as
+    // hidden (local), removing them from the .dynsym table.  libfreetype.so.6
+    // then falls back to resolving hb_* from libharfbuzz.so.0 (the same version
+    // it was compiled against), eliminating the ABI mismatch.
+    //
+    // Servo's own shaping still uses the bundled 8.4.0 (calls are resolved at
+    // compile time) and the two HarfBuzz environments never share objects.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-link-arg=-Wl,--exclude-libs,ALL");
+    }
+
     println!("cargo:rerun-if-changed=src/bridge.rs");
     println!("cargo:rerun-if-changed=src/servo_controller.rs");
     println!("cargo:rerun-if-changed=cpp");

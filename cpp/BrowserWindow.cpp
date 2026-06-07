@@ -49,6 +49,10 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     , m_tabs(new TabWidget(this))
     , m_hamburger_menu(new QMenu(this))
 {
+    // Install event filter on qApp so BrowserWindow::eventFilter() receives the
+    // QtEventLoopWaker wake event (QEvent::User+1) posted from Servo's threads.
+    qApp->installEventFilter(this);
+
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
     setMinimumSize(900, 640);
@@ -113,6 +117,19 @@ bool BrowserWindow::event(QEvent* event)
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange)
         updateChromeStyle();
     return QMainWindow::event(event);
+}
+
+// Intercepts QCoreApplication events posted by QtEventLoopWaker::wake() from
+// Servo's background threads. The wake event (User+1) tells the Qt main thread
+// that Servo has pending work (font loading complete, frame ready, etc.).
+bool BrowserWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    static constexpr QEvent::Type ServoWakeType = QEvent::Type(QEvent::User + 1);
+    if (obj == qApp && event->type() == ServoWakeType) {
+        servoq::tick_servo();
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void BrowserWindow::createMenus()

@@ -16,7 +16,7 @@ mod engine {
 
     use dpi::PhysicalSize;
     use euclid::{Box2D, Point2D, Scale};
-    use servo::{Code, Key, KeyState, Location, Modifiers, NamedKey};
+    use servo::{Code, EventLoopWaker, Key, KeyState, Location, Modifiers, NamedKey};
     use servo::{
         DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
@@ -52,6 +52,15 @@ mod engine {
         })
     }
 
+    fn tab_is_active(id: i32) -> bool {
+        ENGINE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .and_then(|engine| engine.tabs.get(&id))
+                .is_some_and(|tab| tab.active)
+        })
+    }
+
     fn log_ignored_closed_callback(event: &str, id: i32) {
         debug_log_detail("ignored_callback_closed_webview", id, event);
     }
@@ -62,13 +71,12 @@ mod engine {
             return;
         }
         LOG_ONCE.call_once(|| {
-            eprintln!("SERVOQ_DEBUG servo_builder opts=default preferences=viewport_meta_enabled+dom_indexeddb_enabled protocol_registry=default rendering_context=SoftwareRenderingContext event_loop_waker=ServoDefaultEventLoopWaker");
+            eprintln!("SERVOQ_DEBUG servo_builder preferences=viewport_meta_enabled+dom_indexeddb_enabled rendering_context=SoftwareRenderingContext event_loop_waker=QtEventLoopWaker");
             match std::env::current_exe() {
                 Ok(path) => eprintln!("SERVOQ_DEBUG current_exe={}", path.display()),
                 Err(error) => eprintln!("SERVOQ_DEBUG current_exe_error={error}"),
             }
             for key in [
-                "FONTCONFIG_FILE",
                 "FONTCONFIG_PATH",
                 "XDG_DATA_DIRS",
                 "XDG_CONFIG_HOME",
@@ -81,92 +89,26 @@ mod engine {
         });
     }
 
-    // Fix 1: Write servoq-fonts.conf that:
-    //   1. Includes the system config chain (/etc/fonts/fonts.conf + conf.d/).
-    //   2. Re-includes the user config chain (XDG fontconfig/) — REQUIRED because
-    //      setting FONTCONFIG_FILE bypasses fontconfig's automatic user-config
-    //      loading. Without this, CJK font priorities (NotoSansCJK) from the user
-    //      chain are lost. Servo then falls through to "Noto Sans Symbols" for
-    //      U+300E etc., which also has a corrupt fvar table → SIGSEGV.
-    //   3. Excludes *NerdFont* files (filename glob) — crash on PUA codepoints.
-    //   4. Excludes "Noto Sans Symbols" / "Noto Sans Symbols 2" by family name
-    //      as belt-and-suspenders: they crash on CJK fallback regardless of cause.
-    fn install_servoq_fontconfig() {
-        static FONTCONFIG_ONCE: Once = Once::new();
-        FONTCONFIG_ONCE.call_once(|| {
-            let cache_home = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                format!("{home}/.cache")
-            });
-            let xdg_config_home = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                format!("{home}/.config")
-            });
-            let dir = std::path::PathBuf::from(&cache_home).join("servoq");
-            let path = dir.join("fonts.conf");
+    // Qt-compatible EventLoopWaker: posts a custom QEvent to the Qt main thread.
+    // QCoreApplication::postEvent() is thread-safe and wakes the Qt event loop
+    // from Servo's background threads (paint, layout, font loading, etc.).
+    // BrowserWindow::eventFilter() intercepts the event and calls tick_servo().
+    struct QtEventLoopWaker;
 
-            // NOTE: prefix="xdg" in fontconfig resolves relative to XDG_CONFIG_HOME.
-            // We use absolute paths for the user chain to avoid any ambiguity.
-            let xml = format!(
-                r#"<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-<fontconfig>
+    impl EventLoopWaker for QtEventLoopWaker {
+        fn wake(&self) {
+            crate::bridge::ffi::servoq_wake_event_loop();
+        }
 
-  <!-- 1. System config (includes /etc/fonts/conf.d/) -->
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-
-  <!-- 2. User config — MUST be included explicitly because FONTCONFIG_FILE
-       bypasses fontconfig's automatic user config loading. These are the
-       same paths fontconfig normally auto-loads from XDG_CONFIG_HOME.
-       Without this, NotoSansCJK is absent from Servo's font list for CJK
-       codepoints and Servo falls through to "Noto Sans Symbols" which also
-       crashes HarfBuzz on its fvar table. -->
-  <include ignore_missing="yes">{xdg_config_home}/fontconfig/conf.d</include>
-  <include ignore_missing="yes">{xdg_config_home}/fontconfig/fonts.conf</include>
-
-  <!-- 3. Exclude known-crashing fonts from Servo's font fallback.
-       Confirmed via coredump: Thread 1 SIGSEGV in hb_face_reference_table
-       <- hb_sanitize_context_t::reference_table<OT::fvar>
-       <- hb_font_set_variations. Root cause: corrupt/incompatible fvar table. -->
-  <selectfont>
-    <!-- Nerd Fonts (all variants by filename pattern) — crash on PUA codepoints -->
-    <rejectfont><glob>*NerdFont*.ttf</glob></rejectfont>
-    <rejectfont><glob>*NerdFont*.otf</glob></rejectfont>
-    <rejectfont><glob>*NerdFont*.ttc</glob></rejectfont>
-    <!-- Noto Sans Symbols — crashes on CJK fallback regardless of trigger -->
-    <rejectfont>
-      <pattern>
-        <patelt name="family"><string>Noto Sans Symbols</string></patelt>
-      </pattern>
-    </rejectfont>
-    <rejectfont>
-      <pattern>
-        <patelt name="family"><string>Noto Sans Symbols 2</string></patelt>
-      </pattern>
-    </rejectfont>
-  </selectfont>
-
-</fontconfig>
-"#,
-                xdg_config_home = xdg_config_home,
-            );
-
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("[servoq] fontconfig: failed to create dir {dir:?}: {e}");
-                return;
-            }
-            if let Err(e) = std::fs::write(&path, &xml) {
-                eprintln!("[servoq] fontconfig: failed to write {path:?}: {e}");
-                return;
-            }
-            // A1: print config contents + resolved XDG_CONFIG_HOME for log inspection
-            eprintln!("[servoq] fontconfig: XDG_CONFIG_HOME={xdg_config_home:?}");
-            eprintln!("[servoq] fontconfig: config at {path:?}:\n{xml}");
-            // SAFETY: single-threaded at this point (Qt main thread, once guard).
-            #[allow(deprecated)]
-            std::env::set_var("FONTCONFIG_FILE", &path);
-        });
+        fn clone_box(&self) -> Box<dyn EventLoopWaker> {
+            Box::new(QtEventLoopWaker)
+        }
     }
+
+    // SAFETY: QCoreApplication::postEvent() is documented as thread-safe;
+    // QtEventLoopWaker has no fields so there is nothing to race on.
+    unsafe impl Send for QtEventLoopWaker {}
+    unsafe impl Sync for QtEventLoopWaker {}
 
     fn servo_preferences() -> Preferences {
         let mut preferences = Preferences::default();
@@ -206,13 +148,18 @@ mod engine {
         title: String,
         loading: bool,
         status_text: String,
+        active: bool,
         physical_size: PhysicalSize<u32>,
         hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     }
 
     struct EngineState {
+        // Servo must be dropped before WebViews and rendering contexts. Keep fields
+        // that own WebViews/RenderingContexts after this one so Rust drops Servo first.
+        // See https://github.com/servo/servo/issues/36711.
         servo: Servo,
         tabs: HashMap<i32, TabEntry>,
+        rendering_context: Rc<SoftwareRenderingContext>,
     }
 
     // ---- delegate ------------------------------------------
@@ -228,35 +175,15 @@ mod engine {
         initial_resize_done: Cell<bool>,
     }
 
-    impl WebViewDelegate for ServoDelegate {
-        // notify_new_frame_ready: paint() into context, read pixels, push to C++.
-        // CRITICAL: paint() is called here (not before); present() is NOT called
-        // before read_to_image so the back buffer is preserved.
-        fn notify_new_frame_ready(&self, webview: WebView) {
-            debug_log("notify_new_frame_ready", self.tab_id);
+    impl ServoDelegate {
+        fn paint_and_deliver(&self, webview: &WebView) {
             if !tab_exists(self.tab_id) {
                 debug_log("ignored_frame_closed_webview", self.tab_id);
                 return;
             }
-
-            // G1: first callback proves the compositor is alive; re-send stored size
-            // so any resize() calls issued before the first spin are honoured.
-            if !self.initial_resize_done.get() {
-                self.initial_resize_done.set(true);
-                let (size, scale) = ENGINE.with(|s| {
-                    s.borrow()
-                        .as_ref()
-                        .and_then(|e| e.tabs.get(&self.tab_id))
-                        .map(|t| (t.physical_size, t.hidpi_scale_factor))
-                        .unwrap_or((PhysicalSize::new(1, 1), Scale::new(1.0)))
-                });
-                webview.set_hidpi_scale_factor(scale);
-                webview.resize(size);
-                debug_log_detail(
-                    "initial_resize",
-                    self.tab_id,
-                    format!("{}x{} scale={}", size.width, size.height, scale.0),
-                );
+            if !tab_is_active(self.tab_id) {
+                debug_log("ignored_frame_hidden_webview", self.tab_id);
+                return;
             }
 
             webview.paint();
@@ -277,6 +204,38 @@ mod engine {
                     h as i32,
                 );
             }
+        }
+    }
+
+    impl WebViewDelegate for ServoDelegate {
+        // notify_new_frame_ready: paint() into context, read pixels, push to C++.
+        // CRITICAL: paint() is called here (not before); present() is NOT called
+        // before read_to_image so the back buffer is preserved.
+        fn notify_new_frame_ready(&self, webview: WebView) {
+            debug_log("notify_new_frame_ready", self.tab_id);
+
+            // G1: first callback proves the compositor is alive; re-send stored size
+            // so any resize() calls issued before the first spin are honoured.
+            if !self.initial_resize_done.get() {
+                self.initial_resize_done.set(true);
+                let (size, scale) = ENGINE.with(|s| {
+                    s.borrow()
+                        .as_ref()
+                        .and_then(|e| e.tabs.get(&self.tab_id))
+                        .map(|t| (t.physical_size, t.hidpi_scale_factor))
+                        .unwrap_or((PhysicalSize::new(1, 1), Scale::new(1.0)))
+                });
+                self.rendering_context.resize(size);
+                webview.set_hidpi_scale_factor(scale);
+                webview.resize(size);
+                debug_log_detail(
+                    "initial_resize",
+                    self.tab_id,
+                    format!("{}x{} scale={}", size.width, size.height, scale.0),
+                );
+            }
+
+            self.paint_and_deliver(&webview);
         }
 
         fn notify_url_changed(&self, _webview: WebView, url: Url) {
@@ -332,7 +291,7 @@ mod engine {
             crate::bridge::ffi::notify_status_changed(self.tab_id, text);
         }
 
-        fn notify_load_status_changed(&self, _webview: WebView, status: LoadStatus) {
+        fn notify_load_status_changed(&self, webview: WebView, status: LoadStatus) {
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_load_status_changed", self.tab_id);
                 return;
@@ -365,6 +324,9 @@ mod engine {
                 }
                 LoadStatus::Complete => {
                     crate::bridge::ffi::notify_load_finished(self.tab_id);
+                    // Servo may not issue another frame notification after load completion.
+                    // Force one software paint/read so Qt receives the final post-load pixels.
+                    self.paint_and_deliver(&webview);
                 }
                 _ => {}
             }
@@ -412,6 +374,33 @@ mod engine {
 
     thread_local! {
         static ENGINE: RefCell<Option<EngineState>> = const { RefCell::new(None) };
+        // Re-entrancy guard: prevents spin_event_loop() from being called while
+        // it is already on the call stack. In Qt's single-threaded event model
+        // this cannot happen via concurrent threads, but it CAN happen if a
+        // delegate callback triggers further Qt event processing (e.g. a modal
+        // dialog or explicit processEvents()). The guard is cheap and defensive.
+        static SPINNING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    struct SpinGuard;
+
+    impl SpinGuard {
+        fn try_acquire() -> Option<SpinGuard> {
+            SPINNING.with(|s| {
+                if s.get() {
+                    None
+                } else {
+                    s.set(true);
+                    Some(SpinGuard)
+                }
+            })
+        }
+    }
+
+    impl Drop for SpinGuard {
+        fn drop(&mut self) {
+            SPINNING.with(|s| s.set(false));
+        }
     }
 
     // Clone the Servo handle out of the RefCell so the borrow is dropped before
@@ -432,8 +421,46 @@ mod engine {
 
     // ---- public functions -----------------------------------
 
+    // Initialize the Servo engine at application startup, before the main window
+    // is shown and before any Qt show/resize/paint events can reach WebContentView.
+    //
+    // Hypothesis A (lazy-init timing): Servo is currently initialized lazily in
+    // create_webview(), which is called from WebContentView::showEvent(). At that
+    // point Qt is already delivering show/resize/paint events concurrently with
+    // Servo's internal thread-pool and font-system startup. If layout requests a
+    // fallback font while the font cache is still being populated, the fallback
+    // cache can return a stale or uninitialized FontRef whose high bits contain
+    // codepoint data — exactly the pattern seen in the crash dumps.
+    //
+    // Calling init_servo() from run_qt_application() before window.show() gives
+    // Servo's internal subsystems (constellation, script, layout, font cache) time
+    // to fully initialize before any web content or font shaping is requested.
+    pub fn init_servo() {
+        ENGINE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.is_some() {
+                return;
+            }
+            log_embedder_setup_once();
+            eprintln!("[servoq] init_servo: initializing Servo at startup");
+            *state = Some(EngineState {
+                servo: ServoBuilder::default()
+                    .preferences(servo_preferences())
+                    .event_loop_waker(Box::new(QtEventLoopWaker))
+                    .build(),
+                tabs: HashMap::new(),
+                // Placeholder size — resized to the actual widget dimensions in
+                // create_webview() before any WebView is built.
+                rendering_context: Rc::new(
+                    SoftwareRenderingContext::new(PhysicalSize::new(800, 600))
+                        .expect("SoftwareRenderingContext::new failed"),
+                ),
+            });
+            eprintln!("[servoq] init_servo: done");
+        });
+    }
+
     pub fn create_webview(id: i32, url_str: &str, w: i32, h: i32, scale: f32) {
-        install_servoq_fontconfig(); // A1: must run before ServoBuilder and any fontconfig call
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
@@ -450,9 +477,14 @@ mod engine {
                     log_embedder_setup_once();
                     ServoBuilder::default()
                         .preferences(servo_preferences())
+                        .event_loop_waker(Box::new(QtEventLoopWaker))
                         .build()
                 },
                 tabs: HashMap::new(),
+                rendering_context: Rc::new(
+                    SoftwareRenderingContext::new(PhysicalSize::new(w, h))
+                        .expect("SoftwareRenderingContext::new failed"),
+                ),
             });
 
             let size = PhysicalSize::new(w, h);
@@ -462,23 +494,22 @@ mod engine {
                 debug_log("create_webview_existing", id);
                 tab.physical_size = size;
                 tab.hidpi_scale_factor = scale_factor;
+                engine.rendering_context.resize(size);
                 tab.webview.set_hidpi_scale_factor(scale_factor);
                 tab.webview.resize(size);
                 return;
             }
 
-            let rendering_context = Rc::new(
-                SoftwareRenderingContext::new(size).expect("SoftwareRenderingContext::new failed"),
-            );
+            engine.rendering_context.resize(size);
 
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: id,
-                rendering_context: rendering_context.clone(),
+                rendering_context: engine.rendering_context.clone(),
                 animating: Cell::new(false),
                 initial_resize_done: Cell::new(false),
             });
 
-            let rc_ctx: Rc<dyn RenderingContext> = rendering_context.clone();
+            let rc_ctx: Rc<dyn RenderingContext> = engine.rendering_context.clone();
             let webview = WebViewBuilder::new(&engine.servo, rc_ctx)
                 .url(url.clone())
                 .hidpi_scale_factor(scale_factor)
@@ -493,6 +524,7 @@ mod engine {
                     title: "New Tab".to_string(),
                     loading: false,
                     status_text: String::new(),
+                    active: true,
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -514,12 +546,41 @@ mod engine {
         });
     }
 
+    // Global tick: called by the Qt EventLoopWaker event handler (BrowserWindow::eventFilter).
+    // No tab ID — panics are logged to stderr; per-tab crash notification is handled
+    // by tick_webview (timer path) which retains the tab ID for crash reporting.
+    pub fn tick_servo_global() {
+        let _guard = match SpinGuard::try_acquire() {
+            Some(g) => g,
+            None => return, // Already spinning — skip re-entrant call
+        };
+        if let Some(servo) = clone_servo() {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                servo.spin_event_loop();
+            }));
+            if let Err(e) = result {
+                let reason = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic in servo event loop (waker path)".to_string()
+                };
+                eprintln!("Servo panic (waker): {reason}");
+            }
+        }
+    }
+
     // spin_event_loop() is called after dropping the ENGINE borrow (clone_servo()).
     // This allows delegate callbacks fired inside spin_event_loop to borrow ENGINE.
     // catch_unwind guards against Servo panicking during font loading or similar
     // background operations — a Rust panic must NOT cross the FFI boundary into C++.
     // [ladybird: WebContentView crash signal, B2 fix]
     pub fn tick_webview(id: i32) {
+        let _guard = match SpinGuard::try_acquire() {
+            Some(g) => g,
+            None => return, // Already spinning — skip re-entrant call
+        };
         if let Some(servo) = clone_servo() {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 servo.spin_event_loop();
@@ -726,6 +787,11 @@ mod engine {
     }
 
     pub fn set_webview_active(id: i32, active: bool) {
+        ENGINE.with(|s| {
+            if let Some(entry) = s.borrow_mut().as_mut().and_then(|e| e.tabs.get_mut(&id)) {
+                entry.active = active;
+            }
+        });
         if let Some(wv) = clone_webview(id) {
             if active {
                 wv.show();
@@ -777,6 +843,7 @@ mod engine {
         ENGINE.with(|s| {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
+                e.rendering_context.resize(size);
                 if let Some(t) = e.tabs.get_mut(&id) {
                     t.physical_size = size;
                     t.hidpi_scale_factor = scale_factor;
@@ -949,6 +1016,11 @@ mod engine {
 // When off they are stubs so the bridge compiles and the default build is
 // unchanged.
 
+pub fn init_servo() {
+    #[cfg(feature = "servo-engine")]
+    engine::init_servo();
+}
+
 pub fn create_webview(_id: i32, _url: &str, _w: i32, _h: i32, _scale: f32) {
     #[cfg(feature = "servo-engine")]
     engine::create_webview(_id, _url, _w, _h, _scale);
@@ -962,6 +1034,11 @@ pub fn close_webview(_id: i32) {
 pub fn tick_webview(_id: i32) {
     #[cfg(feature = "servo-engine")]
     engine::tick_webview(_id);
+}
+
+pub fn tick_servo() {
+    #[cfg(feature = "servo-engine")]
+    engine::tick_servo_global();
 }
 
 pub fn forward_mouse_move(_id: i32, _x: f32, _y: f32) {

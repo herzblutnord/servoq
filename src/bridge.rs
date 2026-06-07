@@ -15,9 +15,17 @@ pub mod ffi {
         fn notify_webview_crashed(tab_id: i32, reason: &str);
         fn notify_request_blocked(tab_id: i32, url: &str);
         fn content_blocking_enabled() -> bool;
+        // Posts a custom QEvent to the Qt main thread to wake the event loop.
+        // Called from Servo's background threads (paint, layout, font loading).
+        // QCoreApplication::postEvent() is thread-safe.
+        fn servoq_wake_event_loop();
     }
 
     extern "Rust" {
+        // Called from run_qt_application() before window.show() to initialize
+        // Servo at startup, before Qt show/resize/paint events begin flowing.
+        fn init_servo();
+
         // Existing tab-lifecycle bridge (used by BrowserWindow / Tab chrome)
         fn create_tab() -> i32;
         fn close_tab(id: i32);
@@ -45,6 +53,8 @@ pub mod ffi {
         fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
         fn close_webview(id: i32);
         fn tick_webview(id: i32);
+        // Called by BrowserWindow::eventFilter on the Qt EventLoopWaker wake event.
+        fn tick_servo();
 
         // Input forwarding: called by WebContentView event handlers
         fn forward_mouse_move(id: i32, x: f32, y: f32);
@@ -81,8 +91,8 @@ pub use crate::servo_engine::{
 // Engine-lifecycle and input functions (always present; no-ops when feature is off)
 pub use crate::servo_engine::{
     close_webview, create_webview, forward_focus, forward_key, forward_mouse_button,
-    forward_mouse_move, forward_resize, forward_theme_change, forward_wheel, set_webview_active,
-    tick_webview,
+    forward_mouse_move, forward_resize, forward_theme_change, forward_wheel, init_servo,
+    set_webview_active, tick_servo, tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off

@@ -32,4 +32,8 @@ void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason);
 void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url);
 bool content_blocking_enabled();
 
+// Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
+// Called by QtEventLoopWaker::wake() from Servo's background threads.
+void servoq_wake_event_loop();
+
 } // namespace servoq

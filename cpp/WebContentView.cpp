@@ -14,6 +14,7 @@
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -26,6 +27,8 @@
 #include <QStyleHints>
 #include <QTimer>
 #include <QWheelEvent>
+
+#include <cstring>
 
 // ── Global registry (file-local, accessible to both namespace blocks below) ──
 // Maps tab_id -> WebContentView* so Rust-side callbacks can locate their widget.
@@ -92,9 +95,11 @@ WebContentView::WebContentView(QWidget* parent)
     // Servo frame arrives the widget simply shows a blank background.
     // [ladybird: Tab.cpp:158] — m_view added directly to tab_layout, no stacked widget.
 
-    // Engine tick timer pumps servo.spin_event_loop() at ~60 fps.
-    // Started in showEvent after create_webview; paused in hideEvent.
-    m_engine_tick_timer->setInterval(16);
+    // Fallback timer: spins servo.spin_event_loop() at 5 Hz when the tab is visible.
+    // With QtEventLoopWaker installed, Servo background threads (paint, font, layout)
+    // wake the Qt event loop immediately via QCoreApplication::postEvent(). This timer
+    // is kept only as a safety net in case a wake event is dropped or coalesced.
+    m_engine_tick_timer->setInterval(200);
     m_engine_tick_timer->setSingleShot(false);
     connect(m_engine_tick_timer, &QTimer::timeout, this, [this] {
         servoq::tick_webview(m_tab_id);
@@ -155,6 +160,18 @@ void WebContentView::receiveFrame(QImage const& frame)
 {
     debug_log("deliver_frame_target", m_tab_id, frame.size(), devicePixelRatioF());
     m_frame = frame;
+    m_crashed = false;
+    update();
+}
+
+void WebContentView::receiveFrameBytes(uint8_t const* bytes, int width, int height)
+{
+    debug_log("deliver_frame_target", m_tab_id, QSize(width, height), devicePixelRatioF());
+    if (m_frame.size() != QSize(width, height) || m_frame.format() != QImage::Format_RGBA8888)
+        m_frame = QImage(width, height, QImage::Format_RGBA8888);
+
+    auto const byte_count = qsizetype(width) * qsizetype(height) * 4;
+    std::memcpy(m_frame.bits(), bytes, static_cast<size_t>(byte_count));
     m_crashed = false;
     update();
 }
@@ -444,11 +461,7 @@ void deliver_frame(::std::int32_t tab_id,
         debug_log("skipped_frame_hidden_view", tab_id);
         return;
     }
-    // Wrap the Rust slice in a QImage, then copy before the slice is released.
-    QImage image(bytes.data(), width, height,
-                 static_cast<qsizetype>(width) * 4,
-                 QImage::Format_RGBA8888);
-    view->receiveFrame(image.copy());
+    view->receiveFrameBytes(bytes.data(), width, height);
 }
 
 void notify_url_changed(::std::int32_t tab_id, ::rust::Str url)
@@ -537,6 +550,16 @@ void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url)
 bool content_blocking_enabled()
 {
     return ServoQ::Settings::the()->content_blocking_enabled();
+}
+
+// Called from Rust's QtEventLoopWaker::wake() from Servo background threads.
+// Posts a custom event to qApp; BrowserWindow::eventFilter intercepts it and
+// calls tick_servo() to spin Servo's event loop on the Qt main thread.
+// QCoreApplication::postEvent() is documented as thread-safe.
+void servoq_wake_event_loop()
+{
+    static constexpr QEvent::Type ServoWakeType = QEvent::Type(QEvent::User + 1);
+    QCoreApplication::postEvent(qApp, new QEvent(ServoWakeType));
 }
 
 } // namespace servoq

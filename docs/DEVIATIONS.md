@@ -119,16 +119,16 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Legacy `Settings` bookmark list migrated to `BookmarkStore` on first launch | BookmarksBar.cpp constructor |
 | Qt6 MOC runs on `BookmarkStore.h` and `BookmarksBar.h` in `build.rs` | build.rs |
 
-### Bug 0 — Nerd Font fvar SIGSEGV (and follow-up CJK crash)
+### Bug 0 — CJK/HarfBuzz SIGSEGV and wrong rendering (root cause identified and fixed)
 
 | Fix | Reference |
 |-----|-----------|
-| `install_servoq_fontconfig()` writes `$XDG_CACHE_HOME/servoq/fonts.conf` before `ServoBuilder`; sets `FONTCONFIG_FILE` | servo_engine.rs — first line of `create_webview` |
-| Root cause: Nerd Fonts have a corrupt `fvar` table; HarfBuzz reads garbage `axisCount`/`axes.length` on PUA codepoint fallback → SIGSEGV in `hb_face_reference_table` — not catchable by `catch_unwind` | coredump |
-| Follow-up root cause: `FONTCONFIG_FILE` bypasses fontconfig's automatic user-config loading, so `$XDG_CONFIG_HOME/fontconfig/` was absent from Servo's font chain. NotoSansCJK lost → Servo fell through to "Noto Sans Symbols" for U+300E etc., which also has a corrupt fvar → SIGSEGV | Fix 1 |
-| Fixed: fonts.conf now explicitly `<include>`s system (`/etc/fonts/fonts.conf`) **and** user (`$XDG_CONFIG_HOME/fontconfig/conf.d` + `fonts.conf`) chains | servo_engine.rs |
-| Belt-and-suspenders: "Noto Sans Symbols" and "Noto Sans Symbols 2" excluded by family name in addition to the `*NerdFont*` filename glob | servo_engine.rs |
-| fc-match verification: `FONTCONFIG_FILE=~/.cache/servoq/fonts.conf fc-match ':charset=300e'` → **Noto Sans CJK JP** ✓ | verified |
+| **Original misdiagnosis 1**: custom `install_servoq_fontconfig()` wrote `~/.cache/servoq/fonts.conf` and set `FONTCONFIG_FILE` to exclude Nerd Fonts and "Noto Sans Symbols". This was based on an incorrect read of the coredump. Removed entirely. | servo_engine.rs (removed) |
+| **Original misdiagnosis 2**: the SIGSEGV was attributed to the missing `EventLoopWaker` (P6). The waker was added and is correct, but it did not stop the crash. | — |
+| **Root cause (confirmed from coredump)**: `servo-fonts-0.2.0` enables `harfbuzz-sys` with `features = ["bundled"]`, statically linking HarfBuzz 8.4.0 into the `servoq` binary. On Linux, statically linked symbols are exported by default from ELF executables. The dynamic linker resolves `libfreetype.so.6`'s `hb_*` symbol references to `servoq`'s HarfBuzz 8.4.0, even though FreeType was compiled against system `libharfbuzz.so.0` (14.2.1 on Arch). The `hb_face_t` struct layout changed between 8.4.0 and 14.2.1: FreeType writes the `reference_table` callback at the 14.2.1 offset but 8.4.0's `hb_face_reference_table` reads it from a different offset, producing a garbage function pointer. Calling the garbage pointer → SIGSEGV. Confirmed by: (a) `nm -D servoq` shows `hb_font_create T` (exported), (b) coredump frame #10 shows `hb_font_create` at `servoq + 0xad64724` called from inside `libfreetype.so.6`'s `FT_Load_Glyph`, (c) crash address `0x00007f1a00040000` is the garbage function pointer being called by `hb_face_reference_table`. | build.rs, coredump |
+| **Fixed**: added `-Wl,--exclude-libs,ALL` linker flag (Linux only) in `build.rs` via `cargo:rustc-link-arg`. This marks all static-archive symbols as hidden (`STB_LOCAL`), removing them from the `.dynsym` table. `libfreetype.so.6` now resolves `hb_*` to system `libharfbuzz.so.0` (14.2.1) — the same version it was compiled against. Servo's own shaping continues to use the bundled 8.4.0 (resolved at compile time; the two HarfBuzz environments never share objects). After the fix: `nm -D servoq | grep hb_` produces no output. | build.rs |
+| **Also fixed (P6)**: `QtEventLoopWaker` implements `servo::EventLoopWaker`; its `wake()` calls `QCoreApplication::postEvent(qApp, …)` (thread-safe) from Servo's background threads. `BrowserWindow::eventFilter()` intercepts the wake event and calls `servoq::tick_servo()`. `ServoBuilder::event_loop_waker(Box::new(QtEventLoopWaker))` installs it at Servo creation. | servo_engine.rs, BrowserWindow.cpp |
+| Timer interval reduced from 16ms (60 Hz polling) to 200ms (5 Hz safety fallback). Primary event-loop spinning is now waker-driven, matching servoshell's `ControlFlow::Wait` + waker model. | WebContentView.cpp |
 
 ### Bug 2+3 Follow-up — Status Bar Double Display
 
@@ -183,6 +183,19 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | `ServoDelegate::initial_resize_done: Cell<bool>` added; on first `notify_new_frame_ready` (compositor proven alive), re-sends stored `physical_size` + `hidpi_scale_factor` to ensure pre-spin resize is honoured | servo_engine.rs |
 | G2: `viewport_meta_enabled = true` already set in `servo_preferences()` — verified, no change needed | servo_engine.rs:87 |
 | G3: Lambda capture `[this, window]` → `[window]` in Tab.cpp BookmarksBar callback; `this` was unused | Tab.cpp:87 |
+
+### Servo Embedding — Context Lifecycle and Paint Contract
+
+| Fix | Reference |
+|-----|-----------|
+| `EngineState` now explicitly owns one shared `SoftwareRenderingContext` for all tabs instead of creating one context per WebView delegate | servoshell `ServoShellWindow::create_toplevel_webview()` shares `platform_window.rendering_context()` |
+| `EngineState` declares `servo` before WebViews/rendering context so Rust drops Servo before the WebViews/context owners; comment cites Servo issue #36711 | servoshell `RunningAppState` drop-order comment |
+| Resize now calls both `rendering_context.resize(PhysicalSize)` and `webview.resize(PhysicalSize)`; context is never recreated mid-session | Servo 0.2.0 `RenderingContext::resize`; servoshell `HeadedWindow` resize path |
+| Hidden tabs are marked inactive and their frame callbacks are ignored before painting into the shared context, avoiding hidden WebViews overwriting the visible tab's software buffer | servoshell `WebViewCollection::activate_webview()` show/hide model |
+| Software paint path calls `webview.paint()`, then reads pixels with `RenderingContext::read_to_image()`; it deliberately does not call `present()` because software `present()` swaps with `PreserveBuffer::No` | Servo 0.2.0 `RenderingContext` contract |
+| `LoadStatus::Complete` forces one extra software paint/read so Qt receives a final post-load frame even when Servo does not emit another frame notification | Servo 0.2.0 `WebViewDelegate::notify_load_status_changed` behavior |
+| Software blit now reuses `WebContentView::m_frame` storage and copies Rust frame bytes directly into it, reallocating only on size/format change instead of constructing `QImage(...).copy()` every frame | Qt `QImage::bits()` software blit optimization |
+| GPU `WindowRenderingContext` remains deferred: servoshell owns a winit native window and GL context, while ServoQ paints inside Qt's `QWidget` composition model. A direct raw-window-handle path needs a dedicated native child surface and Qt/GL ownership design before it is safe. | servoshell `HeadedWindow::new()` raw-window-handle path |
 
 ### Track A — HiDPI Rendering
 

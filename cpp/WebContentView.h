@@ -45,6 +45,7 @@ public:
 
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
+    void receiveFrameBytes(uint8_t const* bytes, int width, int height);
 
     // Called when Servo panics. Renders inline crash message. [ladybird: WebContentView crash signal]
     void receiveWebViewCrash(QString const& reason);
