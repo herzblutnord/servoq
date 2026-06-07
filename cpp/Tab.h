@@ -6,6 +6,7 @@
 class QAction;
 class QLabel;
 class QMenu;
+class QSpacerItem;
 class QTimer;
 class QToolButton;
 
@@ -32,6 +33,7 @@ public:
     void setToolbarContainerInTabLayout(bool in_tab_layout);
     void setVerticalTabsEnabled(bool enabled);
     void setHamburgerButtonVisible(bool visible);
+    void updateToggleVerticalTabsIcon(); // [ladybird: Tab.cpp:794-797]
     void navigate(QString const& url);
     void location_edit_return_pressed();
     void focusLocationEditor();
@@ -40,6 +42,11 @@ public:
     void findNext();
     void setStatusText(QString const& status);
     void applyControllerState();
+
+    // Page zoom — [ladybird: BrowserWindow.cpp:1372-1374]
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
 
     void on_url_change(QString const& url);
     void on_title_change(QString const& title);
@@ -54,7 +61,7 @@ private:
     void update_tab_title();
     void set_loading(bool is_loading);
     void refreshBookmarkIcon();
-    void refreshBookmarksBar();
+    void updateZoomAction(); // [ladybird: Tab.cpp:233 — reset_zoom_action text/visibility]
 
     BrowserWindow* m_window { nullptr };
     int m_controller_id { 0 };
@@ -66,10 +73,13 @@ private:
     FindInPageWidget* m_find_in_page { nullptr };
     QLabel* m_hover_label { nullptr };
     QToolButton* m_hamburger_button { nullptr };
+    QAction* m_toggle_vertical_tabs_action { nullptr }; // [ladybird: Tab.h:149]
+    QSpacerItem* m_sidebar_toggle_spacer { nullptr };   // [ladybird: Tab.cpp:214]
     QAction* m_back_action { nullptr };
     QAction* m_forward_action { nullptr };
     QAction* m_reload_action { nullptr };
     QAction* m_bookmark_action { nullptr };
+    QAction* m_reset_zoom_action { nullptr }; // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
     QTimer* m_loading_animation_timer { nullptr };
     QIcon m_favicon;
     QString m_url { QStringLiteral("about:blank") };

@@ -14,6 +14,33 @@ fn main() {
         .probe("Qt6Widgets")
         .expect("Qt 6 Widgets development package must be available via pkg-config");
 
+    // Run Qt6 MOC for headers that define Q_OBJECT signals.
+    // Prefer /usr/lib/qt6/moc (Qt6) over the system default which may be Qt5.
+    let moc_bin = if std::path::Path::new("/usr/lib/qt6/moc").exists() {
+        "/usr/lib/qt6/moc"
+    } else {
+        "moc"
+    };
+    for header in &["cpp/BookmarkStore.h", "cpp/BookmarksBar.h"] {
+        let stem = std::path::Path::new(header)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let moc_out = out_dir.join(format!("moc_{stem}.cpp"));
+        let mut cmd = std::process::Command::new(moc_bin);
+        cmd.arg(header).arg("-o").arg(&moc_out);
+        // Pass Qt include paths so moc can resolve Qt types in the headers
+        for p in &qt.include_paths {
+            cmd.arg("-I").arg(p);
+        }
+        cmd.arg("-I").arg(".").arg("-I").arg("cpp");
+        let status = cmd.status().expect("Qt moc must be available");
+        assert!(status.success(), "Qt moc failed for {header}");
+        // moc_*.cpp files are compiled by the build below
+        let _ = &moc_out; // used below
+    }
+
     let mut build = cxx_build::bridge("src/bridge.rs");
     build
         .cpp(true)
@@ -23,12 +50,12 @@ fn main() {
         .include(".")
         .include("cpp");
 
-    for path in qt.include_paths {
+    for path in &qt.include_paths {
         build.include(path);
     }
 
-    for flag in qt.defines {
-        match flag.1 {
+    for flag in &qt.defines {
+        match &flag.1 {
             Some(value) => build.define(&flag.0, Some(value.as_str())),
             None => build.define(&flag.0, None),
         };
@@ -42,6 +69,7 @@ fn main() {
         "cpp/LocationEdit.cpp",
         "cpp/WebViewURL.cpp",
         "cpp/BookmarksBar.cpp",
+        "cpp/BookmarkStore.cpp",
         "cpp/FindInPageWidget.cpp",
         "cpp/WebContentPlaceholder.cpp",
         "cpp/WebContentView.cpp",
@@ -50,6 +78,11 @@ fn main() {
         "cpp/Settings.cpp",
     ]);
     build.file(resources_cpp);
+
+    // Compile MOC-generated files for Q_OBJECT classes
+    for stem in &["BookmarkStore", "BookmarksBar"] {
+        build.file(out_dir.join(format!("moc_{stem}.cpp")));
+    }
 
     build.compile("servoq-qt-widgets");
 

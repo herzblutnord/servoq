@@ -522,6 +522,24 @@ mod engine {
         }
     }
 
+    // [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out/reset_zoom on view()
+    // Servo 0.2.0: WebView::set_page_zoom(f32) — clamped to [0.1, 10.0] internally
+    pub fn set_page_zoom(id: i32, zoom: f32) {
+        if let Some(wv) = clone_webview(id) {
+            wv.set_page_zoom(zoom);
+        }
+    }
+
+    pub fn page_zoom(id: i32) -> f32 {
+        ENGINE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .and_then(|e| e.tabs.get(&id))
+                .map(|t| t.webview.page_zoom())
+                .unwrap_or(1.0)
+        })
+    }
+
     // Matches Ladybird WebContentView::update_viewport_size() (vendor line 760-766):
     // physical pixel dimensions are passed pre-scaled from WebContentView::resizeEvent.
     pub fn forward_resize(id: i32, w: i32, h: i32, scale: f32) {
@@ -748,6 +766,18 @@ pub fn forward_focus(_id: i32, _focused: bool) {
 pub fn forward_resize(_id: i32, _w: i32, _h: i32, _scale: f32) {
     #[cfg(feature = "servo-engine")]
     engine::forward_resize(_id, _w, _h, _scale);
+}
+
+pub fn set_page_zoom(_id: i32, _zoom: f32) {
+    #[cfg(feature = "servo-engine")]
+    engine::set_page_zoom(_id, _zoom);
+}
+
+pub fn page_zoom(_id: i32) -> f32 {
+    #[cfg(feature = "servo-engine")]
+    return engine::page_zoom(_id);
+    #[allow(unreachable_code)]
+    1.0
 }
 
 // These are used only when servo-engine is on (bridge.rs conditionally re-exports them).

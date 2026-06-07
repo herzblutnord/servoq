@@ -5,6 +5,7 @@
 class QAction;
 class QCloseEvent;
 class QMenu;
+class QWheelEvent;
 
 namespace ServoQ {
 
@@ -19,15 +20,19 @@ public:
     Tab* currentTab() const;
     void tabStateChanged(Tab* tab);
     bool showMenuBar() const;
+    void toggleVerticalTabsExpanded(); // [ladybird: Tab.cpp:176,213]
+    void openNextTab();                // [ladybird: BrowserWindow.cpp:1065]
+    void openPreviousTab();            // [ladybird: BrowserWindow.cpp:1076]
+    void createNewTab(QString const& url = QStringLiteral("about:blank"));
 
 protected:
     bool event(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override; // [ladybird: BrowserWindow.cpp:1365]
 
 private:
     void createMenus();
     void createInitialTab();
-    void createNewTab(QString const& url = QStringLiteral("about:blank"));
     void closeTab(int index);
     void setHorizontalTabs();
     void setVerticalTabsCollapsed();

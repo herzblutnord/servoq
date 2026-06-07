@@ -34,6 +34,10 @@ pub mod ffi {
         fn status_text(id: i32) -> String;
         fn find_bar_visible(id: i32) -> bool;
 
+        // Page zoom — [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out on view()
+        fn set_page_zoom(id: i32, zoom: f32);
+        fn page_zoom(id: i32) -> f32;
+
         // Engine lifecycle: called by WebContentView when widget is shown/hidden/destroyed
         fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
         fn close_webview(id: i32);
@@ -74,3 +78,6 @@ pub use crate::servo_engine::{
     close_webview, create_webview, forward_focus, forward_key, forward_mouse_button,
     forward_mouse_move, forward_resize, forward_wheel, tick_webview,
 };
+
+// Page zoom — always present; no-ops when servo-engine feature is off
+pub use crate::servo_engine::{page_zoom, set_page_zoom};

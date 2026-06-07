@@ -31,6 +31,7 @@ FindInPageWidget::FindInPageWidget(QWidget* parent)
     layout->setContentsMargins(5, 5, 5, 5);
     layout->setSpacing(6);
 
+    m_find_text->setFocusPolicy(Qt::StrongFocus); // [ladybird: FindInPageWidget.cpp:36]
     m_find_text->setPlaceholderText("Search");
     m_find_text->setMinimumWidth(50);
     m_find_text->setMaximumWidth(250);
@@ -46,6 +47,9 @@ FindInPageWidget::FindInPageWidget(QWidget* parent)
         button->setFixedWidth(30);
         button->setFlat(true);
     }
+
+    m_result_label->setStyleSheet("font-weight: bold;"); // [ladybird: FindInPageWidget.cpp:83]
+    m_result_label->setVisible(false);                   // [ladybird: FindInPageWidget.cpp:82]
 
     connect(m_find_text, &QLineEdit::textChanged, this, [this] { updateResultLabel(); });
     connect(m_previous_button, &QPushButton::clicked, this, [this] { updateResultLabel(); });
@@ -71,8 +75,12 @@ QString FindInPageWidget::query() const
 
 bool FindInPageWidget::event(QEvent* event)
 {
-    if (event->type() == QEvent::PaletteChange)
+    if (event->type() == QEvent::PaletteChange) {
         updateChromeStyle();
+        m_previous_button->setIcon(create_chrome_icon(ChromeIcon::ChevronUp, palette()));   // [ladybird: FindInPageWidget.cpp:100]
+        m_next_button->setIcon(create_chrome_icon(ChromeIcon::ChevronDown, palette()));     // [ladybird: FindInPageWidget.cpp:101]
+        m_exit_button->setIcon(create_chrome_icon(ChromeIcon::Close, palette()));           // [ladybird: FindInPageWidget.cpp:102]
+    }
     return QWidget::event(event);
 }
 
@@ -128,10 +136,7 @@ void FindInPageWidget::updateResultLabel()
     if (m_find_text->text().isEmpty()) {
         m_result_label->clear();
         m_result_label->hide();
-        return;
     }
-    m_result_label->setText("Placeholder matches");
-    m_result_label->show();
 }
 
 }

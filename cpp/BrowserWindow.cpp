@@ -15,9 +15,13 @@
 #include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
+#include <QShortcut>
 #include <QStatusBar>
 #include <QCloseEvent>
 #include <QDebug>
+#include <QWheelEvent>
+
+#include <algorithm>
 
 namespace ServoQ {
 
@@ -114,6 +118,16 @@ void BrowserWindow::createMenus()
     file_menu->addAction(m_close_tab_action);
     m_hamburger_menu->addAction(m_close_tab_action);
 
+    // [ladybird: BrowserWindow.cpp:360 — Ctrl+D add bookmark]
+    auto* add_bookmark_action = new QAction("Add &Bookmark…", this);
+    add_bookmark_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+    connect(add_bookmark_action, &QAction::triggered, this, [this] {
+        if (auto* tab = currentTab(); tab && tab->bookmarksBar())
+            tab->bookmarksBar()->showAddBookmarkDialog(tab->title(), tab->url());
+    });
+    file_menu->addAction(add_bookmark_action);
+    m_hamburger_menu->addAction(add_bookmark_action);
+
     file_menu->addSeparator();
     m_hamburger_menu->addSeparator();
 
@@ -131,6 +145,13 @@ void BrowserWindow::createMenus()
             tab->showFindInPage();
     });
     edit_menu->addAction(m_find_action);
+
+    // [ladybird: BrowserWindow.cpp:311-323]
+    for (auto const& shortcut : QKeySequence::keyBindings(QKeySequence::FindPrevious))
+        new QShortcut(shortcut, this, [this] { if (auto* tab = currentTab()) tab->findPrevious(); });
+    for (auto const& shortcut : QKeySequence::keyBindings(QKeySequence::FindNext))
+        new QShortcut(shortcut, this, [this] { if (auto* tab = currentTab()) tab->findNext(); });
+
     m_hamburger_menu->addMenu(edit_menu);
 
     auto* view_menu = menuBar()->addMenu("&View");
@@ -177,6 +198,50 @@ void BrowserWindow::createMenus()
     });
     view_menu->addAction(m_vertical_tabs_hover_expand_action);
 
+    view_menu->addSeparator();
+
+    // [ladybird: BrowserWindow.cpp:334-356]
+    auto* open_next_tab_action = new QAction("Open &Next Tab", this);
+    open_next_tab_action->setShortcuts({
+        QKeySequence(Qt::CTRL | Qt::Key_PageDown),
+        QKeySequence(Qt::CTRL | Qt::Key_Tab),
+    });
+    view_menu->addAction(open_next_tab_action);
+    connect(open_next_tab_action, &QAction::triggered, this, &BrowserWindow::openNextTab);
+
+    auto* open_previous_tab_action = new QAction("Open &Previous Tab", this);
+    open_previous_tab_action->setShortcuts({
+        QKeySequence(Qt::CTRL | Qt::Key_PageUp),
+        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Tab),
+    });
+    view_menu->addAction(open_previous_tab_action);
+    connect(open_previous_tab_action, &QAction::triggered, this, &BrowserWindow::openPreviousTab);
+
+    // [ladybird: BrowserWindow.cpp:358-360] — zoom submenu added to View menu
+    view_menu->addSeparator();
+    {
+        auto* zoom_in_action = new QAction("Zoom &In", this);
+        zoom_in_action->setShortcuts({ QKeySequence(Qt::CTRL | Qt::Key_Plus), QKeySequence(Qt::CTRL | Qt::Key_Equal) });
+        connect(zoom_in_action, &QAction::triggered, this, [this] {
+            if (auto* tab = currentTab()) tab->zoomIn();
+        });
+        view_menu->addAction(zoom_in_action);
+
+        auto* zoom_out_action = new QAction("Zoom &Out", this);
+        zoom_out_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
+        connect(zoom_out_action, &QAction::triggered, this, [this] {
+            if (auto* tab = currentTab()) tab->zoomOut();
+        });
+        view_menu->addAction(zoom_out_action);
+
+        auto* reset_zoom_action = new QAction("&Reset Zoom", this);
+        reset_zoom_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+        connect(reset_zoom_action, &QAction::triggered, this, [this] {
+            if (auto* tab = currentTab()) tab->resetZoom();
+        });
+        view_menu->addAction(reset_zoom_action);
+    }
+
     if (show_menubar_option_available()) {
         view_menu->addSeparator();
         m_show_menu_bar_action = new QAction("Show Menu Bar", this);
@@ -194,6 +259,20 @@ void BrowserWindow::createMenus()
     about_action->setEnabled(false);
     help_menu->addAction(about_action);
     m_hamburger_menu->addMenu(help_menu);
+
+    // [ladybird: BrowserWindow.cpp:447-461]
+    for (int i = 0; i <= 7; ++i) {
+        new QShortcut(QKeySequence(Qt::CTRL | static_cast<Qt::Key>(Qt::Key_1 + i)), this, [this, i] {
+            if (m_tabs->count() <= 1)
+                return;
+            m_tabs->setCurrentIndex(std::min(i, m_tabs->count() - 1));
+        });
+    }
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_9), this, [this] {
+        if (m_tabs->count() <= 1)
+            return;
+        m_tabs->setCurrentIndex(m_tabs->count() - 1);
+    });
 }
 
 void BrowserWindow::closeEvent(QCloseEvent* event)
@@ -286,6 +365,41 @@ void BrowserWindow::setVerticalTabsExpandOnHover(bool enabled)
     Settings::the()->set_vertical_tabs_expand_on_hover(enabled);
 }
 
+void BrowserWindow::toggleVerticalTabsExpanded() // [ladybird: Tab.cpp:176,213 — application.toggle_vertical_tabs_expanded_action()]
+{
+    if (!Settings::the()->vertical_tabs_enabled() || !Settings::the()->vertical_tabs_expanded())
+        setVerticalTabsExpanded();
+    else
+        setVerticalTabsCollapsed();
+
+    // Update the icon on all tabs since setVerticalTabsExpanded/Collapsed only calls
+    // setVerticalTabsEnabled(true) which is a no-op when already enabled.
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto* tab = m_tabs->tab(i))
+            tab->updateToggleVerticalTabsIcon();
+    }
+}
+
+void BrowserWindow::openNextTab() // [ladybird: BrowserWindow.cpp:1065-1073]
+{
+    if (m_tabs->count() <= 1)
+        return;
+    auto next_index = m_tabs->currentIndex() + 1;
+    if (next_index >= m_tabs->count())
+        next_index = 0;
+    m_tabs->setCurrentIndex(next_index);
+}
+
+void BrowserWindow::openPreviousTab() // [ladybird: BrowserWindow.cpp:1076-1084]
+{
+    if (m_tabs->count() <= 1)
+        return;
+    auto next_index = m_tabs->currentIndex() - 1;
+    if (next_index < 0)
+        next_index = m_tabs->count() - 1;
+    m_tabs->setCurrentIndex(next_index);
+}
+
 void BrowserWindow::setShowMenuBar(bool visible)
 {
     Settings::the()->set_show_menu_bar(visible && show_menubar_option_available());
@@ -349,6 +463,20 @@ void BrowserWindow::updateChromeStyle()
     m_is_updating_chrome_style = true;
     qApp->setStyleSheet(ChromeStyle::application_style_sheet(palette()));
     m_is_updating_chrome_style = false;
+}
+
+// [ladybird: BrowserWindow.cpp:1365-1376]
+void BrowserWindow::wheelEvent(QWheelEvent* event)
+{
+    if (!currentTab())
+        return;
+
+    if ((event->modifiers() & Qt::ControlModifier) != 0) {
+        if (event->angleDelta().y() > 0)
+            currentTab()->zoomIn();   // [ladybird: BrowserWindow.cpp:1372]
+        else if (event->angleDelta().y() < 0)
+            currentTab()->zoomOut();  // [ladybird: BrowserWindow.cpp:1374]
+    }
 }
 
 }

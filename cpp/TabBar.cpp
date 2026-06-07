@@ -27,6 +27,7 @@
 #include <QEasingCurve>
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QDrag>
 #include <QMimeData>
@@ -140,6 +141,17 @@ QColor selectedTabBorder(QPalette const& palette, bool collapsed)
     auto dark = ChromeStyle::is_dark(palette);
     auto color = dark ? QColor(255, 255, 255) : QColor(0, 0, 0);
     color.setAlpha(collapsed ? (dark ? 32 : 30) : (dark ? 26 : 24));
+    return color;
+}
+
+QColor selectedTabShadow(QPalette const& palette, int layer)
+{
+    auto dark = ChromeStyle::is_dark(palette);
+    auto color = QColor(0, 0, 0);
+    if (layer == 0)
+        color.setAlpha(dark ? 112 : 22);
+    else
+        color.setAlpha(dark ? 50 : 10);
     return color;
 }
 
@@ -366,13 +378,32 @@ void TabBar::paintEvent(QPaintEvent*)
 
         auto shape = tabShapePath(shape_rect, 9.0, 9.0);
         if (selected) {
-            painter.setBrush(ChromeStyle::chrome_surface(palette()));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(selectedTabShadow(palette(), 1));
+            painter.drawPath(shape.translated(0, 2));
+            painter.setBrush(selectedTabShadow(palette(), 0));
+            painter.drawPath(shape.translated(0, 1));
+
+            auto selected_gradient = QLinearGradient(shape_rect.topLeft(), shape_rect.bottomLeft());
+            selected_gradient.setColorAt(0.0, ChromeStyle::chrome_active_tab_surface_top(palette()));
+            selected_gradient.setColorAt(1.0, ChromeStyle::chrome_active_tab_surface_bottom(palette()));
+            painter.setBrush(selected_gradient);
             painter.setPen(QPen(selectedTabBorder(palette(), is_collapsed), 1));
             painter.drawPath(shape);
         } else if (hover_progress > 0.0) {
             painter.setBrush(tabHoverSurface(palette(), hover_progress));
             painter.setPen(Qt::NoPen);
             painter.drawPath(shape);
+        }
+
+        if (!selected && hover_progress <= 0.0 && index > 0 && index != currentIndex() + 1 && !is_collapsed) {
+            auto separator = ChromeStyle::chrome_border(palette());
+            separator.setAlpha(ChromeStyle::is_dark(palette()) ? 24 : 20);
+            painter.setPen(separator);
+            if (is_vertical)
+                painter.drawLine(QPoint(tab_rect.left() + 16, tab_rect.top()), QPoint(tab_rect.right() - 16, tab_rect.top()));
+            else
+                painter.drawLine(QPoint(tab_rect.left(), 15), QPoint(tab_rect.left(), height() - 15));
         }
 
         auto contents_rect = shape_rect.toAlignedRect().adjusted(8, 0, -8, 0);
@@ -395,25 +426,39 @@ void TabBar::paintEvent(QPaintEvent*)
         if (auto* button = tabButton(index, QTabBar::RightSide); button && button->isVisible())
             contents_rect.setRight(contents_rect.right() - button->width() - 6);
 
-        painter.setPen(selected ? text_color : muted_text);
-        QFontMetrics metrics(font());
+        auto tab_font = font();
+        if (selected)
+            tab_font.setWeight(QFont::DemiBold);
+        painter.setFont(tab_font);
+
+        auto tab_text_color = selected ? text_color : muted_text;
+        if (!selected)
+            tab_text_color.setAlpha(hover_progress > 0.0 ? (ChromeStyle::is_dark(palette()) ? 236 : 228) : (ChromeStyle::is_dark(palette()) ? 226 : 216));
+        painter.setPen(tab_text_color);
+        QFontMetrics metrics(tab_font);
         auto title = metrics.elidedText(tabText(index), Qt::ElideRight, std::max(0, contents_rect.width()));
         painter.drawText(contents_rect, Qt::AlignLeft | Qt::AlignVCenter, title);
     }
 
-    if (m_drop_indicator_index >= 0) {
-        painter.setPen(QPen(ChromeStyle::chrome_accent(palette()), 2));
-        if (is_vertical) {
-            auto y = m_drop_indicator_index * VerticalTabHeight - m_vertical_scroll_offset;
-            painter.drawLine(4, y, width() - 4, y);
-        } else {
-            int x = 0;
-            if (m_drop_indicator_index < count())
-                x = visualTabRect(m_drop_indicator_index).left();
-            else if (count() > 0)
-                x = visualTabRect(count() - 1).right();
-            painter.drawLine(x, 7, x, height() - 7);
+    if (m_drop_indicator_index >= 0 && count() > 0) { // [ladybird: TabBar.cpp:548]
+        auto indicator_color = ChromeStyle::chrome_accent(palette());
+        indicator_color.setAlpha(220);                // [ladybird: TabBar.cpp:550]
+        painter.setPen(QPen(indicator_color, 3, Qt::SolidLine, Qt::RoundCap)); // [ladybird: TabBar.cpp:551]
+
+        if (is_vertical) { // [ladybird: TabBar.cpp:553-559]
+            auto indicator_y = m_drop_indicator_index >= count()
+                ? visualTabRect(count() - 1).bottom() + 3
+                : visualTabRect(m_drop_indicator_index).top() + 1;
+            indicator_y = std::max(3, std::min(height() - 3, indicator_y));
+            painter.drawLine(QPointF(10, indicator_y), QPointF(width() - 10, indicator_y));
+            return;
         }
+
+        auto indicator_x = m_drop_indicator_index >= count() // [ladybird: TabBar.cpp:561-567]
+            ? visualTabRect(count() - 1).right() + 3
+            : visualTabRect(m_drop_indicator_index).left() + 1;
+        indicator_x = std::max(2, std::min(width() - 3, indicator_x));
+        painter.drawLine(QPointF(indicator_x, 8), QPointF(indicator_x, height() - 6));
     }
 }
 
@@ -1106,11 +1151,12 @@ void TabWidget::rebuildLayoutForHorizontalTabs()
     m_tab_bar_row->setMinimumHeight(HorizontalTabStripHeight);
     m_tab_bar_row_layout->setSpacing(0);
     m_tab_bar_row_layout->setContentsMargins(12, 2, 4, 1);
-    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsExpandedProperty, false);
-    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsButtonProperty, false);
     m_new_tab_button->setText({});
+    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsExpandedProperty, false); // [ladybird: TabBar.cpp:1658]
+    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsButtonProperty, true);    // [ladybird: TabBar.cpp:1659] must be true so custom paintEvent fires
     m_new_tab_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_new_tab_button->setFixedSize(HorizontalTabHeight, HorizontalTabHeight);
+    m_new_tab_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed); // [ladybird: TabBar.cpp:1662]
     m_tab_bar_row_layout->addWidget(m_tab_bar);
     m_tab_bar_row_layout->addWidget(m_new_tab_button, 0, Qt::AlignVCenter);
     m_tab_bar_row_layout->addStretch(1);
@@ -1252,10 +1298,11 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     updateTabLayout();
 }
 
-void TabWidget::deferUpdateVerticalTabsHoverExpanded()
+void TabWidget::deferUpdateVerticalTabsHoverExpanded() // [ladybird: TabBar.cpp:1944-1949]
 {
-    if (m_vertical_tabs_hover_expanded)
+    QTimer::singleShot(0, this, [this]() {
         updateVerticalTabsHoverExpanded();
+    });
 }
 
 void TabWidget::updateVerticalTabsHoverExpanded()
@@ -1293,9 +1340,10 @@ void TabWidget::updateChromeStyle()
         return;
     m_is_updating_chrome_style = true;
     auto style_sheet = ChromeStyle::tab_widget_style_sheet(palette());
-    setStyleSheet(style_sheet);
-    m_vertical_tabs_separator->setStyleSheet(style_sheet);
-    m_vertical_tabs_resize_handle->setStyleSheet(style_sheet);
+    m_tab_bar_row->setStyleSheet(style_sheet);                  // [ladybird: TabBar.cpp:1907]
+    m_vertical_tab_bar_column->setStyleSheet(style_sheet);      // [ladybird: TabBar.cpp:1908]
+    m_vertical_tabs_separator->setStyleSheet(style_sheet);      // [ladybird: TabBar.cpp:1909]
+    m_vertical_tabs_resize_handle->setStyleSheet(style_sheet);  // [ladybird: TabBar.cpp:1910]
     m_is_updating_chrome_style = false;
 }
 
