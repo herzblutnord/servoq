@@ -190,12 +190,14 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 |-----|-----------|
 | `EngineState` now explicitly owns one shared `SoftwareRenderingContext` for all tabs instead of creating one context per WebView delegate | servoshell `ServoShellWindow::create_toplevel_webview()` shares `platform_window.rendering_context()` |
 | `EngineState` declares `servo` before WebViews/rendering context so Rust drops Servo before the WebViews/context owners; comment cites Servo issue #36711 | servoshell `RunningAppState` drop-order comment |
-| Resize now calls both `rendering_context.resize(PhysicalSize)` and `webview.resize(PhysicalSize)`; context is never recreated mid-session | Servo 0.2.0 `RenderingContext::resize`; servoshell `HeadedWindow` resize path |
+| Active-tab resize now updates DPR and calls `webview.resize(PhysicalSize)` only; inactive-tab resize only stores pending physical size/DPR so the shared software context cannot be clobbered by a hidden WebView | Servo 0.2.0 `WebView::resize()` resizes the shared `RenderingContext`, updates renderer rect, and sends `ChangeViewportDetails`; servoshell `WebViewCollection::activate_webview()` active-WebView model |
+| Activating a WebView reapplies its cached physical size and DPR through `webview.resize()` before `show()` / `focus()` | servoshell `WebViewCollection::activate_webview()` show/hide model |
 | Hidden tabs are marked inactive and their frame callbacks are ignored before painting into the shared context, avoiding hidden WebViews overwriting the visible tab's software buffer | servoshell `WebViewCollection::activate_webview()` show/hide model |
 | Software paint path calls `webview.paint()`, then reads pixels with `RenderingContext::read_to_image()`; it deliberately does not call `present()` because software `present()` swaps with `PreserveBuffer::No` | Servo 0.2.0 `RenderingContext` contract |
+| `WebContentView::resizeEvent()` clears the stale Qt frame, forwards physical size + DPR to Servo, immediately spins Servo once, and requests a Qt repaint; duplicate same-size/DPR resize events are ignored | servoshell pumps Servo immediately after window events and requests redraw through `notify_new_frame_ready` |
 | `LoadStatus::Complete` forces one extra software paint/read so Qt receives a final post-load frame even when Servo does not emit another frame notification | Servo 0.2.0 `WebViewDelegate::notify_load_status_changed` behavior |
 | Software blit now reuses `WebContentView::m_frame` storage and copies Rust frame bytes directly into it, reallocating only on size/format change instead of constructing `QImage(...).copy()` every frame | Qt `QImage::bits()` software blit optimization |
-| GPU `WindowRenderingContext` remains deferred: servoshell owns a winit native window and GL context, while ServoQ paints inside Qt's `QWidget` composition model. A direct raw-window-handle path needs a dedicated native child surface and Qt/GL ownership design before it is safe. | servoshell `HeadedWindow::new()` raw-window-handle path |
+| GPU `WindowRenderingContext` remains deferred: servoshell owns a winit native window and GL context from `DisplayHandle` + `WindowHandle`; ServoQ currently paints inside Qt's `QWidget` composition model and exposes no `raw-window-handle` bridge. `winId()` alone is not enough, especially on Wayland, and a safe path needs a dedicated native child surface plus Qt/GL ownership rules before Servo can present directly. | servoshell `HeadedWindow::new()` raw-window-handle path |
 
 ### Track A — HiDPI Rendering
 
@@ -206,7 +208,7 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Existing-webview creation and resize now call `webview.set_hidpi_scale_factor(Scale::new(dpr))` before `webview.resize(PhysicalSize)` and cache physical size for later repaint requests | Servo 0.2.0 `WebView` API |
 | `set_page_zoom(id, zoom)` now forces a public-API repaint path by issuing same-size `webview.resize(cached_physical_size)` after `webview.set_page_zoom(zoom)` | Servo 0.2.0 `WebView` API |
 | `paintEvent`: sets `m_frame.setDevicePixelRatio(devicePixelRatioF())` then draws with `painter.drawImage(QPoint(0,0), m_frame)` — no manual `painter.scale()` | WebContentView.cpp:690,696 |
-| `event()`: handles `QEvent::DevicePixelRatioChange` by calling `forwardResizeToEngine()` + `update()` so moving window to a different-DPI monitor reflows the engine frame | WebContentView.cpp:712-714 |
+| `event()`: handles `QEvent::DevicePixelRatioChange` through the same `forwardResizeToEngine()` path, so moving the window to a different-DPI monitor invalidates stale pixels, updates Servo viewport details, spins Servo, and repaints | WebContentView.cpp:712-714 |
 
 ### Track A — WebView Crash Handler
 

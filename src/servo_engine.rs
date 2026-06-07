@@ -225,7 +225,6 @@ mod engine {
                         .map(|t| (t.physical_size, t.hidpi_scale_factor))
                         .unwrap_or((PhysicalSize::new(1, 1), Scale::new(1.0)))
                 });
-                self.rendering_context.resize(size);
                 webview.set_hidpi_scale_factor(scale);
                 webview.resize(size);
                 debug_log_detail(
@@ -403,6 +402,11 @@ mod engine {
         }
     }
 
+    fn resize_webview_to_entry(entry: &TabEntry) {
+        entry.webview.set_hidpi_scale_factor(entry.hidpi_scale_factor);
+        entry.webview.resize(entry.physical_size);
+    }
+
     // Clone the Servo handle out of the RefCell so the borrow is dropped before
     // spin_event_loop() runs (which fires delegate callbacks that borrow ENGINE).
     fn clone_servo() -> Option<Servo> {
@@ -494,9 +498,9 @@ mod engine {
                 debug_log("create_webview_existing", id);
                 tab.physical_size = size;
                 tab.hidpi_scale_factor = scale_factor;
-                engine.rendering_context.resize(size);
-                tab.webview.set_hidpi_scale_factor(scale_factor);
-                tab.webview.resize(size);
+                if tab.active {
+                    resize_webview_to_entry(tab);
+                }
                 return;
             }
 
@@ -792,6 +796,16 @@ mod engine {
                 entry.active = active;
             }
         });
+        if active {
+            ENGINE.with(|s| {
+                let mut s = s.borrow_mut();
+                if let Some(e) = s.as_mut() {
+                    if let Some(entry) = e.tabs.get(&id) {
+                        resize_webview_to_entry(entry);
+                    }
+                }
+            });
+        }
         if let Some(wv) = clone_webview(id) {
             if active {
                 wv.show();
@@ -843,12 +857,12 @@ mod engine {
         ENGINE.with(|s| {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
-                e.rendering_context.resize(size);
                 if let Some(t) = e.tabs.get_mut(&id) {
                     t.physical_size = size;
                     t.hidpi_scale_factor = scale_factor;
-                    t.webview.set_hidpi_scale_factor(scale_factor);
-                    t.webview.resize(size);
+                    if t.active {
+                        resize_webview_to_entry(t);
+                    }
                 }
             }
         });

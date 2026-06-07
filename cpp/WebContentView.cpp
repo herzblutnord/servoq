@@ -230,8 +230,17 @@ void WebContentView::forwardResizeToEngine()
     qreal dpr = devicePixelRatioF();
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
-    debug_log("resize", m_tab_id, QSize(pw, ph), dpr);
+    QSize physical_size(pw, ph);
+    if (m_last_forwarded_physical_size == physical_size && qFuzzyCompare(m_last_forwarded_dpr, dpr))
+        return;
+    m_last_forwarded_physical_size = physical_size;
+    m_last_forwarded_dpr = dpr;
+
+    debug_log("resize", m_tab_id, physical_size, dpr);
+    m_frame = {};
     servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
+    servoq::tick_servo();
+    update();
 }
 
 // paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708).
@@ -416,7 +425,6 @@ bool WebContentView::event(QEvent* ev)
     // [ladybird: WebContentView.cpp:712-714] — DPR change when window moves between monitors
     if (ev->type() == QEvent::DevicePixelRatioChange) {
         forwardResizeToEngine(); // sends new physical size + new hidpi scale factor
-        update();                // repaint stale frame with updated DPR until new frame arrives
     }
     if (ev->type() == QEvent::PaletteChange || ev->type() == QEvent::ApplicationPaletteChange || ev->type() == QEvent::ThemeChange) {
         // [ladybird: WebContentView.cpp:990-994] defer palette/theme work until Qt settles.

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <QImage>
+#include <QSize>
 #include <QString>
 #include <QWidget>
 
@@ -91,6 +92,8 @@ private:
     QString m_crash_reason;
 
     QImage m_frame {};
+    QSize m_last_forwarded_physical_size {};
+    qreal m_last_forwarded_dpr { 0.0 };
     QTimer* m_engine_tick_timer { nullptr };
 };
 
