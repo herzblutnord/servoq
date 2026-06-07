@@ -17,8 +17,24 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QCloseEvent>
+#include <QDebug>
 
 namespace ServoQ {
+
+namespace {
+
+bool debug_enabled()
+{
+    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+}
+
+void debug_log(char const* event, int tab_id, QString const& detail)
+{
+    if (debug_enabled())
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+}
 
 BrowserWindow::BrowserWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -37,8 +53,10 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     updateMenuBarVisibility();
 
     m_tabs->onCurrentChanged = [this](int) {
-        if (auto* tab = currentTab())
+        if (auto* tab = currentTab()) {
+            debug_log("tab_switch", tab->controllerId(), QStringLiteral("active=1"));
             tab->applyControllerState();
+        }
         updateCurrentTabState();
     };
     m_tabs->onTabCloseRequested = [this](int index) { closeTab(index); };
@@ -199,6 +217,7 @@ void BrowserWindow::createNewTab(QString const& url)
     auto* tab = new Tab(this, tab_id);
     auto index = m_tabs->addTab(tab, tab->title());
     m_tabs->setCurrentIndex(index);
+    debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=1").arg(index));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     if (url != QStringLiteral("about:blank"))
         tab->navigate(url);
@@ -210,14 +229,15 @@ void BrowserWindow::closeTab(int index)
     if (index < 0 || index >= m_tabs->count())
         return;
 
-    auto* tab = m_tabs->tab(index);
-    auto tab_id = tab ? tab->controllerId() : 0;
-    servoq::close_tab(tab_id);
     if (m_tabs->count() == 1) {
         close();
         return;
     }
+    auto* tab = m_tabs->tab(index);
+    auto tab_id = tab ? tab->controllerId() : 0;
+    debug_log("close_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(tab == currentTab() ? 1 : 0));
     m_tabs->removeTab(index);
+    servoq::close_tab(tab_id);
     updateCurrentTabState();
 }
 

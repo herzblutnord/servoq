@@ -20,6 +20,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QDebug>
 #include <QResizeEvent>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -32,6 +33,32 @@ static QMap<int, ServoQ::WebContentView*>& g_view_registry()
 {
     static QMap<int, ServoQ::WebContentView*> s_registry;
     return s_registry;
+}
+
+static bool debug_enabled()
+{
+    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+}
+
+static void debug_log(char const* event, int tab_id)
+{
+    if (debug_enabled())
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id;
+}
+
+static void debug_log(char const* event, int tab_id, QString const& detail)
+{
+    if (debug_enabled())
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+static void debug_log(char const* event, int tab_id, QSize const& size, qreal dpr)
+{
+    if (debug_enabled()) {
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id
+                          << " physical=" << size.width() << "x" << size.height()
+                          << " dpr=" << dpr;
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -65,6 +92,7 @@ WebContentView::WebContentView(QWidget* parent)
 WebContentView::~WebContentView()
 {
     if (m_tab_id != 0) {
+        debug_log("close_webview", m_tab_id);
         g_view_registry().remove(m_tab_id);
         servoq::close_webview(m_tab_id);
     }
@@ -80,8 +108,10 @@ void WebContentView::setTabId(int tab_id)
     if (m_tab_id != 0)
         g_view_registry().remove(m_tab_id);
     m_tab_id = tab_id;
-    if (m_tab_id != 0)
+    if (m_tab_id != 0) {
+        debug_log("register_view", m_tab_id);
         g_view_registry().insert(m_tab_id, this);
+    }
 }
 
 void WebContentView::setUrl(QString const& url)
@@ -101,6 +131,7 @@ void WebContentView::setInitialUrl(QString const& url)
 
 void WebContentView::receiveFrame(QImage const& frame)
 {
+    debug_log("deliver_frame_target", m_tab_id, frame.size(), devicePixelRatioF());
     m_frame = frame;
     if (m_placeholder_visible) {
         m_placeholder->hide();
@@ -126,8 +157,20 @@ void WebContentView::startEngineIfNeeded()
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
 
+    debug_log("create_webview", m_tab_id, QSize(pw, ph), dpr);
     auto url_std = m_initial_url.toStdString();
     servoq::create_webview(m_tab_id, url_std.c_str(), pw, ph, static_cast<float>(dpr));
+}
+
+void WebContentView::forwardResizeToEngine()
+{
+    if (m_tab_id == 0 || !m_webview_created)
+        return;
+    qreal dpr = devicePixelRatioF();
+    int pw = qMax(1, static_cast<int>(width() * dpr));
+    int ph = qMax(1, static_cast<int>(height() * dpr));
+    debug_log("resize", m_tab_id, QSize(pw, ph), dpr);
+    servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
 }
 
 // paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708):
@@ -150,12 +193,7 @@ void WebContentView::paintEvent(QPaintEvent*)
 void WebContentView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    if (m_tab_id == 0 || !m_webview_created)
-        return;
-    qreal dpr = devicePixelRatioF();
-    int pw = qMax(1, static_cast<int>(width() * dpr));
-    int ph = qMax(1, static_cast<int>(height() * dpr));
-    servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
+    forwardResizeToEngine();
 }
 
 // leaveEvent — mirrors Ladybird WebContentView::leaveEvent (vendor line 499-510).
@@ -264,7 +302,9 @@ void WebContentView::keyReleaseEvent(QKeyEvent* event)
 void WebContentView::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
+    debug_log("show", m_tab_id);
     startEngineIfNeeded();
+    forwardResizeToEngine();
     if (m_webview_created)
         m_engine_tick_timer->start();
 }
@@ -272,6 +312,7 @@ void WebContentView::showEvent(QShowEvent* event)
 void WebContentView::hideEvent(QHideEvent* event)
 {
     QWidget::hideEvent(event);
+    debug_log("hide", m_tab_id);
     m_engine_tick_timer->stop();
 }
 
@@ -324,8 +365,10 @@ void deliver_frame(::std::int32_t tab_id,
                    ::std::int32_t height)
 {
     auto* view = find_view(tab_id);
-    if (!view)
+    if (!view) {
+        debug_log("ignored_frame_missing_view", tab_id);
         return;
+    }
     // Wrap the Rust slice in a QImage, then copy before the slice is released.
     QImage image(bytes.data(), width, height,
                  static_cast<qsizetype>(width) * 4,
@@ -336,45 +379,60 @@ void deliver_frame(::std::int32_t tab_id,
 void notify_url_changed(::std::int32_t tab_id, ::rust::Str url)
 {
     auto* view = find_view(tab_id);
-    if (!view || !view->tab())
+    auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
+    if (!view || !view->tab()) {
+        debug_log("ignored_url_changed_missing_view", tab_id, text);
         return;
-    view->tab()->on_url_change(
-        QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size())));
+    }
+    debug_log("notify_url_changed", tab_id, text);
+    view->tab()->on_url_change(text);
 }
 
 void notify_title_changed(::std::int32_t tab_id, ::rust::Str title)
 {
     auto* view = find_view(tab_id);
-    if (!view || !view->tab())
+    auto text = QString::fromUtf8(title.data(), static_cast<qsizetype>(title.size()));
+    if (!view || !view->tab()) {
+        debug_log("ignored_title_changed_missing_view", tab_id, text);
         return;
-    view->tab()->on_title_change(
-        QString::fromUtf8(title.data(), static_cast<qsizetype>(title.size())));
+    }
+    debug_log("notify_title_changed", tab_id, text);
+    view->tab()->on_title_change(text);
 }
 
 void notify_load_started(::std::int32_t tab_id, ::rust::Str url)
 {
     auto* view = find_view(tab_id);
-    if (!view || !view->tab())
+    auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
+    if (!view || !view->tab()) {
+        debug_log("ignored_load_started_missing_view", tab_id, text);
         return;
-    view->tab()->on_load_start(
-        QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size())));
+    }
+    debug_log("notify_load_started", tab_id, text);
+    view->tab()->on_load_start(text);
 }
 
 void notify_load_finished(::std::int32_t tab_id)
 {
     auto* view = find_view(tab_id);
-    if (!view || !view->tab())
+    if (!view || !view->tab()) {
+        debug_log("ignored_load_finished_missing_view", tab_id);
         return;
+    }
+    debug_log("notify_load_finished", tab_id);
     view->tab()->on_load_finish();
 }
 
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)
 {
     auto* view = find_view(tab_id);
-    if (!view || !view->tab())
+    auto status = QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+    if (!view || !view->tab()) {
+        debug_log("ignored_status_changed_missing_view", tab_id, status);
         return;
-    view->tab()->on_link_hover(
-        QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())));
+    }
+    debug_log("notify_status_changed", tab_id, status);
+    view->tab()->on_link_hover(status);
 }
 
 } // namespace servoq

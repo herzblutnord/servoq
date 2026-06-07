@@ -69,6 +69,7 @@ protected:
 private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
     void startEngineIfNeeded();
+    void forwardResizeToEngine();
 
     Tab* m_tab { nullptr };
     int m_tab_id { 0 };

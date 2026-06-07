@@ -12,6 +12,7 @@
 
 #include <QAction>
 #include <QBoxLayout>
+#include <QDebug>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -26,6 +27,21 @@ namespace ServoQ {
 namespace {
 constexpr int ToolbarHorizontalMargin = 12;
 constexpr int ToolbarVerticalMargin = 2;
+
+bool debug_enabled()
+{
+    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+}
+
+void debug_log(char const* event, int tab_id, QString const& detail = {})
+{
+    if (!debug_enabled())
+        return;
+    if (detail.isEmpty())
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id;
+    else
+        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
 }
 
 Tab::Tab(BrowserWindow* window, int controller_id)
@@ -126,6 +142,8 @@ void Tab::navigate(QString const& url)
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
     // Queue URL so create_webview (called from showEvent) uses it if the engine
     // WebView has not been created yet.
+    auto is_active = m_window && m_window->currentTab() == this;
+    debug_log("load_url", m_controller_id, QStringLiteral("url=%1 active=%2").arg(normalized_url).arg(is_active ? 1 : 0));
     m_view->setInitialUrl(normalized_url);
     on_load_start(normalized_url);
     servoq::load_url(m_controller_id, normalized_url.toStdString());
@@ -167,6 +185,8 @@ void Tab::findNext()
 void Tab::setStatusText(QString const& status)
 {
     m_view->setStatus(status);
+    if (m_window)
+        m_window->tabStateChanged(this);
 }
 
 QIcon Tab::tabIcon() const
@@ -229,6 +249,7 @@ void Tab::on_favicon_change(QIcon const& icon)
 void Tab::on_link_hover(QString const& url)
 {
     if (url.isEmpty()) {
+        setStatusText({});
         m_hover_label->hide();
         return;
     }

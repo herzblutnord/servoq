@@ -12,6 +12,7 @@ mod engine {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::rc::Rc;
+    use std::sync::Once;
 
     use dpi::PhysicalSize;
     use euclid::{Box2D, Point2D, Scale};
@@ -26,9 +27,61 @@ mod engine {
 
     // ---- per-tab state stored in our engine registry ---------
 
+    fn debug_enabled() -> bool {
+        std::env::var_os("SERVOQ_DEBUG").is_some()
+    }
+
+    fn debug_log(event: &str, id: i32) {
+        if debug_enabled() {
+            eprintln!("SERVOQ_DEBUG {event} tab_id={id}");
+        }
+    }
+
+    fn debug_log_detail(event: &str, id: i32, detail: impl std::fmt::Display) {
+        if debug_enabled() {
+            eprintln!("SERVOQ_DEBUG {event} tab_id={id} {detail}");
+        }
+    }
+
+    fn tab_exists(id: i32) -> bool {
+        ENGINE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .is_some_and(|engine| engine.tabs.contains_key(&id))
+        })
+    }
+
+    fn log_ignored_closed_callback(event: &str, id: i32) {
+        debug_log_detail("ignored_callback_closed_webview", id, event);
+    }
+
+    fn log_embedder_setup_once() {
+        static LOG_ONCE: Once = Once::new();
+        if !debug_enabled() {
+            return;
+        }
+        LOG_ONCE.call_once(|| {
+            eprintln!("SERVOQ_DEBUG servo_builder opts=default preferences=default protocol_registry=default rendering_context=SoftwareRenderingContext event_loop_waker=ServoDefaultEventLoopWaker");
+            match std::env::current_exe() {
+                Ok(path) => eprintln!("SERVOQ_DEBUG current_exe={}", path.display()),
+                Err(error) => eprintln!("SERVOQ_DEBUG current_exe_error={error}"),
+            }
+            for key in [
+                "FONTCONFIG_FILE",
+                "FONTCONFIG_PATH",
+                "XDG_DATA_DIRS",
+                "XDG_CONFIG_HOME",
+                "HOME",
+                "RUST_LOG",
+            ] {
+                let value = std::env::var(key).unwrap_or_else(|_| "<unset>".to_string());
+                eprintln!("SERVOQ_DEBUG env {key}={value}");
+            }
+        });
+    }
+
     struct TabEntry {
         webview: WebView,
-        rendering_context: Rc<SoftwareRenderingContext>,
         // Cached values updated by delegate callbacks
         current_url: String,
         title: String,
@@ -54,6 +107,11 @@ mod engine {
         // CRITICAL: paint() is called here (not before); present() is NOT called
         // before read_to_image so the back buffer is preserved.
         fn notify_new_frame_ready(&self, webview: WebView) {
+            debug_log("notify_new_frame_ready", self.tab_id);
+            if !tab_exists(self.tab_id) {
+                debug_log("ignored_frame_closed_webview", self.tab_id);
+                return;
+            }
             webview.paint();
             let size = self.rendering_context.size();
             let w = size.width;
@@ -64,6 +122,7 @@ mod engine {
             let rect: Box2D<i32, DevicePixel> =
                 Box2D::new(Point2D::origin(), Point2D::new(w as i32, h as i32));
             if let Some(image) = self.rendering_context.read_to_image(rect) {
+                debug_log_detail("deliver_frame", self.tab_id, format!("{w}x{h}"));
                 crate::bridge::ffi::deliver_frame(
                     self.tab_id,
                     image.as_raw().as_slice(),
@@ -74,6 +133,11 @@ mod engine {
         }
 
         fn notify_url_changed(&self, _webview: WebView, url: Url) {
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_url_changed", self.tab_id);
+                return;
+            }
+            debug_log_detail("notify_url_changed", self.tab_id, &url);
             ENGINE.with(|s| {
                 let mut s = s.borrow_mut();
                 if let Some(e) = s.as_mut() {
@@ -86,7 +150,12 @@ mod engine {
         }
 
         fn notify_page_title_changed(&self, _webview: WebView, title: Option<String>) {
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_page_title_changed", self.tab_id);
+                return;
+            }
             let title_str = title.as_deref().unwrap_or("New Tab");
+            debug_log_detail("notify_title_changed", self.tab_id, title_str);
             ENGINE.with(|s| {
                 let mut s = s.borrow_mut();
                 if let Some(e) = s.as_mut() {
@@ -99,7 +168,12 @@ mod engine {
         }
 
         fn notify_status_text_changed(&self, _webview: WebView, status: Option<String>) {
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_status_text_changed", self.tab_id);
+                return;
+            }
             let text = status.as_deref().unwrap_or("");
+            debug_log_detail("notify_status_changed", self.tab_id, text);
             ENGINE.with(|s| {
                 let mut s = s.borrow_mut();
                 if let Some(e) = s.as_mut() {
@@ -112,6 +186,11 @@ mod engine {
         }
 
         fn notify_load_status_changed(&self, _webview: WebView, status: LoadStatus) {
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_load_status_changed", self.tab_id);
+                return;
+            }
+            debug_log_detail("load_status", self.tab_id, format!("{status:?}"));
             let is_loading = !matches!(status, LoadStatus::Complete);
             let url_for_start = if matches!(status, LoadStatus::Started) {
                 Some(ENGINE.with(|s| {
@@ -145,6 +224,11 @@ mod engine {
         }
 
         fn notify_animating_changed(&self, _webview: WebView, animating: bool) {
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_animating_changed", self.tab_id);
+                return;
+            }
+            debug_log_detail("animating", self.tab_id, animating);
             self.animating.set(animating);
         }
     }
@@ -176,25 +260,41 @@ mod engine {
     pub fn create_webview(id: i32, url_str: &str, w: i32, h: i32, scale: f32) {
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
-
-        let rendering_context = Rc::new(
-            SoftwareRenderingContext::new(PhysicalSize::new(w, h))
-                .expect("SoftwareRenderingContext::new failed"),
-        );
-
-        let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
-            tab_id: id,
-            rendering_context: rendering_context.clone(),
-            animating: Cell::new(false),
-        });
-
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
+        debug_log_detail(
+            "create_webview",
+            id,
+            format!("url={url} size={w}x{h} scale={scale}"),
+        );
 
         ENGINE.with(|state| {
             let mut state = state.borrow_mut();
             let engine = state.get_or_insert_with(|| EngineState {
-                servo: ServoBuilder::default().build(),
+                servo: {
+                    log_embedder_setup_once();
+                    ServoBuilder::default().build()
+                },
                 tabs: HashMap::new(),
+            });
+
+            if let Some(tab) = engine.tabs.get_mut(&id) {
+                debug_log("create_webview_existing", id);
+                tab.webview.resize(PhysicalSize::new(w, h));
+                tab.webview.set_hidpi_scale_factor(
+                    Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale),
+                );
+                return;
+            }
+
+            let rendering_context = Rc::new(
+                SoftwareRenderingContext::new(PhysicalSize::new(w, h))
+                    .expect("SoftwareRenderingContext::new failed"),
+            );
+
+            let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
+                tab_id: id,
+                rendering_context: rendering_context.clone(),
+                animating: Cell::new(false),
             });
 
             let rc_ctx: Rc<dyn RenderingContext> = rendering_context.clone();
@@ -210,7 +310,6 @@ mod engine {
                 id,
                 TabEntry {
                     webview,
-                    rendering_context,
                     current_url: url.to_string(),
                     title: "New Tab".to_string(),
                     loading: false,
@@ -225,7 +324,11 @@ mod engine {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
                 // Drop the TabEntry; dropping the WebView handle deregisters it from Servo.
-                e.tabs.remove(&id);
+                if e.tabs.remove(&id).is_some() {
+                    debug_log("close_webview", id);
+                } else {
+                    debug_log("close_webview_missing", id);
+                }
             }
         });
     }
@@ -240,30 +343,43 @@ mod engine {
 
     pub fn load_url(id: i32, url_str: &str) {
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
+        debug_log_detail("load_url", id, &url);
         if let Some(wv) = clone_webview(id) {
             wv.load(url);
+        } else {
+            crate::servo_controller::load_url(id, url_str);
         }
     }
 
     pub fn go_back(id: i32) {
+        debug_log("go_back", id);
         if let Some(wv) = clone_webview(id) {
             wv.go_back(1);
+        } else {
+            crate::servo_controller::go_back(id);
         }
     }
 
     pub fn go_forward(id: i32) {
+        debug_log("go_forward", id);
         if let Some(wv) = clone_webview(id) {
             wv.go_forward(1);
+        } else {
+            crate::servo_controller::go_forward(id);
         }
     }
 
     pub fn reload(id: i32) {
+        debug_log("reload", id);
         if let Some(wv) = clone_webview(id) {
             wv.reload();
+        } else {
+            crate::servo_controller::reload(id);
         }
     }
 
     pub fn close_tab(id: i32) {
+        debug_log("close_tab", id);
         close_webview(id);
         crate::servo_controller::close_tab(id);
     }
@@ -274,7 +390,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.webview.can_go_back())
-                .unwrap_or(false)
+                .unwrap_or_else(|| crate::servo_controller::can_go_back(id))
         })
     }
 
@@ -284,7 +400,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.webview.can_go_forward())
-                .unwrap_or(false)
+                .unwrap_or_else(|| crate::servo_controller::can_go_forward(id))
         })
     }
 
@@ -294,7 +410,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.current_url.clone())
-                .unwrap_or_else(|| "about:blank".to_string())
+                .unwrap_or_else(|| crate::servo_controller::current_url(id))
         })
     }
 
@@ -304,7 +420,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.title.clone())
-                .unwrap_or_else(|| "New Tab".to_string())
+                .unwrap_or_else(|| crate::servo_controller::title(id))
         })
     }
 
@@ -314,7 +430,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.loading)
-                .unwrap_or(false)
+                .unwrap_or_else(|| crate::servo_controller::loading(id))
         })
     }
 
@@ -324,7 +440,7 @@ mod engine {
                 .as_ref()
                 .and_then(|e| e.tabs.get(&id))
                 .map(|t| t.status_text.clone())
-                .unwrap_or_default()
+                .unwrap_or_else(|| crate::servo_controller::status_text(id))
         })
     }
 
@@ -404,13 +520,20 @@ mod engine {
 
     // Matches Ladybird WebContentView::update_viewport_size() (vendor line 760-766):
     // physical pixel dimensions are passed pre-scaled from WebContentView::resizeEvent.
-    pub fn forward_resize(id: i32, w: i32, h: i32, _scale: f32) {
+    pub fn forward_resize(id: i32, w: i32, h: i32, scale: f32) {
         let size = PhysicalSize::new(w.max(1) as u32, h.max(1) as u32);
+        let scale_factor = Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
+        debug_log_detail(
+            "resize",
+            id,
+            format!("{}x{} scale={scale}", size.width, size.height),
+        );
         ENGINE.with(|s| {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
                 if let Some(t) = e.tabs.get_mut(&id) {
                     t.webview.resize(size);
+                    t.webview.set_hidpi_scale_factor(scale_factor);
                 }
             }
         });
