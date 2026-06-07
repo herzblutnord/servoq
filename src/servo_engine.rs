@@ -10,19 +10,33 @@
 #[cfg(feature = "servo-engine")]
 mod engine {
     use std::cell::{Cell, RefCell};
+    use std::ffi::{c_char, c_void, CStr};
+    use std::ptr::NonNull;
     use std::collections::HashMap;
     use std::rc::Rc;
-    use std::sync::Once;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Once,
+    };
+    use std::time::{Duration, Instant};
 
     use dpi::PhysicalSize;
     use euclid::{Box2D, Point2D, Scale};
+    use glow::HasContext;
     use servo::{Code, EventLoopWaker, Key, KeyState, Location, Modifiers, NamedKey};
+    use servo::protocol_handler::ProtocolRegistry;
     use servo::{
         DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
-        NavigationRequest, Preferences, RenderingContext, Servo, ServoBuilder,
+        NavigationRequest, Opts, Preferences, RenderingContext, Servo, ServoBuilder,
         SoftwareRenderingContext, Theme, UrlRequest, WebResourceLoad, WebResourceResponse, WebView,
-        WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
+        WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
+        WindowRenderingContext,
+    };
+    use servo::UserContentManager;
+    use raw_window_handle::{
+        DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
+        WaylandWindowHandle, WindowHandle,
     };
     use url::Url;
 
@@ -31,6 +45,25 @@ mod engine {
     fn debug_enabled() -> bool {
         std::env::var_os("SERVOQ_DEBUG").is_some()
     }
+
+    fn perf_enabled() -> bool {
+        std::env::var_os("SERVOQ_PERF").is_some()
+    }
+
+    static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+    static GL_INFO_LOGGED: AtomicBool = AtomicBool::new(false);
+
+    type EGLDisplay = *mut c_void;
+
+    #[link(name = "EGL")]
+    extern "C" {
+        fn eglGetCurrentDisplay() -> EGLDisplay;
+        fn eglQueryString(display: EGLDisplay, name: i32) -> *const c_char;
+    }
+
+    const EGL_VENDOR: i32 = 0x3053;
+    const EGL_VERSION: i32 = 0x3054;
+    const EGL_CLIENT_APIS: i32 = 0x308D;
 
     fn debug_log(event: &str, id: i32) {
         if debug_enabled() {
@@ -63,6 +96,222 @@ mod engine {
 
     fn log_ignored_closed_callback(event: &str, id: i32) {
         debug_log_detail("ignored_callback_closed_webview", id, event);
+    }
+
+    #[derive(Default)]
+    struct PerfStats {
+        window_start: Option<Instant>,
+        ticks: u64,
+        tick_time: Duration,
+        frames: u64,
+        skipped_pending_frames: u64,
+        frame_time: Duration,
+        frame_bytes: u64,
+        wayland_frame_ready: u64,
+        wayland_presents: u64,
+        wayland_present_time: Duration,
+        wayland_make_current_time: Duration,
+        wayland_paint_time: Duration,
+        wayland_swap_time: Duration,
+        skipped_reentrant_ticks: u64,
+    }
+
+    thread_local! {
+        static PERF_STATS: RefCell<PerfStats> = RefCell::new(PerfStats::default());
+    }
+
+    fn record_tick_time(elapsed: Duration) {
+        if !perf_enabled() {
+            return;
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.ticks += 1;
+            stats.tick_time += elapsed;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn record_frame_delivered(elapsed: Duration, bytes: u64) {
+        if !perf_enabled() {
+            return;
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.frames += 1;
+            stats.frame_time += elapsed;
+            stats.frame_bytes += bytes;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn record_frame_skipped_pending() {
+        if !perf_enabled() {
+            return;
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.skipped_pending_frames += 1;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn record_wayland_frame_ready() {
+        if !perf_enabled() {
+            return;
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.wayland_frame_ready += 1;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn record_wayland_present(
+        total: Duration,
+        make_current: Duration,
+        paint: Duration,
+        swap: Duration,
+        size: PhysicalSize<u32>,
+        url: &str,
+    ) {
+        if !perf_enabled() {
+            return;
+        }
+        if paint > Duration::from_millis(50) {
+            eprintln!(
+                "SERVOQ_PERF slow_wayland_present url={url:?} size={}x{} total_ms={:.2} make_current_ms={:.2} paint_ms={:.2} swap_ms={:.2}",
+                size.width,
+                size.height,
+                total.as_secs_f64() * 1000.0,
+                make_current.as_secs_f64() * 1000.0,
+                paint.as_secs_f64() * 1000.0,
+                swap.as_secs_f64() * 1000.0
+            );
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.wayland_presents += 1;
+            stats.wayland_present_time += total;
+            stats.wayland_make_current_time += make_current;
+            stats.wayland_paint_time += paint;
+            stats.wayland_swap_time += swap;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn record_skipped_reentrant_tick() {
+        if !perf_enabled() {
+            return;
+        }
+        PERF_STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            if stats.window_start.is_none() {
+                stats.window_start = Some(Instant::now());
+            }
+            stats.skipped_reentrant_ticks += 1;
+            maybe_log_perf(&mut stats);
+        });
+    }
+
+    fn maybe_log_perf(stats: &mut PerfStats) {
+        let Some(window_start) = stats.window_start else {
+            return;
+        };
+        if window_start.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        eprintln!(
+            "SERVOQ_PERF rust ticks={} tick_ms={:.2} skipped_reentrant={} sw_frames={} sw_skipped_pending={} sw_frame_ms={:.2} sw_MiB={:.1} wl_frame_ready={} wl_presents={} wl_present_ms={:.2} wl_make_current_ms={:.2} wl_paint_ms={:.2} wl_swap_ms={:.2}",
+            stats.ticks,
+            stats.tick_time.as_secs_f64() * 1000.0,
+            stats.skipped_reentrant_ticks,
+            stats.frames,
+            stats.skipped_pending_frames,
+            stats.frame_time.as_secs_f64() * 1000.0,
+            stats.frame_bytes as f64 / (1024.0 * 1024.0),
+            stats.wayland_frame_ready,
+            stats.wayland_presents,
+            stats.wayland_present_time.as_secs_f64() * 1000.0,
+            stats.wayland_make_current_time.as_secs_f64() * 1000.0,
+            stats.wayland_paint_time.as_secs_f64() * 1000.0,
+            stats.wayland_swap_time.as_secs_f64() * 1000.0,
+        );
+        *stats = PerfStats::default();
+    }
+
+    fn egl_string(name: i32) -> String {
+        unsafe {
+            let display = eglGetCurrentDisplay();
+            if display.is_null() {
+                return "<no-current-egl-display>".to_string();
+            }
+            let value = eglQueryString(display, name);
+            if value.is_null() {
+                return "<unavailable>".to_string();
+            }
+            CStr::from_ptr(value).to_string_lossy().into_owned()
+        }
+    }
+
+    fn is_software_gl_renderer(renderer: &str) -> bool {
+        let renderer = renderer.to_ascii_lowercase();
+        renderer.contains("llvmpipe")
+            || renderer.contains("softpipe")
+            || renderer.contains("software")
+            || renderer.contains("swrast")
+    }
+
+    fn log_wayland_gl_info_once(
+        context: &WindowRenderingContext,
+        size: PhysicalSize<u32>,
+        scale: f32,
+    ) {
+        if !perf_enabled() || GL_INFO_LOGGED.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Err(error) = context.make_current() {
+            eprintln!("SERVOQ_GL error=make_current_failed details={error:?}");
+            return;
+        }
+
+        let gl = context.glow_gl_api();
+        let gl_vendor = unsafe { gl.get_parameter_string(glow::VENDOR) };
+        let gl_renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
+        let gl_version = unsafe { gl.get_parameter_string(glow::VERSION) };
+        let glsl_version = unsafe { gl.get_parameter_string(glow::SHADING_LANGUAGE_VERSION) };
+        let egl_vendor = egl_string(EGL_VENDOR);
+        let egl_version = egl_string(EGL_VERSION);
+        let egl_client_apis = egl_string(EGL_CLIENT_APIS);
+        let software_gl = is_software_gl_renderer(&gl_renderer);
+        let context_type = if gl_version.to_ascii_lowercase().contains("opengl es") {
+            "gles"
+        } else {
+            "desktop-gl"
+        };
+
+        eprintln!(
+            "SERVOQ_GL wayland_backend=true context_type={context_type} surface={}x{} dpr={scale} egl_vendor={egl_vendor:?} egl_version={egl_version:?} egl_client_apis={egl_client_apis:?} gl_vendor={gl_vendor:?} gl_renderer={gl_renderer:?} gl_version={gl_version:?} glsl_version={glsl_version:?} software_gl={software_gl}",
+            size.width, size.height
+        );
+        if software_gl {
+            eprintln!("[servoq] WARNING: Wayland renderer is using software GL: {gl_renderer}");
+        }
     }
 
     fn log_embedder_setup_once() {
@@ -119,6 +368,36 @@ mod engine {
         preferences
     }
 
+    fn build_servo() -> Servo {
+        log_embedder_setup_once();
+        let servo = ServoBuilder::default()
+            .opts(Opts::default())
+            .preferences(servo_preferences())
+            .protocol_registry(ProtocolRegistry::default())
+            .event_loop_waker(Box::new(QtEventLoopWaker))
+            .build();
+        servo.setup_logging();
+        servo
+    }
+
+    fn create_engine_state(rendering_context: EngineRenderingContext) -> EngineState {
+        let servo = build_servo();
+        let user_content_manager = Rc::new(UserContentManager::new(&servo));
+        EngineState {
+            servo,
+            user_content_manager,
+            tabs: HashMap::new(),
+            rendering_context,
+        }
+    }
+
+    fn configure_webview_diagnostics(webview: &WebView) {
+        if std::env::var_os("SERVOQ_WR_DEBUG").is_some() {
+            webview.toggle_webrender_debugging(WebRenderDebugOption::Profiler);
+            webview.toggle_sampling_profiler(Duration::from_millis(10), Duration::from_secs(30));
+        }
+    }
+
     fn domain_matches(host: &str, domain: &str) -> bool {
         host == domain || host.ends_with(&format!(".{domain}"))
     }
@@ -153,20 +432,50 @@ mod engine {
         hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     }
 
+    #[derive(Clone)]
+    enum EngineRenderingContext {
+        Software(Rc<SoftwareRenderingContext>),
+        WaylandWindow(Rc<WindowRenderingContext>),
+    }
+
+    impl EngineRenderingContext {
+        fn as_rendering_context(&self) -> Rc<dyn RenderingContext> {
+            match self {
+                EngineRenderingContext::Software(context) => context.clone(),
+                EngineRenderingContext::WaylandWindow(context) => context.clone(),
+            }
+        }
+
+        fn software(&self) -> Option<Rc<SoftwareRenderingContext>> {
+            match self {
+                EngineRenderingContext::Software(context) => Some(context.clone()),
+                EngineRenderingContext::WaylandWindow(_) => None,
+            }
+        }
+
+        fn wayland_window(&self) -> Option<Rc<WindowRenderingContext>> {
+            match self {
+                EngineRenderingContext::Software(_) => None,
+                EngineRenderingContext::WaylandWindow(context) => Some(context.clone()),
+            }
+        }
+    }
+
     struct EngineState {
         // Servo must be dropped before WebViews and rendering contexts. Keep fields
         // that own WebViews/RenderingContexts after this one so Rust drops Servo first.
         // See https://github.com/servo/servo/issues/36711.
         servo: Servo,
+        user_content_manager: Rc<UserContentManager>,
         tabs: HashMap<i32, TabEntry>,
-        rendering_context: Rc<SoftwareRenderingContext>,
+        rendering_context: EngineRenderingContext,
     }
 
     // ---- delegate ------------------------------------------
 
     struct ServoDelegate {
         tab_id: i32,
-        rendering_context: Rc<SoftwareRenderingContext>,
+        rendering_context: EngineRenderingContext,
         animating: Cell<bool>,
         // G1: resize() before the first spin_event_loop() is silently discarded
         // because the paint thread hasn't started processing messages yet. On the
@@ -185,9 +494,20 @@ mod engine {
                 debug_log("ignored_frame_hidden_webview", self.tab_id);
                 return;
             }
+            let Some(rendering_context) = self.rendering_context.software() else {
+                record_wayland_frame_ready();
+                crate::bridge::ffi::request_wayland_window_repaint(self.tab_id);
+                return;
+            };
 
+            if crate::bridge::ffi::webcontent_frame_pending(self.tab_id) {
+                debug_log("skipped_frame_pending_qt_paint", self.tab_id);
+                record_frame_skipped_pending();
+                return;
+            }
+            let started = Instant::now();
             webview.paint();
-            let size = self.rendering_context.size();
+            let size = rendering_context.size();
             let w = size.width;
             let h = size.height;
             if w == 0 || h == 0 {
@@ -195,14 +515,16 @@ mod engine {
             }
             let rect: Box2D<i32, DevicePixel> =
                 Box2D::new(Point2D::origin(), Point2D::new(w as i32, h as i32));
-            if let Some(image) = self.rendering_context.read_to_image(rect) {
+            if let Some(image) = rendering_context.read_to_image(rect) {
                 debug_log_detail("deliver_frame", self.tab_id, format!("{w}x{h}"));
+                let bytes = (w as u64) * (h as u64) * 4;
                 crate::bridge::ffi::deliver_frame(
                     self.tab_id,
                     image.as_raw().as_slice(),
                     w as i32,
                     h as i32,
                 );
+                record_frame_delivered(started.elapsed(), bytes);
             }
         }
     }
@@ -212,6 +534,9 @@ mod engine {
         // CRITICAL: paint() is called here (not before); present() is NOT called
         // before read_to_image so the back buffer is preserved.
         fn notify_new_frame_ready(&self, webview: WebView) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             debug_log("notify_new_frame_ready", self.tab_id);
 
             // G1: first callback proves the compositor is alive; re-send stored size
@@ -238,6 +563,9 @@ mod engine {
         }
 
         fn notify_url_changed(&self, _webview: WebView, url: Url) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_url_changed", self.tab_id);
                 return;
@@ -255,6 +583,9 @@ mod engine {
         }
 
         fn notify_page_title_changed(&self, _webview: WebView, title: Option<String>) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_page_title_changed", self.tab_id);
                 return;
@@ -273,6 +604,9 @@ mod engine {
         }
 
         fn notify_status_text_changed(&self, _webview: WebView, status: Option<String>) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_status_text_changed", self.tab_id);
                 return;
@@ -291,6 +625,9 @@ mod engine {
         }
 
         fn notify_load_status_changed(&self, webview: WebView, status: LoadStatus) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_load_status_changed", self.tab_id);
                 return;
@@ -332,6 +669,9 @@ mod engine {
         }
 
         fn notify_animating_changed(&self, _webview: WebView, animating: bool) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 log_ignored_closed_callback("notify_animating_changed", self.tab_id);
                 return;
@@ -343,6 +683,9 @@ mod engine {
         // [ladybird: WebContentView crash signal] — Servo crashed; notify the Qt side so it can
         // show an error page. Matches the reference notify_crashed() contract.
         fn notify_crashed(&self, _webview: WebView, reason: String, _backtrace: Option<String>) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             if !tab_exists(self.tab_id) {
                 return;
             }
@@ -351,6 +694,10 @@ mod engine {
         }
 
         fn request_navigation(&self, _webview: WebView, navigation_request: NavigationRequest) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                navigation_request.deny();
+                return;
+            }
             if content_blocking_enabled() && should_block_url(&navigation_request.url) {
                 notify_request_blocked(self.tab_id, &navigation_request.url);
                 navigation_request.deny();
@@ -360,6 +707,9 @@ mod engine {
         }
 
         fn load_web_resource(&self, _webview: WebView, load: WebResourceLoad) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             let url = load.request().url.clone();
             if content_blocking_enabled() && should_block_url(&url) {
                 notify_request_blocked(self.tab_id, &url);
@@ -410,10 +760,16 @@ mod engine {
     // Clone the Servo handle out of the RefCell so the borrow is dropped before
     // spin_event_loop() runs (which fires delegate callbacks that borrow ENGINE).
     fn clone_servo() -> Option<Servo> {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return None;
+        }
         ENGINE.with(|s| s.borrow().as_ref().map(|e| e.servo.clone()))
     }
 
     fn clone_webview(id: i32) -> Option<WebView> {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return None;
+        }
         ENGINE.with(|s| {
             s.borrow()
                 .as_ref()?
@@ -440,31 +796,27 @@ mod engine {
     // Servo's internal subsystems (constellation, script, layout, font cache) time
     // to fully initialize before any web content or font shaping is requested.
     pub fn init_servo() {
+        SHUTTING_DOWN.store(false, Ordering::Release);
         ENGINE.with(|state| {
             let mut state = state.borrow_mut();
             if state.is_some() {
                 return;
             }
-            log_embedder_setup_once();
             eprintln!("[servoq] init_servo: initializing Servo at startup");
-            *state = Some(EngineState {
-                servo: ServoBuilder::default()
-                    .preferences(servo_preferences())
-                    .event_loop_waker(Box::new(QtEventLoopWaker))
-                    .build(),
-                tabs: HashMap::new(),
-                // Placeholder size — resized to the actual widget dimensions in
+            *state = Some(create_engine_state(EngineRenderingContext::Software(Rc::new(
+                // Placeholder size -- resized to the actual widget dimensions in
                 // create_webview() before any WebView is built.
-                rendering_context: Rc::new(
                     SoftwareRenderingContext::new(PhysicalSize::new(800, 600))
                         .expect("SoftwareRenderingContext::new failed"),
-                ),
-            });
+            ))));
             eprintln!("[servoq] init_servo: done");
         });
     }
 
     pub fn create_webview(id: i32, url_str: &str, w: i32, h: i32, scale: f32) {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return;
+        }
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
@@ -476,19 +828,11 @@ mod engine {
 
         ENGINE.with(|state| {
             let mut state = state.borrow_mut();
-            let engine = state.get_or_insert_with(|| EngineState {
-                servo: {
-                    log_embedder_setup_once();
-                    ServoBuilder::default()
-                        .preferences(servo_preferences())
-                        .event_loop_waker(Box::new(QtEventLoopWaker))
-                        .build()
-                },
-                tabs: HashMap::new(),
-                rendering_context: Rc::new(
+            let engine = state.get_or_insert_with(|| {
+                create_engine_state(EngineRenderingContext::Software(Rc::new(
                     SoftwareRenderingContext::new(PhysicalSize::new(w, h))
                         .expect("SoftwareRenderingContext::new failed"),
-                ),
+                )))
             });
 
             let size = PhysicalSize::new(w, h);
@@ -504,7 +848,9 @@ mod engine {
                 return;
             }
 
-            engine.rendering_context.resize(size);
+            if let Some(context) = engine.rendering_context.software() {
+                context.resize(size);
+            }
 
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: id,
@@ -513,12 +859,14 @@ mod engine {
                 initial_resize_done: Cell::new(false),
             });
 
-            let rc_ctx: Rc<dyn RenderingContext> = engine.rendering_context.clone();
+            let rc_ctx: Rc<dyn RenderingContext> = engine.rendering_context.as_rendering_context();
             let webview = WebViewBuilder::new(&engine.servo, rc_ctx)
                 .url(url.clone())
                 .hidpi_scale_factor(scale_factor)
+                .user_content_manager(engine.user_content_manager.clone())
                 .delegate(delegate)
                 .build();
+            configure_webview_diagnostics(&webview);
 
             engine.tabs.insert(
                 id,
@@ -536,7 +884,126 @@ mod engine {
         });
     }
 
+    fn create_wayland_rendering_context(
+        wl_display: u64,
+        wl_surface: u64,
+        size: PhysicalSize<u32>,
+    ) -> Result<Rc<WindowRenderingContext>, String> {
+        let display_ptr = NonNull::new(wl_display as *mut c_void)
+            .ok_or_else(|| "wl_display pointer is null".to_string())?;
+        let surface_ptr = NonNull::new(wl_surface as *mut c_void)
+            .ok_or_else(|| "wl_surface pointer is null".to_string())?;
+
+        let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr));
+        let window = RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr));
+        // SAFETY: Qt owns the Wayland display/surface for at least as long as
+        // the embedded QWindow. If Qt destroys the QWindow, WebContentView closes
+        // the Servo WebView before the Rust rendering context is dropped.
+        let display_handle = unsafe { DisplayHandle::borrow_raw(display) };
+        let window_handle = unsafe { WindowHandle::borrow_raw(window) };
+
+        WindowRenderingContext::new(display_handle, window_handle, size)
+            .map(Rc::new)
+            .map_err(|error| format!("WindowRenderingContext::new failed: {error:?}"))
+    }
+
+    pub fn create_webview_wayland_window(
+        id: i32,
+        url_str: &str,
+        w: i32,
+        h: i32,
+        scale: f32,
+        wl_display: u64,
+        wl_surface: u64,
+    ) -> bool {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return false;
+        }
+        let w = (w.max(1)) as u32;
+        let h = (h.max(1)) as u32;
+        let size = PhysicalSize::new(w, h);
+        let scale_factor = Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
+        let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
+
+        let wayland_context = match create_wayland_rendering_context(wl_display, wl_surface, size) {
+            Ok(context) => context,
+            Err(reason) => {
+                eprintln!(
+                    "[servoq] Wayland window renderer unavailable: {reason}; falling back to software"
+                );
+                return false;
+            }
+        };
+        log_wayland_gl_info_once(&wayland_context, size, scale);
+
+        ENGINE.with(|state| {
+            let mut state = state.borrow_mut();
+            let engine = state.get_or_insert_with(|| {
+                create_engine_state(EngineRenderingContext::WaylandWindow(wayland_context.clone()))
+            });
+
+            if !engine.tabs.is_empty() && !matches!(engine.rendering_context, EngineRenderingContext::WaylandWindow(_)) {
+                eprintln!("[servoq] Wayland window renderer unavailable: software WebViews already exist; falling back to software");
+                return false;
+            }
+            if engine.tabs.is_empty() {
+                engine.rendering_context = EngineRenderingContext::WaylandWindow(wayland_context.clone());
+                if perf_enabled() {
+                    eprintln!(
+                        "SERVOQ_PERF renderer=wayland-window active=true software_context=false window_context=true size={}x{} scale={scale}",
+                        size.width, size.height
+                    );
+                }
+            }
+
+            if let Some(tab) = engine.tabs.get_mut(&id) {
+                tab.physical_size = size;
+                tab.hidpi_scale_factor = scale_factor;
+                if tab.active {
+                    resize_webview_to_entry(tab);
+                }
+                return true;
+            }
+
+            let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
+                tab_id: id,
+                rendering_context: engine.rendering_context.clone(),
+                animating: Cell::new(false),
+                initial_resize_done: Cell::new(false),
+            });
+
+            let webview = WebViewBuilder::new(
+                &engine.servo,
+                engine.rendering_context.as_rendering_context(),
+            )
+            .url(url.clone())
+            .hidpi_scale_factor(scale_factor)
+            .user_content_manager(engine.user_content_manager.clone())
+            .delegate(delegate)
+            .build();
+            configure_webview_diagnostics(&webview);
+
+            engine.tabs.insert(
+                id,
+                TabEntry {
+                    webview,
+                    current_url: url.to_string(),
+                    title: "New Tab".to_string(),
+                    loading: false,
+                    status_text: String::new(),
+                    active: true,
+                    physical_size: size,
+                    hidpi_scale_factor: scale_factor,
+                },
+            );
+            true
+        })
+    }
+
     pub fn close_webview(id: i32) {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return;
+        }
         ENGINE.with(|s| {
             let mut s = s.borrow_mut();
             if let Some(e) = s.as_mut() {
@@ -550,18 +1017,41 @@ mod engine {
         });
     }
 
+    pub fn shutdown_servo() {
+        if SHUTTING_DOWN.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        debug_log("shutdown_servo", 0);
+        ENGINE.with(|s| {
+            // Drop WebViews, Servo, and WindowRenderingContext deterministically.
+            // In Wayland mode this must happen while Qt still owns a valid QWindow
+            // and wl_surface; otherwise Surfman/EGL can destroy a surface whose
+            // Wayland proxy has already been torn down by Qt.
+            *s.borrow_mut() = None;
+        });
+        SPINNING.with(|s| s.set(false));
+    }
+
     // Global tick: called by the Qt EventLoopWaker event handler (BrowserWindow::eventFilter).
     // No tab ID — panics are logged to stderr; per-tab crash notification is handled
     // by tick_webview (timer path) which retains the tab ID for crash reporting.
     pub fn tick_servo_global() {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return;
+        }
         let _guard = match SpinGuard::try_acquire() {
             Some(g) => g,
-            None => return, // Already spinning — skip re-entrant call
+            None => {
+                record_skipped_reentrant_tick();
+                return;
+            } // Already spinning — skip re-entrant call
         };
         if let Some(servo) = clone_servo() {
+            let started = Instant::now();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 servo.spin_event_loop();
             }));
+            record_tick_time(started.elapsed());
             if let Err(e) = result {
                 let reason = if let Some(s) = e.downcast_ref::<String>() {
                     s.clone()
@@ -581,14 +1071,22 @@ mod engine {
     // background operations — a Rust panic must NOT cross the FFI boundary into C++.
     // [ladybird: WebContentView crash signal, B2 fix]
     pub fn tick_webview(id: i32) {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return;
+        }
         let _guard = match SpinGuard::try_acquire() {
             Some(g) => g,
-            None => return, // Already spinning — skip re-entrant call
+            None => {
+                record_skipped_reentrant_tick();
+                return;
+            } // Already spinning — skip re-entrant call
         };
         if let Some(servo) = clone_servo() {
+            let started = Instant::now();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 servo.spin_event_loop();
             }));
+            record_tick_time(started.elapsed());
             if let Err(e) = result {
                 let reason = if let Some(s) = e.downcast_ref::<String>() {
                     s.clone()
@@ -601,6 +1099,48 @@ mod engine {
                 crate::bridge::ffi::notify_webview_crashed(id, &reason);
             }
         }
+    }
+
+    pub fn present_wayland_webview(id: i32) {
+        if SHUTTING_DOWN.load(Ordering::Acquire) {
+            return;
+        }
+        let Some((webview, context, size, url)) = ENGINE.with(|s| {
+            let s = s.borrow();
+            let engine = s.as_ref()?;
+            let tab = engine.tabs.get(&id)?;
+            let context = engine.rendering_context.wayland_window()?;
+            Some((
+                tab.webview.clone(),
+                context,
+                tab.physical_size,
+                tab.current_url.clone(),
+            ))
+        }) else {
+            return;
+        };
+
+        let started = Instant::now();
+        let make_current_started = Instant::now();
+        if let Err(error) = context.make_current() {
+            eprintln!("[servoq] Wayland window renderer present failed: make_current: {error:?}");
+            return;
+        }
+        let make_current_time = make_current_started.elapsed();
+        let paint_started = Instant::now();
+        webview.paint();
+        let paint_time = paint_started.elapsed();
+        let swap_started = Instant::now();
+        context.present();
+        let swap_time = swap_started.elapsed();
+        record_wayland_present(
+            started.elapsed(),
+            make_current_time,
+            paint_time,
+            swap_time,
+            size,
+            &url,
+        );
     }
 
     pub fn load_url(id: i32, url_str: &str) {
@@ -1040,9 +1580,37 @@ pub fn create_webview(_id: i32, _url: &str, _w: i32, _h: i32, _scale: f32) {
     engine::create_webview(_id, _url, _w, _h, _scale);
 }
 
+pub fn create_webview_wayland_window(
+    _id: i32,
+    _url: &str,
+    _w: i32,
+    _h: i32,
+    _scale: f32,
+    _wl_display: u64,
+    _wl_surface: u64,
+) -> bool {
+    #[cfg(feature = "servo-engine")]
+    return engine::create_webview_wayland_window(
+        _id,
+        _url,
+        _w,
+        _h,
+        _scale,
+        _wl_display,
+        _wl_surface,
+    );
+    #[allow(unreachable_code)]
+    false
+}
+
 pub fn close_webview(_id: i32) {
     #[cfg(feature = "servo-engine")]
     engine::close_webview(_id);
+}
+
+pub fn shutdown_servo() {
+    #[cfg(feature = "servo-engine")]
+    engine::shutdown_servo();
 }
 
 pub fn tick_webview(_id: i32) {
@@ -1053,6 +1621,11 @@ pub fn tick_webview(_id: i32) {
 pub fn tick_servo() {
     #[cfg(feature = "servo-engine")]
     engine::tick_servo_global();
+}
+
+pub fn present_wayland_webview(_id: i32) {
+    #[cfg(feature = "servo-engine")]
+    engine::present_wayland_webview(_id);
 }
 
 pub fn forward_mouse_move(_id: i32, _x: f32, _y: f32) {

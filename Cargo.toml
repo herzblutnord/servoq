@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-servo-engine = ["dep:servo", "dep:dpi", "dep:euclid", "dep:url", "dep:keyboard-types"]
+servo-engine = ["dep:servo", "dep:dpi", "dep:euclid", "dep:url", "dep:keyboard-types", "dep:raw-window-handle", "dep:glow"]
 
 [dependencies]
 cxx = "1.0"
@@ -14,6 +14,8 @@ dpi = { version = "0.1", optional = true }
 euclid = { version = "0.22", optional = true }
 url = { version = "2", optional = true }
 keyboard-types = { version = "0.7", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+glow = { version = "0.17", optional = true }
 
 [build-dependencies]
 cxx-build = "1.0"

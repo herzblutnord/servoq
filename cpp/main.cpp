@@ -1,5 +1,6 @@
 #include "qt_app.h"
 #include "BrowserWindow.h"
+#include "servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
@@ -13,6 +14,9 @@ int run_qt_application()
     static char* argv[] = { app_name, nullptr };
 
     QApplication app(argc, argv);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
+        servoq::begin_servo_shutdown();
+    });
 
     // Phase 0 fix (Hypothesis A): initialize Servo at application startup,
     // before the main window is shown and before Qt delivers any
@@ -32,7 +36,9 @@ int run_qt_application()
 
     ServoQ::BrowserWindow window;
     window.show();
-    return app.exec();
+    int result = app.exec();
+    servoq::begin_servo_shutdown();
+    return result;
 }
 
 }

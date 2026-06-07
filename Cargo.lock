@@ -6624,8 +6624,10 @@ dependencies = [
  "cxx-build",
  "dpi",
  "euclid",
+ "glow",
  "keyboard-types 0.7.0",
  "pkg-config",
+ "raw-window-handle",
  "servo",
  "url",
 ]

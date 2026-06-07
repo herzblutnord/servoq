@@ -27,7 +27,13 @@
 #include <QStyleHints>
 #include <QTimer>
 #include <QWheelEvent>
+#include <QWindow>
+#include <QtGui/qguiapplication_platform.h>
+#include <QtGui/qpa/qplatformwindow_p.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 
 // ── Global registry (file-local, accessible to both namespace blocks below) ──
@@ -39,9 +45,70 @@ static QMap<int, ServoQ::WebContentView*>& g_view_registry()
     return s_registry;
 }
 
+static std::atomic_bool& g_servo_wake_pending()
+{
+    static std::atomic_bool s_pending { false };
+    return s_pending;
+}
+
+static std::atomic_bool& g_servo_shutting_down()
+{
+    static std::atomic_bool s_shutting_down { false };
+    return s_shutting_down;
+}
+
 static bool debug_enabled()
 {
     return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+}
+
+static bool perf_enabled()
+{
+    return qEnvironmentVariableIsSet("SERVOQ_PERF");
+}
+
+struct QtPerfStats {
+    std::chrono::steady_clock::time_point window_start { std::chrono::steady_clock::now() };
+    uint64_t wake_events { 0 };
+    uint64_t wake_events_coalesced { 0 };
+    uint64_t qwindow_update_requests { 0 };
+    uint64_t qwindow_exposes { 0 };
+    uint64_t qwindow_presents { 0 };
+    uint64_t qwindow_present_requests { 0 };
+    uint64_t qwindow_present_requests_coalesced { 0 };
+    uint64_t software_frames { 0 };
+    uint64_t software_paints { 0 };
+    uint64_t draw_image_calls { 0 };
+};
+
+static QtPerfStats& qt_perf_stats()
+{
+    static QtPerfStats stats;
+    return stats;
+}
+
+static void maybe_log_qt_perf()
+{
+    if (!perf_enabled())
+        return;
+    auto& stats = qt_perf_stats();
+    auto now = std::chrono::steady_clock::now();
+    if (now - stats.window_start < std::chrono::seconds(1))
+        return;
+
+    qInfo().nospace()
+        << "SERVOQ_PERF qt wake_events=" << stats.wake_events
+        << " wake_coalesced=" << stats.wake_events_coalesced
+        << " qwindow_update_requests=" << stats.qwindow_update_requests
+        << " qwindow_exposes=" << stats.qwindow_exposes
+        << " qwindow_presents=" << stats.qwindow_presents
+        << " qwindow_present_requests=" << stats.qwindow_present_requests
+        << " qwindow_present_requests_coalesced=" << stats.qwindow_present_requests_coalesced
+        << " software_frames=" << stats.software_frames
+        << " software_paints=" << stats.software_paints
+        << " draw_image_calls=" << stats.draw_image_calls;
+    stats = {};
+    stats.window_start = now;
 }
 
 static void debug_log(char const* event, int tab_id)
@@ -84,12 +151,173 @@ static bool is_using_dark_system_theme(QWidget const& widget)
 
 namespace ServoQ {
 
+class ServoWaylandContentWindow final : public QWindow {
+public:
+    explicit ServoWaylandContentWindow(WebContentView* owner)
+        : m_owner(owner)
+    {
+        setSurfaceType(QWindow::SurfaceType::OpenGLSurface);
+    }
+
+    void requestServoPresent()
+    {
+        requestUpdate();
+    }
+
+protected:
+    bool event(QEvent* event) override
+    {
+        if (event->type() == QEvent::UpdateRequest) {
+            qt_perf_stats().qwindow_update_requests++;
+            if (g_servo_shutting_down().load(std::memory_order_acquire))
+                return true;
+            if (m_owner && m_owner->waylandRendererActive() && m_owner->takeWaylandPresentPending()) {
+                qt_perf_stats().qwindow_presents++;
+                m_owner->m_wayland_present_in_progress = true;
+                servoq::present_wayland_webview(m_owner->tabId());
+                m_owner->m_wayland_present_in_progress = false;
+                if (m_owner->m_wayland_dirty_after_present) {
+                    m_owner->m_wayland_dirty_after_present = false;
+                    m_owner->requestWaylandRepaint();
+                }
+                maybe_log_qt_perf();
+            }
+            return true;
+        }
+        return QWindow::event(event);
+    }
+
+    void exposeEvent(QExposeEvent*) override
+    {
+        qt_perf_stats().qwindow_exposes++;
+        if (isExposed() && m_owner && m_owner->waylandRendererActive() && !g_servo_shutting_down().load(std::memory_order_acquire))
+            m_owner->requestWaylandRepaint();
+        maybe_log_qt_perf();
+    }
+
+    void resizeEvent(QResizeEvent*) override
+    {
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+            m_owner->forwardResizeToEngine();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
+        qreal dpr = devicePixelRatio();
+        servoq::forward_mouse_move(m_owner->tabId(),
+            static_cast<float>(event->position().x() * dpr),
+            static_cast<float>(event->position().y() * dpr));
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+            m_owner->forwardWindowMouseButton(0, qtMouseButtonToServo(event->button()), event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+            m_owner->forwardWindowMouseButton(1, qtMouseButtonToServo(event->button()), event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        mousePressEvent(event);
+    }
+
+    void wheelEvent(QWheelEvent* event) override
+    {
+        if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
+        double dx = 0.0;
+        double dy = 0.0;
+        if (auto pixel_delta = -event->pixelDelta(); !pixel_delta.isNull()) {
+            dx = pixel_delta.x();
+            dy = pixel_delta.y();
+        } else {
+            auto angle_delta = -event->angleDelta();
+            double step_x = static_cast<double>(angle_delta.x()) / 120.0
+                            * static_cast<double>(QApplication::wheelScrollLines());
+            double step_y = static_cast<double>(angle_delta.y()) / 120.0
+                            * static_cast<double>(QApplication::wheelScrollLines());
+            static constexpr double scroll_step_size = 40.0;
+            dx = step_x * scroll_step_size;
+            dy = step_y * scroll_step_size;
+        }
+
+        qreal dpr = devicePixelRatio();
+        servoq::forward_wheel(m_owner->tabId(), dx, dy,
+            static_cast<float>(event->position().x() * dpr),
+            static_cast<float>(event->position().y() * dpr));
+        event->accept();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
+        auto text = event->text();
+        uint32_t key_char = text.isEmpty() ? 0u : static_cast<uint32_t>(text[0].unicode());
+        servoq::forward_key(m_owner->tabId(), true, key_char,
+            static_cast<int32_t>(event->key()),
+            static_cast<uint32_t>(event->modifiers()));
+    }
+
+    void keyReleaseEvent(QKeyEvent* event) override
+    {
+        if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
+        auto text = event->text();
+        uint32_t key_char = text.isEmpty() ? 0u : static_cast<uint32_t>(text[0].unicode());
+        servoq::forward_key(m_owner->tabId(), false, key_char,
+            static_cast<int32_t>(event->key()),
+            static_cast<uint32_t>(event->modifiers()));
+    }
+
+    void focusInEvent(QFocusEvent*) override
+    {
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+            servoq::forward_focus(m_owner->tabId(), true);
+    }
+
+    void focusOutEvent(QFocusEvent*) override
+    {
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+            servoq::forward_focus(m_owner->tabId(), false);
+    }
+
+private:
+    static int qtMouseButtonToServo(Qt::MouseButton button)
+    {
+        if (button == Qt::LeftButton)
+            return 0;
+        if (button == Qt::MiddleButton)
+            return 1;
+        if (button == Qt::RightButton)
+            return 2;
+        return -1;
+    }
+
+    WebContentView* m_owner { nullptr };
+};
+
 WebContentView::WebContentView(QWidget* parent)
     : QWidget(parent)
     , m_engine_tick_timer(new QTimer(this))
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+
+    if (waylandRendererRequested()) {
+        m_wayland_window = new ServoWaylandContentWindow(this);
+        m_wayland_container = QWidget::createWindowContainer(m_wayland_window, this);
+        m_wayland_container->setFocusPolicy(Qt::StrongFocus);
+        m_wayland_container->setMouseTracking(true);
+        m_wayland_container->hide();
+    }
 
     // No placeholder widget — the view is shown immediately. Before the first
     // Servo frame arrives the widget simply shows a blank background.
@@ -102,6 +330,8 @@ WebContentView::WebContentView(QWidget* parent)
     m_engine_tick_timer->setInterval(200);
     m_engine_tick_timer->setSingleShot(false);
     connect(m_engine_tick_timer, &QTimer::timeout, this, [this] {
+        if (g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
         servoq::tick_webview(m_tab_id);
     });
 
@@ -118,10 +348,12 @@ WebContentView::WebContentView(QWidget* parent)
 
 WebContentView::~WebContentView()
 {
+    m_engine_tick_timer->stop();
     if (m_tab_id != 0) {
         debug_log("close_webview", m_tab_id);
         g_view_registry().remove(m_tab_id);
-        servoq::close_webview(m_tab_id);
+        if (!g_servo_shutting_down().load(std::memory_order_acquire))
+            servoq::close_webview(m_tab_id);
     }
 }
 
@@ -156,22 +388,97 @@ void WebContentView::setInitialUrl(QString const& url)
     m_initial_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
 }
 
+bool WebContentView::waylandRendererRequested() const
+{
+    return qEnvironmentVariable("SERVOQ_RENDERER") == QStringLiteral("wayland-window");
+}
+
+bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr)
+{
+    if (!m_wayland_window || !m_wayland_container)
+        return false;
+    if (QGuiApplication::platformName() != QStringLiteral("wayland")) {
+        qWarning().nospace() << "[servoq] Wayland window renderer unavailable: Qt platform is "
+                             << QGuiApplication::platformName() << "; falling back to software";
+        return false;
+    }
+
+    m_wayland_container->setGeometry(rect());
+    m_wayland_container->show();
+    m_wayland_window->show();
+    m_wayland_window->create();
+
+    auto* app_interface = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
+    if (!app_interface || !app_interface->display()) {
+        qWarning() << "[servoq] Wayland window renderer unavailable: wl_display unavailable; falling back to software";
+        m_wayland_container->hide();
+        return false;
+    }
+
+    auto* window_interface = m_wayland_window->nativeInterface<QNativeInterface::Private::QWaylandWindow>();
+    if (!window_interface || !window_interface->surface()) {
+        qWarning() << "[servoq] Wayland window renderer unavailable: wl_surface unavailable; falling back to software";
+        m_wayland_container->hide();
+        return false;
+    }
+
+    auto url_std = m_initial_url.toStdString();
+    auto ok = servoq::create_webview_wayland_window(
+        m_tab_id,
+        url_std.c_str(),
+        physical_width,
+        physical_height,
+        static_cast<float>(dpr),
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(app_interface->display())),
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window_interface->surface())));
+    if (!ok) {
+        m_wayland_container->hide();
+        return false;
+    }
+
+    m_wayland_renderer_active = true;
+    m_wayland_present_pending = false;
+    m_wayland_present_in_progress = false;
+    m_wayland_dirty_after_present = false;
+    m_engine_tick_timer->stop();
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+    if (perf_enabled()) {
+        qInfo().nospace()
+            << "SERVOQ_PERF renderer=wayland-window active=true qt_container=true qimage_paint=false physical="
+            << physical_width << "x" << physical_height
+            << " widget_logical=" << width() << "x" << height()
+            << " container_logical=" << m_wayland_container->width() << "x" << m_wayland_container->height()
+            << " qwindow_logical=" << m_wayland_window->width() << "x" << m_wayland_window->height()
+            << " browser_logical=" << (window() ? window()->width() : 0) << "x" << (window() ? window()->height() : 0)
+            << " dpr=" << dpr;
+    }
+    return true;
+}
+
 void WebContentView::receiveFrame(QImage const& frame)
 {
+    if (m_wayland_renderer_active || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    qt_perf_stats().software_frames++;
     debug_log("deliver_frame_target", m_tab_id, frame.size(), devicePixelRatioF());
     m_frame = frame;
+    m_pending_frame_repaint = true;
     m_crashed = false;
     update();
 }
 
 void WebContentView::receiveFrameBytes(uint8_t const* bytes, int width, int height)
 {
+    if (m_wayland_renderer_active || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    qt_perf_stats().software_frames++;
     debug_log("deliver_frame_target", m_tab_id, QSize(width, height), devicePixelRatioF());
     if (m_frame.size() != QSize(width, height) || m_frame.format() != QImage::Format_RGBA8888)
         m_frame = QImage(width, height, QImage::Format_RGBA8888);
 
     auto const byte_count = qsizetype(width) * qsizetype(height) * 4;
     std::memcpy(m_frame.bits(), bytes, static_cast<size_t>(byte_count));
+    m_pending_frame_repaint = true;
     m_crashed = false;
     update();
 }
@@ -182,7 +489,11 @@ void WebContentView::receiveFrameBytes(uint8_t const* bytes, int width, int heig
 void WebContentView::receiveWebViewCrash(QString const& reason)
 {
     m_engine_tick_timer->stop();
+    if (m_wayland_container)
+        m_wayland_container->hide();
+    m_wayland_renderer_active = false;
     m_frame = {};
+    m_pending_frame_repaint = false;
     m_crashed = true;
     m_crash_reason = reason;
     update();
@@ -193,9 +504,38 @@ void WebContentView::receiveRequestBlocked(QString const& url)
     emit request_blocked(url);
 }
 
+void WebContentView::requestWaylandRepaint()
+{
+    if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    qt_perf_stats().qwindow_present_requests++;
+    if (m_wayland_present_in_progress) {
+        m_wayland_dirty_after_present = true;
+        qt_perf_stats().qwindow_present_requests_coalesced++;
+        maybe_log_qt_perf();
+        return;
+    }
+    if (m_wayland_present_pending) {
+        qt_perf_stats().qwindow_present_requests_coalesced++;
+        maybe_log_qt_perf();
+        return;
+    }
+    m_wayland_present_pending = true;
+    m_wayland_window->requestServoPresent();
+    maybe_log_qt_perf();
+}
+
+bool WebContentView::takeWaylandPresentPending()
+{
+    if (!m_wayland_present_pending)
+        return false;
+    m_wayland_present_pending = false;
+    return true;
+}
+
 void WebContentView::notifyThemeChange()
 {
-    if (!m_webview_created)
+    if (!m_webview_created || g_servo_shutting_down().load(std::memory_order_acquire))
         return;
     servoq::forward_theme_change(m_tab_id, is_using_dark_system_theme(*this));
 }
@@ -217,6 +557,12 @@ void WebContentView::startEngineIfNeeded()
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
 
+    if (waylandRendererRequested() && startWaylandRendererIfPossible(pw, ph, dpr)) {
+        debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
+        notifyThemeChange();
+        return;
+    }
+
     debug_log("create_webview", m_tab_id, QSize(pw, ph), dpr);
     auto url_std = m_initial_url.toStdString();
     servoq::create_webview(m_tab_id, url_std.c_str(), pw, ph, static_cast<float>(dpr));
@@ -225,11 +571,13 @@ void WebContentView::startEngineIfNeeded()
 
 void WebContentView::forwardResizeToEngine()
 {
-    if (m_tab_id == 0 || !m_webview_created)
+    if (m_tab_id == 0 || !m_webview_created || g_servo_shutting_down().load(std::memory_order_acquire))
         return;
     qreal dpr = devicePixelRatioF();
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
+    if (m_wayland_container)
+        m_wayland_container->setGeometry(rect());
     QSize physical_size(pw, ph);
     if (m_last_forwarded_physical_size == physical_size && qFuzzyCompare(m_last_forwarded_dpr, dpr))
         return;
@@ -238,9 +586,15 @@ void WebContentView::forwardResizeToEngine()
 
     debug_log("resize", m_tab_id, physical_size, dpr);
     m_frame = {};
+    m_pending_frame_repaint = false;
+    m_wayland_present_pending = false;
+    m_wayland_dirty_after_present = false;
     servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
     servoq::tick_servo();
-    update();
+    if (m_wayland_renderer_active)
+        requestWaylandRepaint();
+    else
+        update();
 }
 
 // paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708).
@@ -250,10 +604,16 @@ void WebContentView::forwardResizeToEngine()
 // between frame delivery and the repaint. [ladybird: WebContentView.cpp:676-708]
 void WebContentView::paintEvent(QPaintEvent*)
 {
+    if (m_wayland_renderer_active)
+        return;
+    qt_perf_stats().software_paints++;
     if (!m_frame.isNull() && !m_crashed) {
         m_frame.setDevicePixelRatio(devicePixelRatioF()); // [ladybird: WebContentView.cpp:690]
         QPainter painter(this);
         painter.drawImage(QPoint(0, 0), m_frame);         // [ladybird: WebContentView.cpp:696]
+        qt_perf_stats().draw_image_calls++;
+        m_pending_frame_repaint = false;
+        maybe_log_qt_perf();
         return;
     }
     if (m_crashed) {
@@ -285,6 +645,8 @@ void WebContentView::leaveEvent(QEvent* event)
 
 void WebContentView::mouseMoveEvent(QMouseEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     qreal dpr = devicePixelRatioF();
     float x = static_cast<float>(event->position().x() * dpr);
     float y = static_cast<float>(event->position().y() * dpr);
@@ -294,7 +656,19 @@ void WebContentView::mouseMoveEvent(QMouseEvent* event)
 
 void WebContentView::forwardMouseButton(int action, int button, QMouseEvent* ev)
 {
+    if (button < 0 || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     qreal dpr = devicePixelRatioF();
+    float x = static_cast<float>(ev->position().x() * dpr);
+    float y = static_cast<float>(ev->position().y() * dpr);
+    servoq::forward_mouse_button(m_tab_id, action, button, x, y);
+}
+
+void WebContentView::forwardWindowMouseButton(int action, int button, QMouseEvent* ev)
+{
+    if (button < 0 || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    qreal dpr = m_wayland_window ? m_wayland_window->devicePixelRatio() : devicePixelRatioF();
     float x = static_cast<float>(ev->position().x() * dpr);
     float y = static_cast<float>(ev->position().y() * dpr);
     servoq::forward_mouse_button(m_tab_id, action, button, x, y);
@@ -305,6 +679,8 @@ void WebContentView::forwardMouseButton(int action, int button, QMouseEvent* ev)
 
 void WebContentView::mousePressEvent(QMouseEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     int button = -1;
     if (event->button() == Qt::LeftButton)        button = 0;
     else if (event->button() == Qt::MiddleButton) button = 1;
@@ -315,6 +691,8 @@ void WebContentView::mousePressEvent(QMouseEvent* event)
 
 void WebContentView::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     int button = -1;
     if (event->button() == Qt::LeftButton)        button = 0;
     else if (event->button() == Qt::MiddleButton) button = 1;
@@ -333,6 +711,8 @@ void WebContentView::mouseDoubleClickEvent(QMouseEvent* event)
 // wheelEvent — pixel/angle conversion mirrors Ladybird (vendor lines 1031-1048).
 void WebContentView::wheelEvent(QWheelEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     double dx = 0.0;
     double dy = 0.0;
 
@@ -360,6 +740,8 @@ void WebContentView::wheelEvent(QWheelEvent* event)
 // Key events — mirrors Ladybird keyPressEvent / keyReleaseEvent (vendor 458-477).
 void WebContentView::keyPressEvent(QKeyEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     auto text = event->text();
     uint32_t key_char = text.isEmpty() ? 0u : static_cast<uint32_t>(text[0].unicode());
     servoq::forward_key(m_tab_id, true, key_char,
@@ -369,6 +751,8 @@ void WebContentView::keyPressEvent(QKeyEvent* event)
 
 void WebContentView::keyReleaseEvent(QKeyEvent* event)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
     auto text = event->text();
     uint32_t key_char = text.isEmpty() ? 0u : static_cast<uint32_t>(text[0].unicode());
     servoq::forward_key(m_tab_id, false, key_char,
@@ -383,9 +767,12 @@ void WebContentView::showEvent(QShowEvent* event)
     debug_log("show", m_tab_id);
     startEngineIfNeeded();
     forwardResizeToEngine();
-    if (m_webview_created)
+    if (m_wayland_renderer_active && m_wayland_container)
+        m_wayland_container->show();
+    if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
-    servoq::set_webview_active(m_tab_id, true); // [ladybird: WebContentView.cpp:774-778]
+    if (!g_servo_shutting_down().load(std::memory_order_acquire))
+        servoq::set_webview_active(m_tab_id, true); // [ladybird: WebContentView.cpp:774-778]
 }
 
 void WebContentView::hideEvent(QHideEvent* event)
@@ -393,20 +780,25 @@ void WebContentView::hideEvent(QHideEvent* event)
     QWidget::hideEvent(event);
     debug_log("hide", m_tab_id);
     m_engine_tick_timer->stop();
-    servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
+    if (m_wayland_container)
+        m_wayland_container->hide();
+    if (!g_servo_shutting_down().load(std::memory_order_acquire))
+        servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
 }
 
 // focusInEvent / focusOutEvent — mirrors Ladybird (vendor lines 646-652).
 void WebContentView::focusInEvent(QFocusEvent* event)
 {
     QWidget::focusInEvent(event);
-    servoq::forward_focus(m_tab_id, true);
+    if (!g_servo_shutting_down().load(std::memory_order_acquire))
+        servoq::forward_focus(m_tab_id, true);
 }
 
 void WebContentView::focusOutEvent(QFocusEvent* event)
 {
     QWidget::focusOutEvent(event);
-    servoq::forward_focus(m_tab_id, false);
+    if (!g_servo_shutting_down().load(std::memory_order_acquire))
+        servoq::forward_focus(m_tab_id, false);
 }
 
 // event() — ensures Tab key reaches keyPressEvent instead of Qt focus navigation;
@@ -414,6 +806,8 @@ void WebContentView::focusOutEvent(QFocusEvent* event)
 // mirrors Ladybird WebContentView::event() (vendor 964-1009).
 bool WebContentView::event(QEvent* ev)
 {
+    if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return QWidget::event(ev);
     if (ev->type() == QEvent::KeyPress) {
         keyPressEvent(static_cast<QKeyEvent*>(ev));
         return true;
@@ -451,11 +845,31 @@ static ServoQ::WebContentView* find_view(::std::int32_t tab_id)
     return g_view_registry().value(static_cast<int>(tab_id), nullptr);
 }
 
+bool servo_shutdown_started()
+{
+    return g_servo_shutting_down().load(std::memory_order_acquire);
+}
+
+void begin_servo_shutdown()
+{
+    bool expected = false;
+    if (!g_servo_shutting_down().compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        return;
+    g_servo_wake_pending().store(false, std::memory_order_release);
+    for (auto* view : g_view_registry()) {
+        if (view)
+            view->requestWaylandRepaint();
+    }
+    servoq::shutdown_servo();
+}
+
 void deliver_frame(::std::int32_t tab_id,
                    ::rust::Slice<const ::std::uint8_t> bytes,
                    ::std::int32_t width,
                    ::std::int32_t height)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     if (!view) {
         debug_log("ignored_frame_missing_view", tab_id);
@@ -474,6 +888,8 @@ void deliver_frame(::std::int32_t tab_id,
 
 void notify_url_changed(::std::int32_t tab_id, ::rust::Str url)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
     if (!view || !view->tab()) {
@@ -486,6 +902,8 @@ void notify_url_changed(::std::int32_t tab_id, ::rust::Str url)
 
 void notify_title_changed(::std::int32_t tab_id, ::rust::Str title)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     auto text = QString::fromUtf8(title.data(), static_cast<qsizetype>(title.size()));
     if (!view || !view->tab()) {
@@ -498,6 +916,8 @@ void notify_title_changed(::std::int32_t tab_id, ::rust::Str title)
 
 void notify_load_started(::std::int32_t tab_id, ::rust::Str url)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
     if (!view || !view->tab()) {
@@ -510,6 +930,8 @@ void notify_load_started(::std::int32_t tab_id, ::rust::Str url)
 
 void notify_load_finished(::std::int32_t tab_id)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     if (!view || !view->tab()) {
         debug_log("ignored_load_finished_missing_view", tab_id);
@@ -521,6 +943,8 @@ void notify_load_finished(::std::int32_t tab_id)
 
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     auto status = QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
     if (!view || !view->tab()) {
@@ -533,6 +957,8 @@ void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)
 
 void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     if (!view) {
         debug_log("ignored_crashed_missing_view", tab_id);
@@ -545,6 +971,8 @@ void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason)
 
 void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url)
 {
+    if (servo_shutdown_started())
+        return;
     auto* view = find_view(tab_id);
     auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
     if (!view) {
@@ -560,14 +988,47 @@ bool content_blocking_enabled()
     return ServoQ::Settings::the()->content_blocking_enabled();
 }
 
+bool webcontent_frame_pending(::std::int32_t tab_id)
+{
+    if (servo_shutdown_started())
+        return true;
+    auto* view = find_view(tab_id);
+    return view && view->hasPendingFrameRepaint();
+}
+
+void request_wayland_window_repaint(::std::int32_t tab_id)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* view = find_view(tab_id);
+    if (view)
+        view->requestWaylandRepaint();
+}
+
 // Called from Rust's QtEventLoopWaker::wake() from Servo background threads.
 // Posts a custom event to qApp; BrowserWindow::eventFilter intercepts it and
 // calls tick_servo() to spin Servo's event loop on the Qt main thread.
 // QCoreApplication::postEvent() is documented as thread-safe.
 void servoq_wake_event_loop()
 {
+    if (servo_shutdown_started())
+        return;
+    bool expected = false;
+    qt_perf_stats().wake_events++;
+    if (!g_servo_wake_pending().compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        qt_perf_stats().wake_events_coalesced++;
+        maybe_log_qt_perf();
+        return;
+    }
+
     static constexpr QEvent::Type ServoWakeType = QEvent::Type(QEvent::User + 1);
     QCoreApplication::postEvent(qApp, new QEvent(ServoWakeType));
+    maybe_log_qt_perf();
+}
+
+void mark_servo_wake_event_consumed()
+{
+    g_servo_wake_pending().store(false, std::memory_order_release);
 }
 
 } // namespace servoq

@@ -6,6 +6,7 @@
 #include "Settings.h"
 #include "Tab.h"
 #include "TabBar.h"
+#include "servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QAction>
@@ -126,6 +127,7 @@ bool BrowserWindow::eventFilter(QObject* obj, QEvent* event)
 {
     static constexpr QEvent::Type ServoWakeType = QEvent::Type(QEvent::User + 1);
     if (obj == qApp && event->type() == ServoWakeType) {
+        servoq::mark_servo_wake_event_consumed();
         servoq::tick_servo();
         return true;
     }
@@ -348,6 +350,7 @@ void BrowserWindow::closeEvent(QCloseEvent* event)
     Settings::the()->set_last_position(pos());
     Settings::the()->set_last_size(size());
     Settings::the()->set_is_maximized(isMaximized());
+    servoq::begin_servo_shutdown();
     QMainWindow::closeEvent(event);
 }
 

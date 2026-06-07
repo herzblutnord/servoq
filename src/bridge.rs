@@ -15,6 +15,8 @@ pub mod ffi {
         fn notify_webview_crashed(tab_id: i32, reason: &str);
         fn notify_request_blocked(tab_id: i32, url: &str);
         fn content_blocking_enabled() -> bool;
+        fn webcontent_frame_pending(tab_id: i32) -> bool;
+        fn request_wayland_window_repaint(tab_id: i32);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
@@ -51,10 +53,21 @@ pub mod ffi {
 
         // Engine lifecycle: called by WebContentView when widget is shown/hidden/destroyed
         fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
+        fn create_webview_wayland_window(
+            id: i32,
+            url: &str,
+            w: i32,
+            h: i32,
+            scale: f32,
+            wl_display: u64,
+            wl_surface: u64,
+        ) -> bool;
         fn close_webview(id: i32);
+        fn shutdown_servo();
         fn tick_webview(id: i32);
         // Called by BrowserWindow::eventFilter on the Qt EventLoopWaker wake event.
         fn tick_servo();
+        fn present_wayland_webview(id: i32);
 
         // Input forwarding: called by WebContentView event handlers
         fn forward_mouse_move(id: i32, x: f32, y: f32);
@@ -90,9 +103,10 @@ pub use crate::servo_engine::{
 
 // Engine-lifecycle and input functions (always present; no-ops when feature is off)
 pub use crate::servo_engine::{
-    close_webview, create_webview, forward_focus, forward_key, forward_mouse_button,
-    forward_mouse_move, forward_resize, forward_theme_change, forward_wheel, init_servo,
-    set_webview_active, tick_servo, tick_webview,
+    close_webview, create_webview, create_webview_wayland_window, forward_focus, forward_key,
+    forward_mouse_button, forward_mouse_move, forward_resize, forward_theme_change, forward_wheel,
+    init_servo, present_wayland_webview, set_webview_active, shutdown_servo, tick_servo,
+    tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off

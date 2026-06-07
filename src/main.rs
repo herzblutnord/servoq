@@ -3,5 +3,7 @@ mod servo_controller;
 mod servo_engine;
 
 fn main() {
-    std::process::exit(bridge::ffi::run_qt_application());
+    let code = bridge::ffi::run_qt_application();
+    bridge::shutdown_servo();
+    std::process::exit(code);
 }

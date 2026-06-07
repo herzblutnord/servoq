@@ -115,14 +115,14 @@ rg 'tab_id=<TAB_ID>|SERVOQ_DEBUG' /tmp/servoq.log | tail -120
 
 ## Compare Embedder Setup
 
-ServoQ currently embeds Servo through `SoftwareRenderingContext` and a timer-driven Qt event pump. The Servo 0.2.0 `winit_minimal` example uses `WindowRenderingContext`, supplies an `EventLoopWaker`, and calls `servo.setup_logging()` after building `Servo`.
+ServoQ supports a software renderer and an experimental Wayland `WindowRenderingContext` renderer. The Servo 0.2.0 `winit_minimal` example also uses `WindowRenderingContext`, supplies an `EventLoopWaker`, and calls `servo.setup_logging()` after building `Servo`.
 
 Known differences to keep in mind when comparing with standalone Servo/nightly:
 
-- ServoQ does not use GL or `WindowRenderingContext`.
-- ServoQ does not currently install a custom Servo `EventLoopWaker`; it ticks Servo from the Qt timer.
-- ServoQ does not automatically call `servo.setup_logging()` because Servo 0.2.0's implementation calls `log::set_boxed_logger(...).expect(...)`, which can panic if another logger is already installed.
-- ServoQ uses Servo crate default `Opts` and default `Preferences` through `ServoBuilder::default()`.
-- ServoQ does not configure custom resource paths, font paths, protocol registries, or preferences.
+- `SERVOQ_RENDERER=software` still uses `SoftwareRenderingContext`; `SERVOQ_RENDERER=wayland-window` uses `WindowRenderingContext` when Qt Wayland handles are available.
+- ServoQ installs a Qt `EventLoopWaker`; the 200ms timer is only a software fallback safety net and is disabled for the active Wayland renderer.
+- ServoQ now calls `servo.setup_logging()` after building Servo, matching servoshell.
+- ServoQ passes `Opts::default()`, explicit preferences, a protocol registry, and a shared `UserContentManager`, but it does not install servoshell's custom `urlinfo`, `servo`, or `resource` protocol handlers.
+- ServoQ does not configure custom resource paths or font paths.
 
 A font-stack crash with no stale-tab or closed-WebView log immediately before it is more likely in Servo/fontconfig/HarfBuzz/FreeType or in an embedder initialization difference than in tab switching itself. Do not mark it fixed without reproducing the crash and then verifying the same URL no longer crashes.

@@ -20,13 +20,16 @@ class QKeyEvent;
 class QMouseEvent;
 class QTimer;
 class QWheelEvent;
+class QWindow;
 
 namespace ServoQ {
 
 class Tab;
+class ServoWaylandContentWindow;
 
 class WebContentView final : public QWidget {
     Q_OBJECT
+    friend class ServoWaylandContentWindow;
 public:
     explicit WebContentView(QWidget* parent = nullptr);
     ~WebContentView() override;
@@ -47,6 +50,9 @@ public:
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
     void receiveFrameBytes(uint8_t const* bytes, int width, int height);
+    bool hasPendingFrameRepaint() const { return m_pending_frame_repaint; }
+    void requestWaylandRepaint();
+    bool takeWaylandPresentPending();
 
     // Called when Servo panics. Renders inline crash message. [ladybird: WebContentView crash signal]
     void receiveWebViewCrash(QString const& reason);
@@ -80,8 +86,13 @@ protected:
 
 private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
+    void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
     void startEngineIfNeeded();
     void forwardResizeToEngine();
+    bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr);
+    bool waylandRendererRequested() const;
+    bool waylandRendererActive() const { return m_wayland_renderer_active; }
+    ServoWaylandContentWindow* waylandWindow() const { return m_wayland_window; }
 
     Tab* m_tab { nullptr };
     int m_tab_id { 0 };
@@ -89,12 +100,19 @@ private:
     bool m_webview_created { false };
 
     bool m_crashed { false };
+    bool m_pending_frame_repaint { false };
     QString m_crash_reason;
 
     QImage m_frame {};
     QSize m_last_forwarded_physical_size {};
     qreal m_last_forwarded_dpr { 0.0 };
     QTimer* m_engine_tick_timer { nullptr };
+    ServoWaylandContentWindow* m_wayland_window { nullptr };
+    QWidget* m_wayland_container { nullptr };
+    bool m_wayland_renderer_active { false };
+    bool m_wayland_present_pending { false };
+    bool m_wayland_present_in_progress { false };
+    bool m_wayland_dirty_after_present { false };
 };
 
 } // namespace ServoQ

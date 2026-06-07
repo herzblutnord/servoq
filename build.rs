@@ -13,6 +13,10 @@ fn main() {
         .atleast_version("6")
         .probe("Qt6Widgets")
         .expect("Qt 6 Widgets development package must be available via pkg-config");
+    let qt_wayland = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6WaylandClient")
+        .ok();
 
     // Run Qt6 MOC for headers that define Q_OBJECT signals.
     // Prefer /usr/lib/qt6/moc (Qt6) over the system default which may be Qt5.
@@ -56,6 +60,20 @@ fn main() {
 
     for path in &qt.include_paths {
         build.include(path);
+    }
+    if let Some(qt_wayland) = &qt_wayland {
+        for path in &qt_wayland.include_paths {
+            build.include(path);
+        }
+    }
+    for private_include in [
+        "/usr/include/qt6/QtCore/6.11.1",
+        "/usr/include/qt6/QtGui/6.11.1",
+        "/usr/include/qt6/QtWaylandClient/6.11.1",
+    ] {
+        if std::path::Path::new(private_include).exists() {
+            build.include(private_include);
+        }
     }
 
     for flag in &qt.defines {
