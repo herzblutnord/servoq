@@ -54,8 +54,9 @@ void notify_history_changed(::std::int32_t tab_id, ::rust::Str urls, ::std::int3
 void request_open_tab_for_id(::std::int32_t tab_id);
 
 // Context menu (synchronous): newline-delimited "action_id\tlabel\tenabled" or "sep".
-// Returns selected action_id (>=0) or -1 for dismissed.
-::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str);
+// link_url is non-empty when the right-click target was a hyperlink.
+// Returns selected action_id (>=0) or -1 for dismissed / handled internally.
+::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str, ::rust::Str link_url);
 
 // Web Notification API: show a desktop notification via QSystemTrayIcon.
 void show_notification(::std::int32_t tab_id, ::rust::Str title, ::rust::Str body);

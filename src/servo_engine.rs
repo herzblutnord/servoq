@@ -962,7 +962,12 @@ mod engine {
                             }
                         }
                     }
-                    let selected = crate::bridge::ffi::show_context_menu_sync(self.tab_id, &items_str);
+                    let link_url = menu.element_info().link_url
+                        .as_ref()
+                        .map(|u| u.to_string())
+                        .unwrap_or_default();
+                    let selected = crate::bridge::ffi::show_context_menu_sync(
+                        self.tab_id, &items_str, &link_url);
                     if let Some(action) = context_menu_action_from_id(selected) {
                         menu.select(action);
                     } else {

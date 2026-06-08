@@ -53,6 +53,7 @@
 #include <QWindow>
 #include <QtGui/qguiapplication_platform.h>
 #include <QtGui/qpa/qplatformwindow_p.h>
+#include <QClipboard>
 
 #include <atomic>
 #include <chrono>
@@ -1886,7 +1887,7 @@ void request_open_tab_for_id(::std::int32_t tab_id)
         window->openTabForExistingId(static_cast<int>(tab_id));
 }
 
-::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str)
+::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str, ::rust::Str link_url_raw)
 {
     if (servo_shutdown_started())
         return -1;
@@ -1894,11 +1895,13 @@ void request_open_tab_for_id(::std::int32_t tab_id)
     if (!view)
         return -1;
 
+    auto link_url = QString::fromUtf8(link_url_raw.data(), static_cast<qsizetype>(link_url_raw.size()));
     auto items_text = QString::fromUtf8(items_str.data(), static_cast<qsizetype>(items_str.size()));
     auto lines = items_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
 
     QMenu menu(view);
     QMap<QAction*, int> action_map;
+    QAction* copy_link_action = nullptr;
 
     for (auto const& line : lines) {
         if (line.trimmed() == QStringLiteral("sep")) {
@@ -1912,15 +1915,35 @@ void request_open_tab_for_id(::std::int32_t tab_id)
         int action_id = parts[0].toInt(&ok);
         if (!ok)
             continue;
+        // Skip Servo's native CopyLink (action_id 3) when the link URL is known;
+        // the Qt-side "Copy link" action below handles the clipboard directly.
+        if (!link_url.isEmpty() && action_id == 3)
+            continue;
         auto label = parts[1];
         bool enabled = (parts[2].trimmed() != QStringLiteral("false"));
         auto* act = menu.addAction(label);
         act->setEnabled(enabled);
         action_map[act] = action_id;
+        // Insert "Copy link" immediately after "Open link in new tab" (action_id 4).
+        if (!link_url.isEmpty() && action_id == 4 && !copy_link_action)
+            copy_link_action = menu.addAction(QObject::tr("Copy Link"));
+    }
+
+    if (!link_url.isEmpty() && !copy_link_action) {
+        // "Open link in new tab" was not in the list; place "Copy link" first.
+        copy_link_action = new QAction(QObject::tr("Copy Link"), &menu);
+        auto existing = menu.actions();
+        menu.insertAction(existing.isEmpty() ? nullptr : existing.first(), copy_link_action);
     }
 
     auto* selected = menu.exec(QCursor::pos());
-    if (!selected || !action_map.contains(selected))
+    if (!selected)
+        return -1;
+    if (selected == copy_link_action) {
+        QApplication::clipboard()->setText(link_url);
+        return -1;
+    }
+    if (!action_map.contains(selected))
         return -1;
     return action_map[selected];
 }

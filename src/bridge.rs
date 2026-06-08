@@ -39,8 +39,9 @@ pub mod ffi {
         // window.open() / target=_blank: create a new tab for an already-built WebView.
         fn request_open_tab_for_id(tab_id: i32);
         // Context menu: newline-separated "action_id\tlabel\tenabled" or "sep".
-        // Returns selected action_id (>=0) or -1 for dismissed.
-        fn show_context_menu_sync(tab_id: i32, items: &str) -> i32;
+        // link_url is the href of the right-clicked link, or empty string if none.
+        // Returns selected action_id (>=0) or -1 for dismissed / handled internally.
+        fn show_context_menu_sync(tab_id: i32, items: &str, link_url: &str) -> i32;
         // Web Notification API desktop notification.
         fn show_notification(tab_id: i32, title: &str, body: &str);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
