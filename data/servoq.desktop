@@ -2,7 +2,7 @@
 Type=Application
 Name=ServoQ
 GenericName=Web Browser
-Comment=Servo Qt Widgets browser shell
+Comment=Qt UI for Servo
 Exec=servoq %U
 Icon=servoq
 Terminal=false

@@ -41,7 +41,7 @@ void notify_favicon_changed(::std::int32_t tab_id,
                             ::std::int32_t width,
                             ::std::int32_t height);
 
-// Cursor: Qt::CursorShape integer value.
+// Cursor: ServoQ cursor code; WebContentView.cpp maps it explicitly to Qt.
 void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape);
 
 // Fullscreen state change.

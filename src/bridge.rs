@@ -20,7 +20,7 @@ pub mod ffi {
         fn request_wayland_window_repaint(tab_id: i32);
         // Favicon: RGBA8 bytes (width*height*4), 0 size = clear to default icon.
         fn notify_favicon_changed(tab_id: i32, data: &[u8], width: i32, height: i32);
-        // Cursor shape: integer Qt::CursorShape value.
+        // Cursor shape: ServoQ cursor code; C++ maps it explicitly to Qt.
         fn notify_cursor_changed(tab_id: i32, cursor_shape: i32);
         // Fullscreen toggle.
         fn notify_fullscreen_changed(tab_id: i32, fullscreen: bool);

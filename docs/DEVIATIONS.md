@@ -10,11 +10,62 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 | Search engines | Implemented with Ladybird's built-in catalog and `%s` query templates. Custom engines persist in settings and require a unique name plus `%s` template. DuckDuckGo remains default. | `cpp/Settings.*`, `cpp/BrowserWindow.cpp`, `cpp/WebViewURL.cpp` | `Libraries/LibWebView/SearchEngine.cpp`, `SearchEngine.h`, `Settings.cpp` |
 | History/location autocomplete | Implemented as local-history autocomplete for URL, title, and host substring matches. Remote suggestions are intentionally not implemented. | `cpp/LocationEdit.*`, `cpp/HistoryStore.*` | `UI/Qt/LocationEdit.cpp`, `UI/Qt/Autocomplete.*`, `Libraries/LibWebView/HistoryStore.cpp` |
 | Bookmarks and folders | Implemented. Root bookmarks and folders now share one mixed persisted root order, matching Ladybird's root item semantics. Folder drag does not open the menu unless the mouse is released without dragging. | `cpp/BookmarkStore.*`, `cpp/BookmarksBar.*` | `Libraries/LibWebView/BookmarkStore.*`, `UI/Qt/BookmarksBar.cpp` |
-| Bookmark favicons | Implemented. Favicon base64 PNGs persist on bookmark entries and the bookmarks bar rebuilds on exact URL favicon updates. | `cpp/BookmarkStore.*`, `cpp/BookmarksBar.cpp`, `cpp/WebContentView.cpp` | `Libraries/LibWebView/BookmarkStore::update_favicon()` |
+| Favicons | Implemented. SVG and raster favicon inputs are decoded to a bitmap; storage/display remain normalized PNG/base64 for bookmarks. | `cpp/WebContentView.cpp`, `cpp/BookmarkStore.*`, `cpp/BookmarksBar.cpp`, `src/servo_engine.rs` | `Libraries/LibWeb/HTML/HTMLLinkElement.cpp::decode_favicon()`, `Libraries/LibWebView/ViewImplementation.cpp::set_favicon()`, `UI/Qt/Menu.cpp::icon_from_base64_png()` |
 | Content blocking network path | Implemented with `adblock` crate. ServoQ maps Servo `WebResourceRequest.destination`, `referrer_url`, and main-frame status to adblock request types; reload and exact-host allowlist are implemented. | `src/blocklist.rs`, `src/servo_engine.rs`, `src/bridge.rs`, `cpp/Settings.*`, `cpp/BrowserWindow.cpp`, `cpp/WebContentView.cpp` | `Libraries/LibWeb/Loader/ContentBlocker.h`, `ContentBlocker.cpp` |
 | Cosmetic content blocking | Not implemented. Servo exposes global user stylesheets, but not a practical per-page/per-host cosmetic stylesheet path equivalent to Ladybird's dynamic `ContentBlocker` APIs. | `src/servo_engine.rs`, `src/blocklist.rs` | `Libraries/LibWeb/Loader/ContentBlocker.cpp`, `servo-0.2.0/user_content_manager.rs`, `servo-embedder-traits-0.2.0/user_contents.rs` |
 | Scriptlets | Not implemented. Servo exposes `UserScript`, but ServoQ does not have a safe uBlock-compatible scriptlet resource/execution model. | `src/servo_engine.rs` | Ladybird `LibWeb::ContentBlocker` Rust FFI and adblock resources |
 | DevTools | Not implemented in this pass by request. | `src/servo_engine.rs`, `cpp/BrowserWindow.cpp` | `servo-0.2.0/servo_delegate.rs` |
+
+## Fixed / Aligned More Closely With Ladybird
+
+### Favicon Handling
+
+ServoQ now follows the same design principle as Ladybird's favicon path:
+
+- SVG and raster favicons are accepted as input formats.
+- SVG favicon bytes are detected by URL extension, MIME type, or SVG-like content prefix, then rendered to a transparent bitmap before use.
+- Raster favicons continue through Qt's image decoding path.
+- The decoded bitmap is the common in-memory representation passed to Qt chrome.
+- Persistent bookmark storage remains PNG/base64, not raw SVG.
+
+Relevant Ladybird reference points:
+
+- `Libraries/LibWeb/HTML/HTMLLinkElement.cpp::decode_favicon()` decodes SVG/raster inputs and renders SVG to a fixed bitmap.
+- `Libraries/LibWebView/ViewImplementation.cpp::set_favicon()` converts decoded bitmap data to PNG/base64 for storage.
+- `UI/Qt/Menu.cpp::icon_from_base64_png()` turns stored PNG/base64 back into a Qt icon.
+
+### Address Bar Behavior
+
+- When the address bar is not focused, long URLs display from the beginning instead of leaving the start scrolled away.
+- Clicking web content clears address/search focus and transfers focus to the webview/container so page keyboard input still works.
+- Clicking elsewhere in Qt chrome also clears location edit focus.
+- Autocomplete popup interaction is explicitly excluded from the global mouse-focus clearing path.
+
+### Wayland Tab Switching Stability
+
+- Shared Wayland `QWindow`/`createWindowContainer` handling was hardened around one active owner.
+- Stale present requests from previous owners are skipped using owner-generation checks.
+- Inactive tabs cannot present on the shared Wayland surface.
+- `setParent()` on the shared `createWindowContainer` was not reintroduced.
+- Rapid tab switching no longer freezes/crashes in manual testing.
+
+### Cursor Handling
+
+- The brittle "Servo cursor enum integer equals Qt cursor enum integer" bridge was removed.
+- Rust now sends explicit ServoQ cursor codes, and Qt maps those codes to `Qt::CursorShape`.
+- Cursor updates are applied to `WebContentView`, the shared Wayland container, and the embedded Wayland `QWindow`.
+- Keyword cursors are mapped for pointer/hand, text/I-beam, wait/progress, crosshair, move/all-scroll, grab/grabbing, forbidden, help, resize cursors, row/column resize, copy/alias, and zoom fallbacks.
+- Unknown cursor codes fall back to arrow and are visible in `SERVOQ_DEBUG notify_cursor_changed` logs as `servo_cursor=unknown`.
+
+### App Icon / Desktop Identity
+
+- `cpp/icons/servo.png` is embedded in `cpp/resources.qrc` and loaded through `ServoQ::app_icon()`.
+- `Q_INIT_RESOURCE(servoq_resources)` is explicitly required in this Rust/C++ static build path before the first resource icon load.
+- The app icon is set on `QApplication`, `BrowserWindow`, and the native `QWindow` handle.
+- KDE/Wayland taskbar identity requires a matching desktop id, so `setDesktopFileName("servoq")` is paired with an installed `servoq.desktop`.
+- `scripts/install-dev-desktop-file.sh` installs `~/.local/share/applications/servoq.desktop`.
+- The same script installs standard hicolor icon sizes under `~/.local/share/icons/hicolor/<size>x<size>/apps/servoq.png`.
+- The previous nonstandard `250x250` icon install path was removed and is cleaned up by the script.
 
 ## Fixed Historical Issues
 
@@ -26,6 +77,10 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 | Wayland second-tab freeze | Fixed before this pass. ServoQ uses one shared active embedded Wayland `QWindow`/container and reuses the existing `WindowRenderingContext` instead of creating one native Wayland renderer per tab. |
 | Wayland tab-switch freeze | Fixed. Root cause: hiding the shared `createWindowContainer` on tab switch unmaps the embedded `wl_surface`. After remapping on the next tab show, the first `eglSwapBuffers()` call (from `present_wayland_webview`) blocks waiting for a Wayland compositor frame callback that may not arrive promptly for a freshly-remapped subsurface, freezing the Qt main thread indefinitely. Fix: (1) the container is created once with the `QStackedWidget` as its stable parent so `setParent()` is never called; (2) on Wayland-tab hide the container is moved off-screen (`move(-parentWidth, 0)`) rather than hidden, keeping the `wl_surface` mapped and EGL frame callbacks flowing; (3) the incoming tab's `showEvent` repositions it (Wayland tab) or truly hides it (non-Wayland/empty tab). |
 | Bookmark favicon reset/globe regression | Fixed before this pass. Favicon callbacks are keyed by ServoQ tab ID and bookmark favicon updates target exact bookmarked URLs. |
+| SVG favicon gap | Fixed. Servo's raster favicon callback is still supported, and ServoQ adds a Qt-side raw favicon probe/decode path for SVG and raster inputs, normalizing successful results to PNG/base64 storage. |
+| Address bar sticky focus | Fixed. Web content clicks and Qt chrome clicks outside the location edit clear the address bar focus without breaking autocomplete popup interaction. |
+| Cursor enum mismatch | Fixed. ServoQ no longer casts Servo cursor enum values to Qt cursor enum values directly. |
+| KDE/Wayland empty/default app icon | Fixed. Qt resources are initialized before loading `:/Icons/servo.png`, app/window/native icons are set, and development desktop identity installs standard hicolor icons. |
 | Bookmark DnD polish | Fixed. The bar shows a visible vertical insertion marker, folders can be dragged, and the root order now works across mixed bookmark/folder items. |
 | Dynamic filter-list parser stale note | Removed. ServoQ uses the `adblock` crate; dynamic parsing is no longer blocked by lack of a parser crate. |
 | Location bar left gap stale note | Removed. The toolbar/location layout has the Ladybird-style 32px side margins. |
@@ -36,10 +91,10 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 |---------|-------------------------------|--------------------------|------------|----------------|--------|
 | New tab/start page | Chrome-side grey empty placeholder; no web navigation, no data URL, no history entry, and the location field is empty/focused. | Settings default is `URL::about_newtab()`; new-tab action loads it, hides URL, focuses editor. | ServoQ intentionally does not load a Servo-rendered `about:newtab` page yet. | Later only if a real Servo custom protocol/internal page is worthwhile. | Simpler chrome-side placeholder avoids white flash and long data-URL window titles. |
 | Search engines | Ladybird built-in catalog plus custom persisted templates. | `LibWebView::SearchEngine { name, query_url }`, `%s` replacement with percent-encoding. | Remote suggestions/settings web UI not ported. | No for this pass. | Implemented catalog/custom templates. |
-| Favicons | Tab favicon and bookmark favicon persistence by exact URL. | Bookmark store stores base64 favicon on bookmark item. | Servo favicon source differs from LibWebView. | No. | Servo-adapted. |
+| Favicons | SVG/raster inputs decode to bitmap; tab icon and bookmark PNG/base64 persistence update by exact URL. | `decode_favicon()` accepts SVG/raster inputs; `set_favicon()` stores PNG/base64. | ServoQ's raw fetch/decode path is Qt-side because Servo 0.2.0 only exposes decoded raster favicon callbacks. | No. | Aligned in data-flow semantics. |
 | Tab context menu | Implemented in ServoQ custom tab bar. | Qt chrome menu actions. | Some action labels/availability may differ. | Later polish only. | Good enough. |
 | Page/link/image/media context menus | Servo delegate context menu mapped to Qt menu actions. | LibWebView embedder controls/actions. | Media-specific coverage depends on Servo context data. | Later if Servo exposes richer data. | Servo-adapted. |
-| Cursor changes | Servo cursor callbacks mapped to Qt cursors. | LibWebView cursor updates. | Engine-specific callback data. | No. | Good enough. |
+| Cursor changes | Servo keyword cursor callbacks mapped through explicit ServoQ cursor codes to Qt cursors across software and Wayland surfaces. | LibWebView cursor updates. | Custom cursor images are not exposed by Servo's current embedder callback. | No for keyword cursors; blocked for image cursors. | Keyword mapping implemented. |
 | Back/forward history menus | Per-tab Servo history list shown on button context menus. | LibWebView navigation history model. | ServoQ uses URLs only. | Later title/favicon polish. | Good enough. |
 | Global history menu | Persistent local JSON history, most recent first. | LibWebView history store with richer autocomplete ranking/storage. | ServoQ is simpler but persistent. | Partially improved. | Autocomplete added. |
 | Bookmark drag/drop reorder | Mixed root order for bookmarks/folders, persisted JSON. | `BookmarkStore::root_items()` mixed vector plus `move_item()`. | ServoQ supports one folder level. | No for current UI. | Design-portable implementation mirrored. |
@@ -56,6 +111,17 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 | `DEVIATIONS.md` accuracy | Current document is authoritative; historical notes are separated. | N/A | N/A | Maintain during future passes. | Cleaned. |
 
 ## Current Remaining UI / Feature Gaps
+
+### Known Remaining Review Items
+
+These are possible future polish items, not verified current regressions:
+
+- Higher-quality favicon selection: parse multiple `<link rel="icon">` candidates, respect `sizes`, `type`, and `media`, prefer the best match for current DPR, and add `apple-touch-icon` only if intentionally wanted.
+- More complete favicon persistence: add history favicon storage if only bookmarks persist today, and reuse stored PNG/base64 from autocomplete/history surfaces where useful.
+- Better high-DPI favicon generation: store one PNG but expose multiple `QIcon` pixmap sizes, or render SVG favicons at several sizes before adding them to a `QIcon`.
+- Desktop integration polish: add an optional install target for the desktop file and icons, then package metadata later.
+- Cursor completeness: periodically verify every Servo keyword variant is still mapped, and keep debug logging for unknown cursor codes.
+- Focus behavior edge cases: ensure autocomplete popup clicks, menus, and dialogs continue to behave naturally as chrome evolves.
 
 ### Implementable Later
 
@@ -82,6 +148,7 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 | Print | No public print API on Servo `WebView`. | Local Servo WebView API search found no print method/delegate. | Ladybird print action |
 | Cosmetic filtering parity | Servo `UserContentManager::add_stylesheet()` exists, but `UserStyleSheet` only has source URL metadata and updates take effect only after reload; no exposed per-page URL-scoped stylesheet API equivalent to Ladybird's dynamic cosmetic CSS path. | `servo-0.2.0/user_content_manager.rs`, `servo-embedder-traits-0.2.0/user_contents.rs` | `LibWeb::ContentBlocker::cosmetic_style_sheet_for_url()` |
 | uBlock scriptlets | Servo `UserScript` exists, but ServoQ lacks a safe rule parser/resource executor and per-site scriptlet lifecycle; implementing fake scriptlets would be unsafe/misleading. | `servo-embedder-traits-0.2.0/user_contents.rs`, `adblock-0.12.5` resources/scriptlet comments | Ladybird/Rust FFI content blocker design |
+| Custom CSS cursor images | `WebViewDelegate::notify_cursor_changed` exposes keyword cursor variants only; it does not provide image bytes, decoded bitmap data, hotspot coordinates, scale/DPI information, expected cursor size, or fallback keyword data for `cursor: url(...) x y, fallback`. | `servo-0.2.0/webview_delegate.rs`, `servo-0.2.0` cursor callback path | CSS cursor image handling in engine internals |
 
 ### Ladybird Differences Kept Intentionally
 
