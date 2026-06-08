@@ -402,7 +402,7 @@ bool Tab::openHoveredLinkInNewTab()
     debug_log("middle_click_link", m_controller_id,
         QStringLiteral("hovered_url=%1 action=open_new_tab").arg(m_hovered_link_url));
     if (m_window)
-        m_window->createNewTab(m_hovered_link_url);
+        m_window->createNewTab(m_hovered_link_url, /*background=*/true);
     return m_window != nullptr;
 }
 

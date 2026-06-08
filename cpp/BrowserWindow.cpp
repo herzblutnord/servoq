@@ -586,12 +586,13 @@ void BrowserWindow::createInitialTab()
         tab->focusLocationEditor();
 }
 
-void BrowserWindow::createNewTab(QString const& url)
+void BrowserWindow::createNewTab(QString const& url, bool background)
 {
     auto tab_id = servoq::create_tab();
     auto* tab = new Tab(this, tab_id);
     auto index = m_tabs->addTab(tab, tab->title());
-    m_tabs->setCurrentIndex(index);
+    if (!background)
+        m_tabs->setCurrentIndex(index);
     debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=1").arg(index));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     if (url.trimmed().isEmpty()) {

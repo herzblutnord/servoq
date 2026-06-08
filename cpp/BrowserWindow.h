@@ -26,7 +26,7 @@ public:
     void toggleVerticalTabsExpanded(); // [ladybird: Tab.cpp:176,213]
     void openNextTab();                // [ladybird: BrowserWindow.cpp:1065]
     void openPreviousTab();            // [ladybird: BrowserWindow.cpp:1076]
-    void createNewTab(QString const& url = {});
+    void createNewTab(QString const& url = {}, bool background = false);
     void openTabForExistingId(int tab_id);
     void setFullscreen(bool fullscreen);
     void closeTabFromContextMenu(int index);
