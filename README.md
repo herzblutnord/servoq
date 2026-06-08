@@ -8,6 +8,8 @@ ServoQ is a port of the [Ladybird Browser](https://github.com/LadybirdBrowser/la
 
 The goal is a functional, native Qt6 browser shell that takes advantage of Servo's Rust-based, memory-safe rendering pipeline.
 
+The active UI is Qt 6 Widgets/C++ under `cpp/`, with Rust/Servo integration under `src/`. The earlier QML/CXX-Qt prototype path has been removed; `vendor/reference-ladybird/` remains a vendored reference for comparison and audit.
+
 ## Attribution
 
 **Ladybird Browser** — https://github.com/LadybirdBrowser/ladybird  
