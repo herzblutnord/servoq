@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024, Tim Ledbetter <timledbetter@gmail.com>
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:

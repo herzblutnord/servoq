@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2024-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
+ * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:

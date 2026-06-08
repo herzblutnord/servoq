@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2022, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2022, Matthew Costa <ucosty@gmail.com>
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:

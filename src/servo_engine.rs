@@ -1,4 +1,11 @@
-// Copyright (c) 2018-2026, Ladybird Browser Initiative and contributors
+// Copyright (c) 2018-2025, Andreas Kling <andreas@ladybird.org>
+// Copyright (c) 2021, the SerenityOS developers.
+// Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
+// Copyright (c) 2023, Linus Groh <linusg@serenityos.org>
+// Copyright (c) 2023, Srikavin Ramkumar <me@srikavin.me>
+// Copyright (c) 2024-2025, Sam Atkins <sam@ladybird.org>
+// Copyright (c) 2026-present, the Ladybird developers.
+// SPDX-License-Identifier: BSD-2-Clause
 //
 // Derived from Ladybird:
 //   UI/Qt/WebContentView.cpp

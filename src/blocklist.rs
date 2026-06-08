@@ -1,4 +1,5 @@
-// Copyright (c) 2026, Ladybird Browser Initiative and contributors
+// Copyright (c) 2026-present, the Ladybird developers.
+// SPDX-License-Identifier: BSD-2-Clause
 //
 // Derived from Ladybird:
 //   Libraries/LibWeb/Loader/ContentBlocker.cpp
