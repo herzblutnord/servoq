@@ -43,16 +43,39 @@ mod inner {
         format!("{base}/servoq/blocklist.txt")
     }
 
-    pub fn should_block(url: &url::Url) -> bool {
+    fn debug_enabled() -> bool {
+        std::env::var_os("SERVOQ_CONTENT_BLOCKING_DEBUG").is_some()
+            || std::env::var_os("SERVOQ_PERF").is_some()
+    }
+
+    pub fn reload_blocklists() -> bool {
+        ENGINE.with(|cell| {
+            *cell.borrow_mut() = Some(build_engine());
+        });
+        true
+    }
+
+    pub fn should_block(url: &url::Url, source_url: &url::Url, request_type: &str) -> bool {
         ENGINE.with(|cell| {
             let mut guard = cell.borrow_mut();
             if guard.is_none() {
                 *guard = Some(build_engine());
             }
             let engine = guard.as_ref().unwrap();
-            let source = url.origin().unicode_serialization();
-            match Request::new(url.as_str(), &source, "other") {
-                Ok(req) => engine.check_network_request(&req).matched,
+            match Request::new(url.as_str(), source_url.as_str(), request_type) {
+                Ok(req) => {
+                    let result = engine.check_network_request(&req);
+                    if result.matched && debug_enabled() {
+                        eprintln!(
+                            "[servoq blocklist] blocked url={} source={} type={} rule={}",
+                            url,
+                            source_url,
+                            request_type,
+                            result.filter.as_deref().unwrap_or("<unknown>")
+                        );
+                    }
+                    result.matched
+                }
                 Err(_) => false,
             }
         })
@@ -60,4 +83,10 @@ mod inner {
 }
 
 #[cfg(feature = "servo-engine")]
-pub use inner::should_block;
+pub use inner::{reload_blocklists, should_block, user_blocklist_path};
+
+#[cfg(not(feature = "servo-engine"))]
+pub fn reload_blocklists() -> bool { false }
+
+#[cfg(not(feature = "servo-engine"))]
+pub fn user_blocklist_path() -> String { String::new() }

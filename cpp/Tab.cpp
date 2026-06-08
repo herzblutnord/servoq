@@ -160,16 +160,34 @@ void Tab::setActive(bool active)
     servoq::set_webview_active(m_controller_id, active);
 }
 
+void Tab::showEmptyNewTab()
+{
+    m_is_empty_new_tab = true;
+    m_url = QStringLiteral("about:blank");
+    m_title = QStringLiteral("New Tab");
+    m_favicon = {};
+    m_view->setInitialUrl(m_url);
+    m_view->setEmptyNewTab(true);
+    m_location_edit->setUrl(m_url);
+    set_loading(false);
+    refreshBookmarkIcon();
+    update_tab_title();
+}
+
 void Tab::navigate(QString const& url)
 {
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
+    m_is_empty_new_tab = false;
     // Queue URL so create_webview (called from showEvent) uses it if the engine
     // WebView has not been created yet.
     auto is_active = m_window && m_window->currentTab() == this;
     debug_log("final_url_to_servo", m_controller_id, QStringLiteral("url=%1 active=%2").arg(normalized_url).arg(is_active ? 1 : 0));
+    m_view->setEmptyNewTab(false);
     m_view->setInitialUrl(normalized_url);
     on_load_start(normalized_url);
-    servoq::load_url(m_controller_id, normalized_url.toStdString());
+    bool created_now = m_view->ensureEngineStarted();
+    if (!created_now)
+        servoq::load_url(m_controller_id, normalized_url.toStdString());
     applyControllerState();
     on_load_finish();
 }
@@ -274,6 +292,18 @@ QIcon Tab::tabIcon() const
 
 void Tab::applyControllerState()
 {
+    if (m_is_empty_new_tab) {
+        m_location_edit->setUrl(m_url);
+        m_view->setUrl(m_url);
+        set_loading(false);
+        m_back_action->setEnabled(false);
+        m_forward_action->setEnabled(false);
+        m_find_in_page->setVisible(false);
+        m_bookmarks_bar->setVisible(Settings::the()->show_bookmarks_bar());
+        refreshBookmarkIcon();
+        return;
+    }
+
     auto url = QString::fromStdString(std::string(servoq::current_url(m_controller_id)));
     auto title = QString::fromStdString(std::string(servoq::title(m_controller_id)));
     on_url_change(url);
@@ -542,8 +572,10 @@ void Tab::set_loading(bool is_loading)
 
 void Tab::refreshBookmarkIcon()
 {
+    auto is_internal_page = m_url == QStringLiteral("about:blank");
+    m_bookmark_action->setEnabled(!is_internal_page);
     m_bookmark_action->setIcon(create_chrome_icon(
-        BookmarkStore::the()->hasBookmark(m_url) ? ChromeIcon::StarFilled : ChromeIcon::Star,
+        !is_internal_page && BookmarkStore::the()->hasBookmark(m_url) ? ChromeIcon::StarFilled : ChromeIcon::Star,
         palette()));
 }
 

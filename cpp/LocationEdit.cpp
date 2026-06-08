@@ -1,9 +1,12 @@
 #include "LocationEdit.h"
 #include "ChromeStyle.h"
+#include "HistoryStore.h"
 #include "Icon.h"
 #include "WebViewURL.h"
 
 #include <QAction>
+#include <QAbstractItemView>
+#include <QCompleter>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFocusEvent>
@@ -15,6 +18,7 @@
 #include <QRectF>
 #include <QResizeEvent>
 #include <QStyle>
+#include <QStandardItemModel>
 #include <QTimer>
 #include <QToolButton>
 #include <QVariantAnimation>
@@ -72,6 +76,8 @@ private:
 
 LocationEdit::LocationEdit(QWidget* parent)
     : QLineEdit(parent)
+    , m_history_completer(new QCompleter(this))
+    , m_history_completion_model(new QStandardItemModel(this))
     , m_leading_icon(new QToolButton(this))
     , m_trailing_action(new LocationActionButton(this)) // [ladybird: LocationEdit.cpp:228]
 {
@@ -110,6 +116,23 @@ LocationEdit::LocationEdit(QWidget* parent)
     m_trailing_action->setFocusPolicy(Qt::NoFocus); // [ladybird: LocationEdit.cpp:234]
     m_trailing_action->setCursor(Qt::ArrowCursor);  // [ladybird: LocationEdit.cpp:235]
     m_trailing_action->hide();
+
+    m_history_completer->setModel(m_history_completion_model);
+    m_history_completer->setCompletionMode(QCompleter::UnfilteredPopupCompletion);
+    m_history_completer->setCaseSensitivity(Qt::CaseInsensitive);
+    m_history_completer->setWidget(this);
+    if (auto* popup = m_history_completer->popup()) {
+        popup->setObjectName("LadybirdAutocompletePopup");
+    }
+    connect(this, &QLineEdit::textEdited, this, &LocationEdit::updateHistorySuggestions);
+    connect(m_history_completer, qOverload<QModelIndex const&>(&QCompleter::activated), this, [this](QModelIndex const& index) {
+        auto url = index.data(Qt::UserRole).toString();
+        if (url.isEmpty())
+            return;
+        setText(url);
+        m_history_completer->popup()->hide();
+        emit returnPressed();
+    });
 
     // Zoom indicator pill — [ladybird: LocationEdit.cpp:238-249]
     m_zoom_indicator_button = new QToolButton(this);
@@ -220,6 +243,10 @@ void LocationEdit::focusOutEvent(QFocusEvent* event) // [ladybird: LocationEdit.
 void LocationEdit::keyPressEvent(QKeyEvent* event) // [ladybird: LocationEdit.cpp:461-499]
 {
     if (event->key() == Qt::Key_Escape) {
+        if (m_history_completer && m_history_completer->popup() && m_history_completer->popup()->isVisible()) {
+            m_history_completer->popup()->hide();
+            return;
+        }
         if (m_url.has_value())
             setText(*m_url != QStringLiteral("about:blank") ? *m_url : QString());
         clearFocus();
@@ -252,6 +279,31 @@ void LocationEdit::updateFocusGlow(int alpha) // [ladybird: LocationEdit.cpp:443
         color.setAlpha(alpha);
         m_focus_glow_effect->setColor(color);
     }
+}
+
+void LocationEdit::updateHistorySuggestions(QString const& query)
+{
+    m_history_completion_model->clear();
+
+    auto suggestions = HistoryStore::the()->autocompleteSuggestions(query, 8);
+    for (auto const& suggestion : suggestions) {
+        auto display_url = WebViewURL::url_for_display(suggestion.url);
+        auto label = suggestion.title.isEmpty()
+            ? display_url
+            : QStringLiteral("%1 — %2").arg(suggestion.title, display_url);
+        auto* item = new QStandardItem(label);
+        item->setData(suggestion.url, Qt::UserRole);
+        item->setToolTip(suggestion.url);
+        m_history_completion_model->appendRow(item);
+    }
+
+    if (suggestions.isEmpty() || !hasFocus()) {
+        if (m_history_completer->popup())
+            m_history_completer->popup()->hide();
+        return;
+    }
+
+    m_history_completer->complete();
 }
 
 void LocationEdit::animateFocusGlow(int target_alpha) // [ladybird: LocationEdit.cpp:450-458]

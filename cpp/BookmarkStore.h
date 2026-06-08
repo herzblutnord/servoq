@@ -20,8 +20,14 @@ struct BookmarkFolder {
     QList<BookmarkItem> items;
 };
 
+struct BookmarkRootEntry {
+    QString id;
+    QString type; // "bookmark" or "folder"
+};
+
 // Root-level bookmark store: a flat list of root BookmarkItems plus BookmarkFolders,
-// each folder containing its own BookmarkItems. One level of nesting only.
+// with a separate mixed root order so folders/bookmarks persist in one toolbar list.
+// Each folder contains its own BookmarkItems. One level of nesting only.
 // Storage: QStandardPaths::AppDataLocation + "/bookmarks.json", written with QSaveFile.
 class BookmarkStore : public QObject {
     Q_OBJECT
@@ -31,9 +37,11 @@ public:
     // Root-level items (bookmarks not in any folder)
     QList<BookmarkItem> const& rootBookmarks() const { return m_root_bookmarks; }
     QList<BookmarkFolder> const& folders() const { return m_folders; }
+    QList<BookmarkRootEntry> const& rootItems() const { return m_root_items; }
 
     bool hasBookmark(QString const& url) const;
     BookmarkItem const* findBookmarkByUrl(QString const& url) const;
+    BookmarkItem const* findRootBookmark(QString const& id) const;
     BookmarkFolder const* findFolder(QString const& id) const;
 
     void addBookmark(QString const& title, QString const& url, QString const& folder_id = {});
@@ -44,8 +52,7 @@ public:
     void removeBookmark(QString const& id);
     void removeFolder(QString const& id);
     void toggleBookmark(QString const& title, QString const& url);
-    void moveRootBookmark(int from_index, int to_index);
-    void moveFolder(int from_index, int to_index);
+    void moveRootItem(QString const& id, int to_index);
 
     // Legacy-compatible flat list "title\turl" for Settings compatibility
     QStringList toFlatList() const;
@@ -60,9 +67,12 @@ private:
     void save();
     static QString storePath();
     static QString generateId();
+    void removeRootEntry(QString const& id);
+    void reconcileRootOrder();
 
     QList<BookmarkItem> m_root_bookmarks;
     QList<BookmarkFolder> m_folders;
+    QList<BookmarkRootEntry> m_root_items;
 };
 
 }

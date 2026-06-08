@@ -15,6 +15,7 @@ pub mod ffi {
         fn notify_webview_crashed(tab_id: i32, reason: &str);
         fn notify_request_blocked(tab_id: i32, url: &str);
         fn content_blocking_enabled() -> bool;
+        fn content_blocking_host_allowlisted(host: &str) -> bool;
         fn webcontent_frame_pending(tab_id: i32) -> bool;
         fn request_wayland_window_repaint(tab_id: i32);
         // Favicon: RGBA8 bytes (width*height*4), 0 size = clear to default icon.
@@ -94,6 +95,9 @@ pub mod ffi {
         fn forward_resize(id: i32, w: i32, h: i32, scale: f32);
         fn forward_theme_change(id: i32, dark: bool);
         fn set_webview_active(id: i32, active: bool);
+
+        fn reload_blocklists() -> bool;
+        fn user_blocklist_path() -> String;
     }
 }
 
@@ -127,3 +131,5 @@ pub use crate::servo_engine::{
 
 // Page zoom — always present; no-ops when servo-engine feature is off
 pub use crate::servo_engine::{page_zoom, set_page_zoom};
+
+pub use crate::blocklist::{reload_blocklists, user_blocklist_path};

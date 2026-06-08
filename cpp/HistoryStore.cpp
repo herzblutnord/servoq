@@ -6,7 +6,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
+#include <QUrl>
+
+#include <algorithm>
 
 namespace ServoQ {
 
@@ -75,6 +79,60 @@ void HistoryStore::save()
         file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
         file.commit();
     }
+}
+
+QList<HistoryStore::AutocompleteSuggestion> HistoryStore::autocompleteSuggestions(QString const& query, int limit) const
+{
+    struct Candidate {
+        AutocompleteSuggestion suggestion;
+        int score { 100 };
+    };
+
+    auto needle = query.trimmed().toLower();
+    if (needle.isEmpty() || limit <= 0)
+        return {};
+
+    QList<Candidate> candidates;
+    QSet<QString> seen_urls;
+    for (auto const& entry : m_entries) {
+        if (seen_urls.contains(entry.url))
+            continue;
+        seen_urls.insert(entry.url);
+
+        auto url_lower = entry.url.toLower();
+        auto title_lower = entry.title.toLower();
+        auto host_lower = QUrl(entry.url).host().toLower();
+
+        int score = 100;
+        if (host_lower.startsWith(needle))
+            score = 0;
+        else if (url_lower.startsWith(needle))
+            score = 1;
+        else if (title_lower.startsWith(needle))
+            score = 2;
+        else if (host_lower.contains(needle))
+            score = 3;
+        else if (url_lower.contains(needle))
+            score = 4;
+        else if (title_lower.contains(needle))
+            score = 5;
+        else
+            continue;
+
+        candidates.append({ { entry.url, entry.title }, score });
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b) {
+        return a.score < b.score;
+    });
+
+    QList<AutocompleteSuggestion> suggestions;
+    for (auto const& candidate : candidates) {
+        if (suggestions.size() >= limit)
+            break;
+        suggestions.append(candidate.suggestion);
+    }
+    return suggestions;
 }
 
 void HistoryStore::recordVisit(QString const& url, QString const& title)

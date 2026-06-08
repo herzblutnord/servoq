@@ -18,7 +18,13 @@ public:
         QDateTime visited_at;
     };
 
+    struct AutocompleteSuggestion {
+        QString url;
+        QString title;
+    };
+
     QList<Entry> const& entries() const { return m_entries; }
+    QList<AutocompleteSuggestion> autocompleteSuggestions(QString const& query, int limit = 8) const;
     void recordVisit(QString const& url, QString const& title = {});
     void clearHistory();
 

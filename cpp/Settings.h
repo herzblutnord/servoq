@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <QList>
 #include <QPoint>
 #include <QSettings>
 #include <QSize>
@@ -17,6 +18,12 @@
 #include <optional>
 
 namespace ServoQ {
+
+struct SearchEngineDefinition {
+    QString name;
+    QString query_url;
+    bool custom { false };
+};
 
 class Settings final : public QObject {
 public:
@@ -57,9 +64,17 @@ public:
 
     bool content_blocking_enabled() const;
     void set_content_blocking_enabled(bool enabled);
+    QStringList content_blocking_allowlist_hosts() const;
+    bool content_blocking_disabled_for_host(QString const& host) const;
+    void set_content_blocking_disabled_for_host(QString const& host, bool disabled);
 
     QString search_engine_name() const;
     void set_search_engine_name(QString const& name);
+    QList<SearchEngineDefinition> search_engines() const;
+    QStringList search_engine_names() const;
+    bool is_custom_search_engine(QString const& name) const;
+    bool add_custom_search_engine(QString const& name, QString const& query_url);
+    void remove_custom_search_engine(QString const& name);
     QString search_url_for_query(QString const& query) const;
 
     QStringList bookmarks() const;

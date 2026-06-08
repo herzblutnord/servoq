@@ -457,8 +457,37 @@ mod engine {
         }
     }
 
-    fn should_block_url(url: &Url) -> bool {
-        crate::blocklist::should_block(url)
+    fn resource_type_for_destination(destination: &str, is_for_main_frame: bool) -> &'static str {
+        if is_for_main_frame {
+            return "document";
+        }
+        match destination {
+            "Audio" | "Track" | "Video" => "media",
+            "Document" => "document",
+            "Embed" | "Object" => "object",
+            "Font" => "font",
+            "Frame" | "IFrame" => "subdocument",
+            "Image" => "image",
+            "AudioWorklet" | "PaintWorklet" | "Script" | "ServiceWorker" | "SharedWorker" | "Worker" => "script",
+            "Style" => "stylesheet",
+            _ => "other",
+        }
+    }
+
+    fn content_blocking_allowed_for_url(url: &Url) -> bool {
+        if !content_blocking_enabled() {
+            return false;
+        }
+        if let Some(host) = url.host_str() {
+            if crate::bridge::ffi::content_blocking_host_allowlisted(host) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn should_block_request(url: &Url, source_url: &Url, request_type: &str) -> bool {
+        crate::blocklist::should_block(url, source_url, request_type)
     }
 
     fn content_blocking_enabled() -> bool {
@@ -747,7 +776,9 @@ mod engine {
                 navigation_request.deny();
                 return;
             }
-            if content_blocking_enabled() && should_block_url(&navigation_request.url) {
+            if content_blocking_allowed_for_url(&navigation_request.url)
+                && should_block_request(&navigation_request.url, &navigation_request.url, "document")
+            {
                 notify_request_blocked(self.tab_id, &navigation_request.url);
                 navigation_request.deny();
                 return;
@@ -759,8 +790,14 @@ mod engine {
             if SHUTTING_DOWN.load(Ordering::Acquire) {
                 return;
             }
-            let url = load.request().url.clone();
-            if content_blocking_enabled() && should_block_url(&url) {
+            let request = load.request();
+            let url = request.url.clone();
+            let source_url = request.referrer_url.as_ref().unwrap_or(&url);
+            let destination = format!("{:?}", request.destination);
+            let request_type = resource_type_for_destination(&destination, request.is_for_main_frame);
+            if content_blocking_allowed_for_url(source_url)
+                && should_block_request(&url, source_url, request_type)
+            {
                 notify_request_blocked(self.tab_id, &url);
                 let intercepted = load.intercept(WebResourceResponse::new(url));
                 intercepted.finish();

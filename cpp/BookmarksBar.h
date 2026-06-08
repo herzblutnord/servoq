@@ -38,7 +38,7 @@ private:
     void showEditBookmarkDialog(QString const& id);
     void showEditFolderDialog(QString const& id);
     void showNewFolderDialog();
-    int insertionIndicatorX(QString const& type, QPoint const& drop_pos) const;
+    int insertionIndicatorX(QPoint const& drop_pos) const;
     void hideDropIndicator();
 
     std::function<void(QString const&)> m_open_url_callback;

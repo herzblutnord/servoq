@@ -15,11 +15,18 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QEvent>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QDir>
 #include <QFileDialog>
+#include <QFile>
+#include <QFileInfo>
 #include <QKeySequence>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QShortcut>
@@ -355,6 +362,35 @@ void BrowserWindow::createMenus()
     content_blocking_action->setDefaultWidget(content_blocking_checkbox);
     settings_menu->addAction(content_blocking_action);
 
+    auto current_content_blocking_host = [this] {
+        auto* tab = currentTab();
+        if (!tab)
+            return QString {};
+        return QUrl(tab->url()).host().toLower();
+    };
+
+    auto* site_blocking_action = new QAction(this);
+    connect(settings_menu, &QMenu::aboutToShow, this, [site_blocking_action, current_content_blocking_host] {
+        auto host = current_content_blocking_host();
+        site_blocking_action->setEnabled(!host.isEmpty());
+        if (host.isEmpty()) {
+            site_blocking_action->setText(QStringLiteral("Content Blocking for This Site"));
+            return;
+        }
+        bool disabled = Settings::the()->content_blocking_disabled_for_host(host);
+        site_blocking_action->setText(disabled
+            ? QStringLiteral("Enable Blocking for %1").arg(host)
+            : QStringLiteral("Disable Blocking for %1").arg(host));
+    });
+    connect(site_blocking_action, &QAction::triggered, this, [current_content_blocking_host] {
+        auto host = current_content_blocking_host();
+        if (host.isEmpty())
+            return;
+        bool disabled = Settings::the()->content_blocking_disabled_for_host(host);
+        Settings::the()->set_content_blocking_disabled_for_host(host, !disabled);
+    });
+    settings_menu->addAction(site_blocking_action);
+
     // Search engine selector
     auto* search_engine_action = new QWidgetAction(this);
     auto* search_engine_widget = new QWidget(this);
@@ -362,7 +398,16 @@ void BrowserWindow::createMenus()
     search_engine_layout->setContentsMargins(16, 4, 8, 4);
     search_engine_layout->addWidget(new QLabel("Search engine:", search_engine_widget));
     auto* search_combo = new QComboBox(search_engine_widget);
-    search_combo->addItems({ "DuckDuckGo", "Google", "Yandex" });
+    auto refresh_search_combo = [search_combo] {
+        auto selected = Settings::the()->search_engine_name();
+        search_combo->blockSignals(true);
+        search_combo->clear();
+        search_combo->addItems(Settings::the()->search_engine_names());
+        auto index = search_combo->findText(selected);
+        search_combo->setCurrentIndex(index >= 0 ? index : search_combo->findText(QStringLiteral("DuckDuckGo")));
+        search_combo->blockSignals(false);
+    };
+    refresh_search_combo();
     search_combo->setCurrentText(Settings::the()->search_engine_name());
     connect(search_combo, &QComboBox::currentTextChanged, this, [](QString const& name) {
         Settings::the()->set_search_engine_name(name);
@@ -371,18 +416,72 @@ void BrowserWindow::createMenus()
     search_engine_action->setDefaultWidget(search_engine_widget);
     settings_menu->addAction(search_engine_action);
 
+    auto* add_search_engine_action = new QAction(QStringLiteral("Add Custom Search Engine…"), this);
+    connect(add_search_engine_action, &QAction::triggered, this, [this, search_combo, refresh_search_combo] {
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Add Search Engine"));
+        auto* layout = new QFormLayout(&dialog);
+        auto* name_edit = new QLineEdit(&dialog);
+        auto* template_edit = new QLineEdit(&dialog);
+        template_edit->setPlaceholderText(QStringLiteral("https://example.com/search?q=%s"));
+        layout->addRow(QStringLiteral("Name:"), name_edit);
+        layout->addRow(QStringLiteral("Query URL:"), template_edit);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        layout->addRow(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        if (!Settings::the()->add_custom_search_engine(name_edit->text(), template_edit->text())) {
+            QMessageBox::warning(this, QStringLiteral("Search Engine"),
+                QStringLiteral("Custom search engines need a unique name and a query URL containing %s."));
+            return;
+        }
+        Settings::the()->set_search_engine_name(name_edit->text().trimmed());
+        refresh_search_combo();
+        search_combo->setCurrentText(name_edit->text().trimmed());
+    });
+    settings_menu->addAction(add_search_engine_action);
+
+    auto* remove_search_engine_action = new QAction(QStringLiteral("Remove Current Custom Search Engine"), this);
+    connect(settings_menu, &QMenu::aboutToShow, this, [search_combo, remove_search_engine_action] {
+        remove_search_engine_action->setEnabled(Settings::the()->is_custom_search_engine(search_combo->currentText()));
+    });
+    connect(remove_search_engine_action, &QAction::triggered, this, [search_combo, refresh_search_combo] {
+        auto name = search_combo->currentText();
+        if (!Settings::the()->is_custom_search_engine(name))
+            return;
+        Settings::the()->remove_custom_search_engine(name);
+        refresh_search_combo();
+    });
+    settings_menu->addAction(remove_search_engine_action);
+
     settings_menu->addSeparator();
 
     auto* blocklist_action = new QAction(QStringLiteral("Custom filter list…"), this);
     connect(blocklist_action, &QAction::triggered, this, [] {
-        auto config_dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-        auto blocklist_path = config_dir + QStringLiteral("/blocklist.txt");
+        auto blocklist_path = QString::fromStdString(std::string(servoq::user_blocklist_path()));
+        QFileInfo info(blocklist_path);
+        QDir().mkpath(info.absolutePath());
+        if (!info.exists()) {
+            QFile file(blocklist_path);
+            if (file.open(QIODevice::WriteOnly))
+                file.close();
+        }
         QDesktopServices::openUrl(QUrl::fromLocalFile(blocklist_path));
         QMessageBox::information(nullptr,
             QStringLiteral("Custom filter list"),
-            QStringLiteral("Place EasyList-compatible rules in:\n%1\n\nRestart ServoQ to apply changes.").arg(blocklist_path));
+            QStringLiteral("Place EasyList-compatible rules in:\n%1\n\nUse Reload Filter Lists to apply changes.").arg(blocklist_path));
     });
     settings_menu->addAction(blocklist_action);
+
+    auto* reload_filter_lists_action = new QAction(QStringLiteral("Reload Filter Lists"), this);
+    connect(reload_filter_lists_action, &QAction::triggered, this, [this] {
+        bool ok = servoq::reload_blocklists();
+        QMessageBox::information(this, QStringLiteral("Filter Lists"),
+            ok ? QStringLiteral("Filter lists reloaded.") : QStringLiteral("Filter lists could not be reloaded."));
+    });
+    settings_menu->addAction(reload_filter_lists_action);
 
     m_hamburger_menu->addMenu(settings_menu);
 
@@ -418,7 +517,7 @@ void BrowserWindow::closeEvent(QCloseEvent* event)
 
 void BrowserWindow::createInitialTab()
 {
-    createNewTab(QStringLiteral("about:blank"));
+    createNewTab();
     if (auto* tab = currentTab())
         tab->focusLocationEditor();
 }
@@ -431,8 +530,12 @@ void BrowserWindow::createNewTab(QString const& url)
     m_tabs->setCurrentIndex(index);
     debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=1").arg(index));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
-    if (url != QStringLiteral("about:blank"))
+    if (url.trimmed().isEmpty()) {
+        tab->showEmptyNewTab();
+        tab->focusLocationEditor();
+    } else {
         tab->navigate(url);
+    }
     updateCurrentTabState();
 }
 

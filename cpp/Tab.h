@@ -35,6 +35,7 @@ public:
     void setVerticalTabsEnabled(bool enabled);
     void setHamburgerButtonVisible(bool visible);
     void setActive(bool active);
+    void showEmptyNewTab();
     void updateToggleVerticalTabsIcon(); // [ladybird: Tab.cpp:794-797]
     void navigate(QString const& url);
     void location_edit_return_pressed();
@@ -91,6 +92,7 @@ private:
     QString m_url { QStringLiteral("about:blank") };
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };
+    bool m_is_empty_new_tab { true };
     int m_loading_animation_frame { 0 };
 };
 

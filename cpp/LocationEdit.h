@@ -4,12 +4,14 @@
 #include <optional>
 
 class QAction;
+class QCompleter;
 class QEvent;
 class QFocusEvent;
 class QGraphicsDropShadowEffect;
 class QKeyEvent;
 class QMouseEvent;
 class QResizeEvent;
+class QStandardItemModel;
 class QToolButton;
 class QVariantAnimation;
 
@@ -41,7 +43,10 @@ private:
     int trailingTextMargin() const;            // [ladybird: LocationEdit.cpp:545]
     void animateFocusGlow(int target_alpha);   // [ladybird: LocationEdit.cpp:450]
     void updateFocusGlow(int alpha);           // [ladybird: LocationEdit.cpp:443]
+    void updateHistorySuggestions(QString const& query);
 
+    QCompleter* m_history_completer { nullptr };
+    QStandardItemModel* m_history_completion_model { nullptr };
     QToolButton* m_leading_icon { nullptr };
     QToolButton* m_trailing_action { nullptr };
     QToolButton* m_zoom_indicator_button { nullptr }; // [ladybird: LocationEdit.h:84]

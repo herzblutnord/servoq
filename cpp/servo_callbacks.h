@@ -31,6 +31,7 @@ void notify_status_changed(::std::int32_t tab_id, ::rust::Str text);
 void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason);
 void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url);
 bool content_blocking_enabled();
+bool content_blocking_host_allowlisted(::rust::Str host);
 bool webcontent_frame_pending(::std::int32_t tab_id);
 void request_wayland_window_repaint(::std::int32_t tab_id);
 

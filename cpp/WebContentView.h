@@ -5,7 +5,8 @@
 // identical event-surface, set_zoom_level, show/hideEvent, focus events.
 //
 // Engine calls live behind the bridge:
-//   - before first frame  → black background; no placeholder widget
+//   - empty new tab      → chrome-side grey placeholder; no Servo navigation
+//   - before first frame → default widget background while a real page loads
 //   - frame received      → blits the RGBA QImage in paintEvent
 //   - engine crashed      → paints inline crash message in paintEvent
 
@@ -40,12 +41,14 @@ public:
     int tabId() const { return m_tab_id; }
     Tab* tab() const { return m_tab; }
 
-    // No-ops kept for Tab.cpp call-site compatibility; no placeholder is shown.
+    // No-ops kept for Tab.cpp call-site compatibility; empty tabs paint in paintEvent.
     void setUrl(QString const& url);
     void setStatus(QString const& status);
 
     // Queue the URL to navigate when the engine WebView is first created.
     void setInitialUrl(QString const& url);
+    void setEmptyNewTab(bool empty_new_tab);
+    bool ensureEngineStarted();
 
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
@@ -87,10 +90,11 @@ protected:
 private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
     void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
-    void startEngineIfNeeded();
+    bool startEngineIfNeeded();
     void forwardResizeToEngine();
     bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl);
     bool attachSharedWaylandWindow();
+    void updateContainerGeometry();
     bool waylandRendererRequested() const;
     bool waylandRendererActive() const { return m_wayland_renderer_active; }
     ServoWaylandContentWindow* waylandWindow() const { return m_wayland_window; }
@@ -99,6 +103,7 @@ private:
     int m_tab_id { 0 };
     QString m_initial_url { QStringLiteral("about:blank") };
     bool m_webview_created { false };
+    bool m_empty_new_tab { true };
 
     bool m_crashed { false };
     bool m_pending_frame_repaint { false };

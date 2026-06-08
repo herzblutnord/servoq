@@ -9,6 +9,7 @@
 
 #include "BrowserWindow.h"
 #include "BookmarkStore.h"
+#include "ChromeStyle.h"
 #include "WebContentView.h"
 #include "Settings.h"
 #include "Tab.h"
@@ -363,8 +364,8 @@ WebContentView::WebContentView(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
-    // No placeholder widget — the view is shown immediately. Before the first
-    // Servo frame arrives the widget simply shows a blank background.
+    // No child placeholder widget. Empty new tabs and crash states are painted
+    // directly by this widget; real pages are handed to Servo on first navigation.
     // [ladybird: Tab.cpp:158] — m_view added directly to tab_layout, no stacked widget.
 
     // Fallback timer: spins servo.spin_event_loop() at 5 Hz when the tab is visible.
@@ -426,17 +427,37 @@ void WebContentView::setTabId(int tab_id)
 
 void WebContentView::setUrl(QString const& /*url*/)
 {
-    // No-op: kept for Tab.cpp call-site compatibility; no placeholder to update.
+    // No-op: kept for Tab.cpp call-site compatibility; empty state is painted.
 }
 
 void WebContentView::setStatus(QString const& /*status*/)
 {
-    // No-op: kept for call-site compatibility; no placeholder to update.
+    // No-op: kept for call-site compatibility; empty state is painted.
 }
 
 void WebContentView::setInitialUrl(QString const& url)
 {
     m_initial_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
+}
+
+void WebContentView::setEmptyNewTab(bool empty_new_tab)
+{
+    if (m_empty_new_tab == empty_new_tab)
+        return;
+    m_empty_new_tab = empty_new_tab;
+    if (m_empty_new_tab) {
+        m_frame = {};
+        m_pending_frame_repaint = false;
+        if (m_wayland_container && g_wayland_owner() == this)
+            m_wayland_container->hide();
+        m_engine_tick_timer->stop();
+    }
+    update();
+}
+
+bool WebContentView::ensureEngineStarted()
+{
+    return startEngineIfNeeded();
 }
 
 bool WebContentView::waylandRendererRequested() const
@@ -451,7 +472,13 @@ bool WebContentView::attachSharedWaylandWindow()
         return false;
     if (!g_wayland_window()) {
         g_wayland_window() = new ServoWaylandContentWindow(this);
-        g_wayland_container() = QWidget::createWindowContainer(g_wayland_window(), this);
+        // Use the Tab's QStackedWidget as a stable parent so we never need to
+        // call setParent() on the container during tab switches. Reparenting a
+        // createWindowContainer widget on Wayland reconfigures the wl_subsurface,
+        // which can leave the EGL surface in a state where eglSwapBuffers blocks
+        // indefinitely on the next tab switch — causing the UI to freeze.
+        QWidget* stable_parent = (m_tab && m_tab->parentWidget()) ? m_tab->parentWidget() : this;
+        g_wayland_container() = QWidget::createWindowContainer(g_wayland_window(), stable_parent);
         g_wayland_container()->setFocusPolicy(Qt::StrongFocus);
         g_wayland_container()->setMouseTracking(true);
         g_wayland_container()->hide();
@@ -469,18 +496,40 @@ bool WebContentView::attachSharedWaylandWindow()
         return false;
 
     if (g_wayland_owner() != this) {
+        auto* previous_owner = g_wayland_owner();
+        if (previous_owner && previous_owner != this) {
+            previous_owner->m_wayland_present_pending = false;
+            previous_owner->m_wayland_dirty_after_present = false;
+            previous_owner->m_wayland_present_in_progress = false;
+        }
         g_wayland_owner() = this;
         m_wayland_window->setOwner(this);
-        m_wayland_container->setParent(this);
-        m_wayland_container->setGeometry(rect());
+        // Do NOT call setParent() — the container lives under a stable parent
+        // (the QStackedWidget) for the lifetime of the app. Just reposition it.
+        updateContainerGeometry();
         if (perf_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
-                << "new-tab-path=shared-qt-surface-attached tab_id=" << m_tab_id
+                << "tab_switch_path=shared-qt-surface-attached previous_tab_id="
+                << (previous_owner ? previous_owner->m_tab_id : 0)
+                << " active_tab_id=" << m_tab_id
                 << " webview_id=" << m_tab_id;
         }
     }
     return true;
+}
+
+void WebContentView::updateContainerGeometry()
+{
+    if (!m_wayland_container)
+        return;
+    auto* parent = m_wayland_container->parentWidget();
+    if (!parent) {
+        m_wayland_container->setGeometry(rect());
+        return;
+    }
+    QPoint origin = mapTo(parent, QPoint(0, 0));
+    m_wayland_container->setGeometry(origin.x(), origin.y(), width(), height());
 }
 
 bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl)
@@ -493,8 +542,9 @@ bool WebContentView::startWaylandRendererIfPossible(int physical_width, int phys
     if (!attachSharedWaylandWindow())
         return false;
 
-    m_wayland_container->setGeometry(rect());
+    updateContainerGeometry();
     m_wayland_container->show();
+    m_wayland_container->raise();
     m_wayland_window->show();
     m_wayland_window->create();
 
@@ -602,6 +652,8 @@ void WebContentView::requestWaylandRepaint()
 {
     if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire))
         return;
+    if (!isVisible())
+        return;
     if (g_wayland_owner() != this)
         return;
     qt_perf_stats().qwindow_present_requests++;
@@ -641,10 +693,12 @@ void WebContentView::notifyThemeChange()
 void WebContentView::set_zoom_level(double /*zoom_level*/) {}
 
 // Deferred to showEvent so width()/height() carry real layout-assigned values.
-void WebContentView::startEngineIfNeeded()
+bool WebContentView::startEngineIfNeeded()
 {
     if (m_tab_id == 0 || m_webview_created)
-        return;
+        return false;
+    if (m_empty_new_tab)
+        return false;
     m_webview_created = true;
 
     // Physical pixel dimensions — matches Ladybird update_viewport_size() line 761:
@@ -668,10 +722,10 @@ void WebContentView::startEngineIfNeeded()
         if (startWaylandRendererIfPossible(pw, ph, dpr, /*allow_software_gl=*/true)) {
             debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
             notifyThemeChange();
-            return;
+            return true;
         }
         use_software();
-        return;
+        return true;
     }
 
     if (mode == RendererMode::Auto) {
@@ -682,13 +736,14 @@ void WebContentView::startEngineIfNeeded()
             // Hardware Wayland renderer selected.
             debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
             notifyThemeChange();
-            return;
+            return true;
         }
         // Wayland unavailable or software GL detected — fall through to software.
     }
 
     // RendererMode::Software, or auto fallback.
     use_software();
+    return true;
 }
 
 void WebContentView::forwardResizeToEngine()
@@ -698,8 +753,8 @@ void WebContentView::forwardResizeToEngine()
     qreal dpr = devicePixelRatioF();
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
-    if (m_wayland_container)
-        m_wayland_container->setGeometry(rect());
+    if (m_wayland_container && g_wayland_owner() == this)
+        updateContainerGeometry();
     QSize physical_size(pw, ph);
     if (m_last_forwarded_physical_size == physical_size && qFuzzyCompare(m_last_forwarded_dpr, dpr))
         return;
@@ -729,6 +784,16 @@ void WebContentView::paintEvent(QPaintEvent*)
     if (m_wayland_renderer_active)
         return;
     qt_perf_stats().software_paints++;
+    if (m_empty_new_tab) {
+        QPainter painter(this);
+        painter.fillRect(rect(), ChromeStyle::chrome_background(palette()));
+        painter.setPen(ChromeStyle::chrome_muted_text(palette()));
+        auto font = painter.font();
+        font.setPointSizeF(font.pointSizeF() + 2.0);
+        painter.setFont(font);
+        painter.drawText(rect(), Qt::AlignCenter, QStringLiteral("ServoQ\nSearch or enter address"));
+        return;
+    }
     if (!m_frame.isNull() && !m_crashed) {
         m_frame.setDevicePixelRatio(devicePixelRatioF()); // [ladybird: WebContentView.cpp:690]
         QPainter painter(this);
@@ -888,11 +953,18 @@ void WebContentView::showEvent(QShowEvent* event)
     QWidget::showEvent(event);
     debug_log("show", m_tab_id);
     startEngineIfNeeded();
-    forwardResizeToEngine();
-    if (m_wayland_renderer_active && m_wayland_container)
-        attachSharedWaylandWindow();
-    if (m_wayland_renderer_active && m_wayland_container)
+    if (m_wayland_renderer_active && m_wayland_container) {
+        attachSharedWaylandWindow(); // transfers ownership, updates geometry without setParent
         m_wayland_container->show();
+        m_wayland_container->raise();
+    } else if (!m_wayland_renderer_active && g_wayland_container()
+               && g_wayland_owner() == nullptr && g_wayland_container()->isVisible()) {
+        // Non-Wayland tab taking over; the container was kept visible but off-screen
+        // (to avoid unmapping the wl_surface). Now truly hide it so the software-rendered
+        // or placeholder content is visible without the Wayland overlay on top.
+        g_wayland_container()->hide();
+    }
+    forwardResizeToEngine();
     if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
@@ -904,8 +976,31 @@ void WebContentView::hideEvent(QHideEvent* event)
     QWidget::hideEvent(event);
     debug_log("hide", m_tab_id);
     m_engine_tick_timer->stop();
-    if (m_wayland_container && g_wayland_owner() == this)
-        m_wayland_container->hide();
+    if (m_wayland_container && g_wayland_owner() == this) {
+        m_wayland_present_pending = false;
+        m_wayland_dirty_after_present = false;
+        m_wayland_present_in_progress = false;
+        // Move the container off-screen instead of hiding it. Hiding a
+        // createWindowContainer widget causes Qt/Wayland to unmap the embedded
+        // wl_surface. The first eglSwapBuffers() after remapping blocks waiting
+        // for a compositor frame callback that may never arrive for a freshly-
+        // remapped surface, freezing the Qt main thread indefinitely.
+        // Keeping the surface mapped (just off-screen) avoids this race.
+        // The incoming tab's showEvent will either reposition it (Wayland tab)
+        // or truly hide it (non-Wayland tab, see showEvent above).
+        auto* parent = m_wayland_container->parentWidget();
+        int off = parent ? parent->width() : width();
+        m_wayland_container->move(-off, 0);
+        if (m_wayland_window)
+            m_wayland_window->setOwner(nullptr);
+        g_wayland_owner() = nullptr;
+        if (perf_enabled()) {
+            qInfo().nospace()
+                << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
+                << "tab_switch_path=shared-qt-surface-offscreen previous_tab_id=" << m_tab_id
+                << " active_tab_id=0 webview_id=" << m_tab_id;
+        }
+    }
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
 }
@@ -1110,6 +1205,12 @@ void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url)
 bool content_blocking_enabled()
 {
     return ServoQ::Settings::the()->content_blocking_enabled();
+}
+
+bool content_blocking_host_allowlisted(::rust::Str host)
+{
+    auto host_string = QString::fromUtf8(host.data(), static_cast<qsizetype>(host.size()));
+    return ServoQ::Settings::the()->content_blocking_disabled_for_host(host_string);
 }
 
 bool webcontent_frame_pending(::std::int32_t tab_id)

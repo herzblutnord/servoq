@@ -198,18 +198,18 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     rebuild();
 }
 
-int BookmarksBar::insertionIndicatorX(QString const& type, QPoint const& drop_pos) const
+int BookmarksBar::insertionIndicatorX(QPoint const& drop_pos) const
 {
     QList<QAction*> candidates;
     for (auto* action : actions()) {
-        if (action->property("bookmark_type").toString() == type)
+        if (!action->property("bookmark_type").toString().isEmpty())
             candidates.append(action);
     }
     if (candidates.isEmpty())
         return 4;
 
     QAction* target = const_cast<BookmarksBar*>(this)->actionAt(drop_pos);
-    if (!target || target->property("bookmark_type").toString() != type) {
+    if (!target || target->property("bookmark_type").toString().isEmpty()) {
         if (auto* last = const_cast<BookmarksBar*>(this)->widgetForAction(candidates.last()))
             return last->geometry().right() + 4;
         return width() - 4;
@@ -257,12 +257,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
         }
     };
 
-    // Root-level bookmarks
-    for (auto const& item : BookmarkStore::the()->rootBookmarks())
-        add_bookmark_button(item);
-
-    // Folders — [ladybird: BookmarksBar.cpp:251-272]
-    for (auto const& folder : BookmarkStore::the()->folders()) {
+    auto add_folder_button = [this](BookmarkFolder const& folder) {
         auto* submenu = new QMenu(folder.title, this);
         submenu->setProperty("folder_id", folder.id);
 
@@ -300,6 +295,18 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
             button->setAutoRaise(true);
             set_bookmark_button_size(button, folder.title);
             button->installEventFilter(this);
+        }
+    };
+
+    // Root-level bookmarks and folders share one ordered list, matching Ladybird's
+    // WebView::BookmarkStore::root_items() model.
+    for (auto const& entry : BookmarkStore::the()->rootItems()) {
+        if (entry.type == QStringLiteral("bookmark")) {
+            if (auto const* bookmark = BookmarkStore::the()->findRootBookmark(entry.id))
+                add_bookmark_button(*bookmark);
+        } else if (entry.type == QStringLiteral("folder")) {
+            if (auto const* folder = BookmarkStore::the()->findFolder(entry.id))
+                add_folder_button(*folder);
         }
     }
 }
@@ -575,8 +582,7 @@ void BookmarksBar::dragMoveEvent(QDragMoveEvent* event)
     auto colon = data.indexOf(':');
     if (colon < 0)
         return;
-    auto type = data.left(colon);
-    auto x = insertionIndicatorX(type, event->position().toPoint());
+    auto x = insertionIndicatorX(event->position().toPoint());
     m_drop_indicator->setGeometry(x, 4, 2, qMax(1, height() - 8));
     m_drop_indicator->raise();
     m_drop_indicator->show();
@@ -591,63 +597,33 @@ void BookmarksBar::dropEvent(QDropEvent* event)
     auto data = QString::fromUtf8(event->mimeData()->data("application/x-servoq-bookmark"));
     auto colon = data.indexOf(':');
     if (colon < 0) return;
-    auto type = data.left(colon);
     auto id = data.mid(colon + 1);
     auto drop_pos = event->position().toPoint();
     hideDropIndicator();
 
-    auto compute_target_index = [this, &drop_pos](QList<QAction*> const& type_actions, QStringList const& ids) -> int {
+    auto compute_target_index = [this, &drop_pos]() -> int {
         QAction* target = actionAt(drop_pos);
-        int count = ids.size();
-        if (!target) return count; // append to end
-        for (int i = 0; i < type_actions.size(); ++i) {
-            if (type_actions[i] == target) {
+        QList<QAction*> root_actions;
+        for (auto* action : actions()) {
+            if (!action->property("bookmark_type").toString().isEmpty())
+                root_actions.append(action);
+        }
+
+        if (!target) return root_actions.size(); // append to end
+        for (int i = 0; i < root_actions.size(); ++i) {
+            if (root_actions[i] == target) {
                 auto* w = widgetForAction(target);
                 if (w && drop_pos.x() > w->geometry().center().x())
                     return i + 1;
                 return i;
             }
         }
-        return count;
+        return root_actions.size();
     };
 
-    if (type == QStringLiteral("bookmark")) {
-        auto const& bms = BookmarkStore::the()->rootBookmarks();
-        int from_index = -1;
-        QList<QAction*> bm_actions;
-        QStringList bm_ids;
-        for (auto const& bm : bms)
-            bm_ids.append(bm.id);
-        for (auto* a : actions()) {
-            if (a->property("bookmark_type").toString() == QStringLiteral("bookmark"))
-                bm_actions.append(a);
-        }
-        for (int i = 0; i < bms.size(); ++i) {
-            if (bms[i].id == id) { from_index = i; break; }
-        }
-        if (from_index < 0) return;
-        int to_index = compute_target_index(bm_actions, bm_ids);
-        BookmarkStore::the()->moveRootBookmark(from_index, to_index);
-        event->acceptProposedAction();
-    } else if (type == QStringLiteral("folder")) {
-        auto const& folders = BookmarkStore::the()->folders();
-        int from_index = -1;
-        QList<QAction*> folder_actions;
-        QStringList folder_ids;
-        for (auto const& f : folders)
-            folder_ids.append(f.id);
-        for (auto* a : actions()) {
-            if (a->property("bookmark_type").toString() == QStringLiteral("folder"))
-                folder_actions.append(a);
-        }
-        for (int i = 0; i < folders.size(); ++i) {
-            if (folders[i].id == id) { from_index = i; break; }
-        }
-        if (from_index < 0) return;
-        int to_index = compute_target_index(folder_actions, folder_ids);
-        BookmarkStore::the()->moveFolder(from_index, to_index);
-        event->acceptProposedAction();
-    }
+    int to_index = compute_target_index();
+    BookmarkStore::the()->moveRootItem(id, to_index);
+    event->acceptProposedAction();
 }
 
 }
