@@ -1,3 +1,4 @@
+mod blocklist;
 mod bridge;
 mod servo_controller;
 mod servo_engine;

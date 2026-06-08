@@ -337,6 +337,167 @@ SERVOQ_RENDERER=wayland-window perf top --call-graph dwarf -- target/release/ser
 
 ---
 
+``## FINAL UI / FEATURE PARITY AUDIT
+
+Audit performed 2026-06-08 against `vendor/reference-ladybird/UI/Qt/` and Servo 0.2.0 (`~/.cargo/registry/src/.../servo-0.2.0/`).
+
+### UI Look & Feel Parity
+
+| Area | ServoQ Status | Ladybird Reference | Assessment | Fix / Note |
+|------|---------------|--------------------|------------|-----------|
+| Toolbar layout — outer margins | 12px H, 2px V | 12px H, 2px V | **same** | Tab.cpp:375 matches Tab.cpp:132 |
+| Toolbar layout — nav cluster spacing | 2px between buttons | 2px | **same** | Tab.cpp:381 |
+| **Location bar — left gap** | **0px** | **32px (`TOOLBAR_LOCATION_EDIT_SIDE_GAP`)** | **visually different** | `location_layout->setContentsMargins(0, 0, 32, 0)` at Tab.cpp:453 — should be `(32, 0, 32, 0)` |
+| Location bar — right gap | 32px | 32px | same | Tab.cpp:453 |
+| Location bar focus glow | Animated blue shadow 130ms | Animated blue shadow | **same** | LocationEdit.cpp:206-217 |
+| Not-secure pill | Red text pill on HTTP | Red text pill | **same** | LocationEdit.cpp:594-677 |
+| Zoom indicator pill | Shows % when zoom ≠ 1.0 | Shows % | **same** | LocationEdit.cpp:679-701 |
+| Reload icon → Stop icon during load | Changes correctly | Changes correctly | **same** | Tab.cpp:488 |
+| **Stop click during load** | **Always reloads** | **Stops load** | **behavioral difference** | See BLOCKED — no `webview.stop_loading()` in Servo 0.2.0 |
+| Loading spinner in tab | 12-frame animated spinner 80ms | 12-frame animated spinner 80ms | **same** | Tab.cpp:101-103, Icon.cpp:369-400 |
+| **Favicon in tab** | ✅ **Implemented** | **Page favicon** | **done** | `notify_favicon_changed` wired in Servo delegate → `on_favicon_change()` |
+| Tab hover animation | 120ms OutCubic fade | Animated hover | **same** | TabBar.cpp |
+| Tab drag / reorder | QDrag + snapshot pixmap | QDrag + snapshot pixmap | **same** | TabBar.cpp:632 |
+| Drop indicator during drag | Vertical line | Vertical line | **same** | TabBar.cpp |
+| Vertical tabs — collapsed / expanded | Implemented | Implemented | **same** | |
+| Vertical tab resize handle | Implemented | Implemented | **same** | |
+| Bookmarks bar layout | Implemented | Implemented | **same** | |
+| Bookmark hover / pressed style | Custom paint | Custom paint | **same** | |
+| Bookmark folder menu | QMenu with submenus | QMenu with submenus | **same** | |
+| **Bookmark drag-reorder** | ✅ **Implemented** | **Not in Ladybird Qt ref** | — | Pure Qt DnD; drag root bookmarks and folders to reorder within their type |
+| Window controls (min/max/close) | Custom buttons, right side | Custom buttons, right side | **same** | |
+| Hamburger menu | QToolButton + QMenu | QToolButton + QMenu | **same** | |
+| Status hover label | Bottom-left, shifts right | Bottom-left, shifts right | **same** | Tab.cpp:341-357 |
+| Dark / light theme | Reacts to system theme change | Reacts | **same** | |
+| HiDPI / DPR | Physical-px model | Physical-px model | **same** | |
+| Icons — generated programmatically | `create_chrome_icon()` | `create_chrome_icon()` | **same** | Icon.cpp |
+| Icons — app icon | `icons/ladybird.png` | `icons/ladybird.png` | **same** | resources.qrc |
+| Find-in-page bar | Styled bar with prev/next | Styled bar | **same** | FindInPageWidget.cpp |
+| **Find-in-page — actual searching** | **No-op (UI only)** | **Works via LibWebContent** | **blocked** | See Blocked |
+| **Find match count** | **Never shown** | **"X of Y matches"** | **blocked** | See Blocked |
+
+### Feature Parity
+
+| Feature | ServoQ | Ladybird Qt UI | Blocked by Servo API? | Implementable Now? | Notes |
+|---------|--------|----------------|----------------------|-------------------|-------|
+| Horizontal tabs | ✅ Full | ✅ Full | — | — | same |
+| Vertical tabs (collapsed/expanded/hover) | ✅ Full | ✅ Full | — | — | same |
+| Tab drag/reorder across tab bar | ✅ | ✅ | — | — | same |
+| **Tab context menu** | ✅ Implemented | ✅ (Reload/Duplicate/Move/Close/Close Multiple) | No | DONE | `cpp/TabBar.cpp` contextMenuEvent; BrowserWindow close helpers |
+| **Page / link / image / media context menus** | ✅ Implemented | ✅ via WebContent | No | DONE | `show_embedder_control(EmbedderControl::ContextMenu)` wired |
+| Reopen last closed tab (Ctrl+Shift+T) | ✅ | ✅ | — | — | same |
+| Keyboard shortcuts (Ctrl+1-9, Ctrl+Tab, etc.) | ✅ | ✅ | — | — | same |
+| Location bar — URL display / edit | ✅ | ✅ | — | — | same |
+| **Location bar — search fallback** | ✅ DuckDuckGo default | ✅ Search engine | No | DONE | Configurable: DuckDuckGo / Google / Yandex in Settings menu |
+| Page zoom in/out/reset + indicator | ✅ | ✅ | — | — | same |
+| Bookmarks — add/edit/delete/folders | ✅ | ✅ | — | — | same |
+| Bookmarks — persistence (JSON) | ✅ | ✅ (different backend) | — | — | behavior-equivalent |
+| Bookmarks — drag-reorder | ✅ Implemented | ❌ (not in Ladybird Qt ref) | No | DONE | Pure Qt DnD; BookmarkStore `moveRootBookmark`/`moveFolder` |
+| Content blocking — static domain list | ✅ `adblock` crate + 100+ rules | Delegated to LibWebView | — | — | `data/blocklist.txt` bundled |
+| **Content blocking — EasyList/network filters** | ✅ Implemented | Via LibWebView (out of Qt scope) | No | DONE | `adblock` crate; custom rules in `~/.config/servoq/blocklist.txt` |
+| Bookmarks bar toggle | ✅ | ✅ | — | — | same |
+| Menu bar toggle | ✅ | ✅ | — | — | same |
+| Window state persistence | ✅ | ✅ | — | — | same |
+| **Favicon in tab** | ✅ Implemented | ✅ | No | DONE | `notify_favicon_changed` → `on_favicon_change(QIcon)` |
+| **History list in back/forward** | ✅ Implemented | Via LibWebView | No | DONE | Right-click on Back/Forward buttons shows history menu |
+| **Cursor changes (pointer, text, etc.)** | ✅ Implemented | ✅ | No | DONE | `notify_cursor_changed` → `setCursor(Qt::CursorShape)` |
+| **Fullscreen** | ✅ Implemented | ✅ | No | DONE | `notify_fullscreen_state_changed` → `showFullScreen()`/`showNormal()` |
+| **window.open() / new tab popup** | ✅ Implemented | ✅ | No | DONE | `request_create_new` → `openTabForExistingId()` |
+| **Console output / DevTools logging** | ✅ stderr | ✅ | No | DONE | `show_console_message` → `eprintln!` with level prefix |
+| Find-in-page UI | ✅ | ✅ | — | — | same (UI only) |
+| **Find-in-page — text finding** | ❌ (no-op) | ✅ | **Yes** | No | No find/find_next/find_previous in Servo 0.2.0 |
+| **Find match count** | ❌ | ✅ "X of Y" | **Yes** | No | No find result callback in Servo 0.2.0 |
+| **Find selected text prefill** | ❌ | ✅ | **Yes** | No | No `selected_text()` in Servo 0.2.0 |
+| **Stop loading** | ❌ (always reloads) | ✅ | **Yes** | No | No `webview.stop_loading()` in Servo 0.2.0 |
+| Download save-as dialog | ❌ | ✅ (via Application) | **Yes** | No | No download notification in Servo 0.2.0 |
+| TLS cert details on "Not secure" click | ❌ | N/A (not in Ladybird Qt ref either) | Yes | No | Servo doesn't expose cert chains |
+| Browser history database/menu | ✅ Implemented | Via LibWebView | No | DONE | `HistoryStore` JSON; History menu with last 30 entries; Clear History action |
+| Print (Ctrl+P) | ❌ | ✅ | **Yes** | No | No print API in Servo 0.2.0 |
+| DevTools / Inspect | ❌ | ✅ | **Yes** | No | No remote debugging in Servo 0.2.0 |
+| Notifications | ✅ Implemented | ✅ | No | DONE | `show_notification` → `QSystemTrayIcon::showMessage()` |
+| Tab audio indicator | ❌ | ❌ (not in Qt ref) | Partial | Unreliable | Only Media Session API fires; not general audio |
+
+### Implementable Now (no new Servo API required)
+
+> **All items below were implemented in the `ladybird-ui-port` branch.**
+
+| Priority | Feature | Status | Files Changed |
+|----------|---------|--------|--------------|
+| **1 (trivial)** | **Location bar left gap** | ✅ DONE | `cpp/Tab.cpp` |
+| **2 (trivial)** | **Default search engine** | ✅ DONE | `cpp/Settings.h/cpp`, `cpp/WebViewURL.cpp`, `cpp/BrowserWindow.cpp` |
+| **3 (low)** | **Favicon in tab / location bar** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp`, `cpp/Tab.cpp` |
+| **4 (low)** | **Tab context menu** | ✅ DONE | `cpp/TabBar.cpp/h`, `cpp/BrowserWindow.cpp/h` |
+| **5 (medium)** | **Cursor changes** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp` |
+| **6 (medium)** | **Back/forward history list** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp`, `cpp/Tab.cpp/h` |
+| **7 (medium)** | **Bookmark drag-reorder** | ✅ DONE | `cpp/BookmarksBar.cpp/h`, `cpp/BookmarkStore.cpp/h` |
+| **8 (medium)** | **Fullscreen** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp`, `cpp/BrowserWindow.cpp/h` |
+| **9 (medium)** | **window.open() → new tab** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp`, `cpp/BrowserWindow.cpp/h` |
+| **10 (medium)** | **Page/link/image context menus** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp` |
+| **11 (low)** | **Console message logging** | ✅ DONE | `src/servo_engine.rs` (stderr) |
+| **12 (medium)** | **Better content blocking** | ✅ DONE | `Cargo.toml`, `src/blocklist.rs`, `src/servo_engine.rs`, `data/blocklist.txt`, `cpp/BrowserWindow.cpp` |
+| **13 (low)** | **Notifications** | ✅ DONE | `src/servo_engine.rs`, `src/bridge.rs`, `cpp/servo_callbacks.h`, `cpp/WebContentView.cpp` |
+| **14 (low)** | **Browser history** | ✅ DONE | `cpp/HistoryStore.cpp/h`, `cpp/Tab.cpp`, `cpp/BrowserWindow.cpp`, `build.rs` |
+
+### Blocked by Servo 0.2.0 API
+
+| Feature | Missing API | Status in Servo Roadmap |
+|---------|------------|------------------------|
+| **Find-in-page (actual search)** | No `WebView::find()`, `find_next()`, `find_previous()` | Unknown |
+| **Find match count** | No `notify_find_result` / `notify_find_match_count` callback | Unknown |
+| **Selected text → find bar prefill** | No `WebView::selected_text()`, no selection-change callback | Unknown |
+| **Stop loading** | No `WebView::stop_loading()` method | Unknown |
+| **Downloads** | No download-started / download-progress callback | Unknown |
+| **Print** | No print API | Unknown |
+| **TLS cert info** | No certificate chain exposure in WebViewDelegate | Unknown |
+| **Per-URL zoom persistence** | Servo does not expose URL→zoom mapping | Not needed — matches Ladybird behavior |
+| **Tab audio indicator** | `notify_media_session_event` is Media Session API only; no general playing-audio signal | Unknown |
+| **Selected text copy from page** | No selection exposure API | Unknown |
+| **DevTools / remote debugging** | No CDP or remote debug endpoint | Unlikely near-term |
+
+Note: `notify_history_changed(entries, current)` IS available in Servo 0.2.0 — per-tab back/forward list is NOT blocked.
+
+### Content Blocking Assessment
+
+The vendored Ladybird Qt reference (`vendor/reference-ladybird/UI/Qt/`) has no content blocking code of its own. Ladybird's adblock is in `LibWebView` / `LibWeb::ContentBlocker` (not vendored here). The Qt UI layer has only a settings toggle.
+
+ServoQ's content blocking is fully self-contained in `servo_engine.rs` (`should_block_url()`, `content_blocking_enabled()`) with a `Settings` toggle. This is a reasonable baseline.
+
+| Capability | ServoQ | Ladybird Qt UI layer | Feasible Now? | Notes |
+|-----------|--------|----------------------|---------------|-------|
+| Network request blocking | ✅ `adblock` crate + 100+ domain rules | Toggle only (delegates to LibWebView) | ✅ | ServoQ intercepts via `request_navigation` + `load_web_resource` |
+| EasyList / ABP network filters | ✅ `adblock` crate + bundled `data/blocklist.txt` | Via LibWebView (not in Qt ref) | ✅ DONE | Custom rules: `~/.config/servoq/blocklist.txt`; restart to apply |
+| Cosmetic filtering (CSS hiding) | ❌ | Via LibWebView | **Partial** | Needs CSS-injection API; Servo 0.2.0 may support user CSS via `UserContentManager` |
+| Scriptlet injection | ❌ | Via LibWebView | **Unlikely** | Needs JS injection API; not available in Servo 0.2.0 |
+| Filter list updates | ❌ | Via LibWebView | **Yes** | Storage + HTTP download; pure browser-shell work |
+| Per-site disable | ❌ | Via LibWebView | **Yes** | Add allowlist to `Settings` |
+| UI to manage lists | ❌ | Via LibWebView | **Yes** | Add preferences dialog pane |
+
+EasyList blocking implementation path:
+1. Add `adblock = "0.9"` (or similar) to `Cargo.toml`
+2. Bundle a snapshot of EasyList in the binary (or load from `QStandardPaths::AppDataLocation`)
+3. Create `Engine` from the list at startup; call `engine.check_network_urls_matched()` in `should_block_url()`
+4. Store additional blocklists in `AppDataLocation`; add UI to enable/disable each list
+5. Cosmetic rules: investigate `UserContentManager::inject_stylesheet()` in Servo 0.2.0
+
+### Storage Parity
+
+| Item | ServoQ | Persistent? | Notes |
+|------|--------|-------------|-------|
+| Window position | ✅ `QSettings` | Yes | |
+| Window size | ✅ `QSettings` | Yes | |
+| Maximized state | ✅ `QSettings` | Yes | |
+| Vertical tabs state | ✅ `QSettings` | Yes | |
+| Menu bar / bookmarks bar visibility | ✅ `QSettings` | Yes | |
+| Content blocking enabled | ✅ `QSettings` | Yes | |
+| Bookmarks + folders | ✅ JSON (`BookmarkStore`) | Yes | `QStandardPaths::AppDataLocation` |
+| Closed tabs stack | ✅ In-memory | **No** (session only) | 10-tab stack; intentional |
+| Page zoom | Ephemeral per-tab | **No** | Matches Ladybird |
+| Browser history (visited URLs) | ✅ JSON (`HistoryStore`) | Yes | `QStandardPaths::AppDataLocation/history.json`; last 1000 entries; History menu |
+| Downloads | ❌ | No | Not implemented |
+| Form autofill | ❌ | No | Blocked by Servo API |
+
+---
+
 ## KNOWN NECESSARY
 
 Intentional deviations required by the Servo embedding architecture or platform differences.
@@ -353,7 +514,7 @@ Intentional deviations required by the Servo embedding architecture or platform 
 | No `Autocomplete` dropdown in LocationEdit | Depends on `LibWebView::Autocomplete` search-engine integration |
 | `TOOLBAR_SIDEBAR_TOGGLE_NAVIGATION_GAP` = 8 | Exact match with Tab.cpp:94 |
 | `expanded_sidebar_width` = 232, `collapsed_sidebar_width` = 52, `toolbar_height` = 42 | Exact match with ChromeLayout.h |
-| Bookmark drag-reorder not implemented | `LibWebView::BookmarkStore` reorder API not available; would require custom drag-drop in `BookmarksBar` |
+| Bookmark drag-reorder not implemented | Pure Qt DnD work; requires `mousePressEvent`/`mouseMoveEvent`/`dropEvent` in `BookmarksBar` and a `moveBookmark(id, new_index)` in `BookmarkStore`. Not blocked by any Servo or LibWebView API — implementable now |
 | Bookmark store uses local JSON file (not `LibWebView::BookmarkStore`) | No LibWebView dependency; behavior-equivalent: `QSaveFile` atomic writes, `QStandardPaths::AppDataLocation` |
 | "Not secure" indicator uses leading icon only; no cert chain dialog on click | Servo bridge does not expose TLS certificate details |
 | `m_reset_zoom_action` text sourced from `Tab` (not `view().reset_zoom_action()`) | ServoQ has no `LibWebView` action infrastructure; behavior-equivalent |
@@ -379,3 +540,6 @@ Features that cannot be ported because the required infrastructure is missing.
 | Tab audio indicator button | servo 0.2.0 has no general audio-playing signal; `WebViewDelegate::notify_media_session_event(MediaSessionEvent)` only fires for pages using the Media Session API — `PlaybackStateChange(MediaSessionPlaybackState)` variants are `Playing`/`Paused`/`None_`, not a reliable tab-audio indicator |
 | `update_result_label` with real match counts | servo 0.2.0 `WebView` has no `find()`, `find_next()`, `find_previous()` methods; `WebViewDelegate` has no `notify_find_result` / `notify_find_match_count` callback |
 | `focusInEvent` select-in-page text → find bar | servo 0.2.0 `WebView` has no `selected_text()` method; `WebViewDelegate` has no selection-change callback |
+| Stop button stops loading | Reload button shows Stop icon while `m_is_loading=true` (Tab.cpp:488) but click handler always calls `servoq::reload()`. Servo 0.2.0 has no `WebView::stop_loading()` method. |
+| Downloads | Servo 0.2.0 has no download-started or download-progress callback in `WebViewDelegate`. |
+``

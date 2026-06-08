@@ -1,4 +1,5 @@
 #include "WebViewURL.h"
+#include "Settings.h"
 
 #include <QFileInfo>
 #include <QSet>
@@ -20,11 +21,9 @@ void debug_log(QString const& event, QString const& detail)
 
 std::optional<QString> search_url_or_error(QString const& location)
 {
-    // Ladybird delegates this to Application::settings().search_engine(). ServoQ
-    // does not yet have that settings/search-provider infrastructure, so the
-    // faithful no-search-engine result is no URL.
-    debug_log(QStringLiteral("ladybird_search_provider_unavailable"), QStringLiteral("query=%1").arg(location));
-    return std::nullopt;
+    auto url = Settings::the()->search_url_for_query(location);
+    debug_log(QStringLiteral("search_url"), QStringLiteral("query=%1 url=%2").arg(location, url));
+    return url;
 }
 
 bool has_supported_scheme(QString const& scheme)

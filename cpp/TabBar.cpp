@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "BrowserWindow.h"
 #include "ChromeStyle.h"
 #include "ChromeLayout.h"
 #include "Icon.h"
@@ -37,6 +38,8 @@
 #include <QPixmap>
 #include <QFontMetrics>
 #include <QApplication>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QStyle>
 #include <QToolButton>
 #include <QVariantAnimation>
@@ -517,6 +520,72 @@ void TabBar::mouseReleaseEvent(QMouseEvent* event)
 {
     m_pressed_tab_index = -1;
     QTabBar::mouseReleaseEvent(event);
+}
+
+void TabBar::contextMenuEvent(QContextMenuEvent* event)
+{
+    int index = tabIndexAt(event->pos());
+    if (index < 0)
+        return;
+
+    auto* tab_widget = static_cast<TabWidget*>(parentWidget());
+    auto* browser_window = dynamic_cast<BrowserWindow*>(tab_widget ? tab_widget->parent() : nullptr);
+    if (!browser_window)
+        return;
+
+    auto* tab = tab_widget->tab(index);
+    if (!tab)
+        return;
+
+    QMenu menu(this);
+
+    auto* reload_action = menu.addAction("Reload Tab");
+    connect(reload_action, &QAction::triggered, tab, [tab] {
+        tab->navigate(tab->url());
+    });
+
+    menu.addSeparator();
+
+    auto* duplicate_action = menu.addAction("Duplicate Tab");
+    connect(duplicate_action, &QAction::triggered, browser_window, [browser_window, tab] {
+        browser_window->createNewTab(tab->url());
+    });
+
+    menu.addSeparator();
+
+    auto* move_start_action = menu.addAction("Move Tab to Start");
+    connect(move_start_action, &QAction::triggered, this, [this, index] {
+        if (index > 0)
+            moveTab(index, 0);
+    });
+
+    auto* move_end_action = menu.addAction("Move Tab to End");
+    connect(move_end_action, &QAction::triggered, this, [this, index] {
+        if (index < count() - 1)
+            moveTab(index, count() - 1);
+    });
+
+    menu.addSeparator();
+
+    auto* close_action = menu.addAction("Close Tab");
+    connect(close_action, &QAction::triggered, browser_window, [browser_window, index] {
+        browser_window->closeTabFromContextMenu(index);
+    });
+
+    auto* close_other_action = menu.addAction("Close Other Tabs");
+    connect(close_other_action, &QAction::triggered, browser_window, [browser_window, index] {
+        browser_window->closeOtherTabs(index);
+    });
+
+    auto* close_right_action = menu.addAction("Close Tabs to the Right");
+    connect(close_right_action, &QAction::triggered, browser_window, [browser_window, index] {
+        browser_window->closeTabsToRight(index);
+    });
+
+    close_other_action->setEnabled(tab_widget->count() > 1);
+    close_right_action->setEnabled(index < tab_widget->count() - 1);
+
+    menu.exec(event->globalPos());
 }
 
 void TabBar::wheelEvent(QWheelEvent* event)

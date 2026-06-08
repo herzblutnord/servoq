@@ -23,6 +23,7 @@
 
 class QAction;
 class QBoxLayout;
+class QContextMenuEvent;
 class QDragEnterEvent;
 class QDragLeaveEvent;
 class QDragMoveEvent;
@@ -68,6 +69,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;

@@ -33,6 +33,8 @@ mod engine {
         WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
         WindowRenderingContext,
     };
+    use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
+    use servo::{CreateNewWebViewRequest, EmbedderControl};
     use servo::UserContentManager;
     use raw_window_handle::{
         DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
@@ -399,18 +401,64 @@ mod engine {
         }
     }
 
-    fn domain_matches(host: &str, domain: &str) -> bool {
-        host == domain || host.ends_with(&format!(".{domain}"))
+    fn cursor_to_qt_shape(cursor: &Cursor) -> i32 {
+        // Qt::CursorShape integer values (stable across Qt 5/6)
+        match cursor {
+            Cursor::None | Cursor::Default => 0,  // Qt::ArrowCursor
+            Cursor::Pointer => 13,                 // Qt::PointingHandCursor
+            Cursor::Text | Cursor::VerticalText => 4, // Qt::IBeamCursor
+            Cursor::Crosshair | Cursor::Cell => 2,    // Qt::CrossCursor
+            Cursor::Move | Cursor::AllScroll => 9,    // Qt::SizeAllCursor
+            Cursor::Grab => 17,                        // Qt::OpenHandCursor
+            Cursor::Grabbing => 18,                    // Qt::ClosedHandCursor
+            Cursor::Wait | Cursor::Progress => 3,     // Qt::WaitCursor
+            Cursor::NotAllowed | Cursor::NoDrop => 14, // Qt::ForbiddenCursor
+            Cursor::ColResize | Cursor::EwResize | Cursor::EResize | Cursor::WResize => 6, // Qt::SizeHorCursor
+            Cursor::RowResize | Cursor::NsResize | Cursor::NResize | Cursor::SResize => 5, // Qt::SizeVerCursor
+            Cursor::NwseResize | Cursor::NwResize | Cursor::SeResize => 8,  // Qt::SizeFDiagCursor
+            Cursor::NeswResize | Cursor::NeResize | Cursor::SwResize => 7,  // Qt::SizeBDiagCursor
+            Cursor::Help => 15,                        // Qt::WhatsThisCursor
+            Cursor::Copy => 19,                        // Qt::DragCopyCursor
+            Cursor::Alias => 21,                       // Qt::DragLinkCursor
+            Cursor::ZoomIn | Cursor::ZoomOut | Cursor::ContextMenu => 0, // Qt::ArrowCursor
+        }
+    }
+
+    fn context_menu_action_id(action: ContextMenuAction) -> i32 {
+        match action {
+            ContextMenuAction::GoBack => 0,
+            ContextMenuAction::GoForward => 1,
+            ContextMenuAction::Reload => 2,
+            ContextMenuAction::CopyLink => 3,
+            ContextMenuAction::OpenLinkInNewWebView => 4,
+            ContextMenuAction::CopyImageLink => 5,
+            ContextMenuAction::OpenImageInNewView => 6,
+            ContextMenuAction::Cut => 7,
+            ContextMenuAction::Copy => 8,
+            ContextMenuAction::Paste => 9,
+            ContextMenuAction::SelectAll => 10,
+        }
+    }
+
+    fn context_menu_action_from_id(id: i32) -> Option<ContextMenuAction> {
+        match id {
+            0 => Some(ContextMenuAction::GoBack),
+            1 => Some(ContextMenuAction::GoForward),
+            2 => Some(ContextMenuAction::Reload),
+            3 => Some(ContextMenuAction::CopyLink),
+            4 => Some(ContextMenuAction::OpenLinkInNewWebView),
+            5 => Some(ContextMenuAction::CopyImageLink),
+            6 => Some(ContextMenuAction::OpenImageInNewView),
+            7 => Some(ContextMenuAction::Cut),
+            8 => Some(ContextMenuAction::Copy),
+            9 => Some(ContextMenuAction::Paste),
+            10 => Some(ContextMenuAction::SelectAll),
+            _ => None,
+        }
     }
 
     fn should_block_url(url: &Url) -> bool {
-        let Some(host) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
-            return false;
-        };
-        domain_matches(&host, "doubleclick.net")
-            || domain_matches(&host, "googlesyndication.com")
-            || domain_matches(&host, "ads.twitter.com")
-            || (domain_matches(&host, "facebook.net") && url.path() == "/en_US/fbevents.js")
+        crate::blocklist::should_block(url)
     }
 
     fn content_blocking_enabled() -> bool {
@@ -717,6 +765,141 @@ mod engine {
                 let intercepted = load.intercept(WebResourceResponse::new(url));
                 intercepted.finish();
             }
+        }
+
+        fn notify_favicon_changed(&self, webview: WebView) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            if let Some(favicon) = webview.favicon() {
+                let w = favicon.width as i32;
+                let h = favicon.height as i32;
+                let raw = favicon.data();
+                let rgba8: Vec<u8> = match favicon.format {
+                    PixelFormat::RGBA8 => raw.to_vec(),
+                    PixelFormat::BGRA8 => {
+                        let mut out = raw.to_vec();
+                        for chunk in out.chunks_mut(4) {
+                            chunk.swap(0, 2);
+                        }
+                        out
+                    }
+                    _ => { return; }
+                };
+                crate::bridge::ffi::notify_favicon_changed(self.tab_id, &rgba8, w, h);
+            } else {
+                crate::bridge::ffi::notify_favicon_changed(self.tab_id, &[], 0, 0);
+            }
+        }
+
+        fn notify_cursor_changed(&self, _webview: WebView, cursor: Cursor) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            crate::bridge::ffi::notify_cursor_changed(self.tab_id, cursor_to_qt_shape(&cursor));
+        }
+
+        fn notify_history_changed(&self, _webview: WebView, entries: Vec<url::Url>, current: usize) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            let urls: Vec<&str> = entries.iter().map(|u| u.as_str()).collect();
+            let serialized = urls.join("\n");
+            crate::bridge::ffi::notify_history_changed(self.tab_id, &serialized, current as i32);
+        }
+
+        fn notify_fullscreen_state_changed(&self, _webview: WebView, is_fullscreen: bool) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            crate::bridge::ffi::notify_fullscreen_changed(self.tab_id, is_fullscreen);
+        }
+
+        fn show_console_message(&self, _webview: WebView, level: ConsoleLogLevel, message: String) {
+            let level_str = match level {
+                ConsoleLogLevel::Log => "LOG",
+                ConsoleLogLevel::Debug => "DEBUG",
+                ConsoleLogLevel::Info => "INFO",
+                ConsoleLogLevel::Warn => "WARN",
+                ConsoleLogLevel::Error => "ERROR",
+                ConsoleLogLevel::Trace => "TRACE",
+            };
+            eprintln!("[servoq console][tab={}][{}] {}", self.tab_id, level_str, message);
+        }
+
+        fn request_create_new(&self, _parent_webview: WebView, request: CreateNewWebViewRequest) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            let new_id = crate::servo_controller::create_tab();
+            let (rc, size, scale) = ENGINE.with(|s| {
+                let s = s.borrow();
+                let e = match s.as_ref() {
+                    Some(e) => e,
+                    None => return (None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
+                };
+                let (size, scale) = e.tabs.get(&self.tab_id)
+                    .map(|t| (t.physical_size, t.hidpi_scale_factor))
+                    .unwrap_or((PhysicalSize::new(800, 600), Scale::new(1.0)));
+                (Some(e.rendering_context.as_rendering_context()), size, scale)
+            });
+            let Some(rc) = rc else { return; };
+            let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
+                tab_id: new_id,
+                rendering_context: ENGINE.with(|s| s.borrow().as_ref().map(|e| e.rendering_context.clone()).unwrap()),
+                animating: Cell::new(false),
+                initial_resize_done: Cell::new(false),
+            });
+            let webview = request.builder(rc)
+                .hidpi_scale_factor(scale)
+                .delegate(delegate)
+                .build();
+            configure_webview_diagnostics(&webview);
+            ENGINE.with(|s| {
+                if let Some(e) = s.borrow_mut().as_mut() {
+                    e.tabs.insert(new_id, TabEntry {
+                        webview,
+                        current_url: String::new(),
+                        title: "New Tab".to_string(),
+                        loading: false,
+                        status_text: String::new(),
+                        active: true,
+                        physical_size: size,
+                        hidpi_scale_factor: scale,
+                    });
+                }
+            });
+            crate::bridge::ffi::request_open_tab_for_id(new_id);
+        }
+
+        fn show_embedder_control(&self, _webview: WebView, embedder_control: EmbedderControl) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            match embedder_control {
+                EmbedderControl::ContextMenu(menu) => {
+                    let mut items_str = String::new();
+                    for item in menu.items() {
+                        match item {
+                            ContextMenuItem::Item { label, action, enabled } => {
+                                items_str.push_str(&format!("{}\t{}\t{}\n",
+                                    context_menu_action_id(*action), label, enabled));
+                            }
+                            ContextMenuItem::Separator => {
+                                items_str.push_str("sep\n");
+                            }
+                        }
+                    }
+                    let selected = crate::bridge::ffi::show_context_menu_sync(self.tab_id, &items_str);
+                    if let Some(action) = context_menu_action_from_id(selected) {
+                        menu.select(action);
+                    } else {
+                        menu.dismiss();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn show_notification(&self, _webview: WebView, notification: servo::Notification) {
+            crate::bridge::ffi::show_notification(
+                self.tab_id,
+                notification.title.as_str(),
+                notification.body.as_str(),
+            );
         }
     }
 

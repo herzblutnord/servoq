@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QStringList>
 #include <QWidget>
 #include <QIcon>
 
@@ -55,6 +56,7 @@ public:
     void on_load_finish();
     void on_favicon_change(QIcon const& icon = {});
     void on_link_hover(QString const& url);
+    void on_history_changed(QStringList const& urls, int current);
 
 private:
     QToolButton* createToolbarButton(QAction* action);
@@ -80,6 +82,8 @@ private:
     QAction* m_back_action { nullptr };
     QAction* m_forward_action { nullptr };
     QAction* m_reload_action { nullptr };
+    QStringList m_history_urls;
+    int m_history_current { -1 };
     QAction* m_bookmark_action { nullptr };
     QAction* m_reset_zoom_action { nullptr }; // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
     QTimer* m_loading_animation_timer { nullptr };

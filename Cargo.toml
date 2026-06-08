@@ -5,10 +5,11 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-servo-engine = ["dep:servo", "dep:dpi", "dep:euclid", "dep:url", "dep:keyboard-types", "dep:raw-window-handle", "dep:glow"]
+servo-engine = ["dep:servo", "dep:dpi", "dep:euclid", "dep:url", "dep:keyboard-types", "dep:raw-window-handle", "dep:glow", "dep:adblock"]
 
 [dependencies]
 cxx = "1.0"
+adblock = { version = "0.12", optional = true }
 servo = { version = "0.2.0", optional = true }
 dpi = { version = "0.1", optional = true }
 euclid = { version = "0.22", optional = true }

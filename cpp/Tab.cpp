@@ -1,6 +1,7 @@
 #include "Tab.h"
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
+#include "HistoryStore.h"
 #include "ChromeLayout.h"
 #include "BrowserWindow.h"
 #include "ChromeStyle.h"
@@ -292,12 +293,15 @@ void Tab::on_url_change(QString const& url)
     m_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
     m_location_edit->setUrl(m_url);
     m_view->setUrl(m_url); // keeps placeholder label in sync
+    HistoryStore::the()->recordVisit(m_url, m_title);
 }
 
 void Tab::on_title_change(QString const& title)
 {
     m_title = title.isEmpty() ? QStringLiteral("New Tab") : title;
     update_tab_title();
+    // Update title of most-recent history entry for current URL
+    HistoryStore::the()->recordVisit(m_url, m_title);
 }
 
 void Tab::on_load_start(QString const& url)
@@ -322,6 +326,12 @@ void Tab::on_favicon_change(QIcon const& icon)
 }
 
 // [ladybird: Tab.cpp:253-260] — link hover updates the hover label and status text.
+void Tab::on_history_changed(QStringList const& urls, int current)
+{
+    m_history_urls = urls;
+    m_history_current = current;
+}
+
 void Tab::on_link_hover(QString const& url)
 {
     if (url.isEmpty()) {
@@ -424,9 +434,49 @@ void Tab::buildToolbar()
         applyControllerState();
     });
 
-    navigation_layout->addWidget(createToolbarButton(m_back_action));    // [ladybird: Tab.cpp:216]
-    navigation_layout->addWidget(createToolbarButton(m_forward_action)); // [ladybird: Tab.cpp:217]
-    navigation_layout->addWidget(createToolbarButton(m_reload_action));  // [ladybird: Tab.cpp:218]
+    auto* back_btn = createToolbarButton(m_back_action);
+    back_btn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(back_btn, &QToolButton::customContextMenuRequested, this, [this, back_btn](QPoint const& pos) {
+        if (m_history_urls.isEmpty())
+            return;
+        QMenu menu(back_btn);
+        int start = m_history_current - 1;
+        for (int i = start; i >= 0; --i) {
+            auto* act = menu.addAction(m_history_urls[i]);
+            int steps = m_history_current - i;
+            connect(act, &QAction::triggered, this, [this, steps] {
+                for (int s = 0; s < steps; ++s)
+                    servoq::go_back(m_controller_id);
+                applyControllerState();
+            });
+        }
+        if (!menu.isEmpty())
+            menu.exec(back_btn->mapToGlobal(pos));
+    });
+
+    auto* forward_btn = createToolbarButton(m_forward_action);
+    forward_btn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(forward_btn, &QToolButton::customContextMenuRequested, this, [this, forward_btn](QPoint const& pos) {
+        if (m_history_urls.isEmpty())
+            return;
+        QMenu menu(forward_btn);
+        int start = m_history_current + 1;
+        for (int i = start; i < m_history_urls.size(); ++i) {
+            auto* act = menu.addAction(m_history_urls[i]);
+            int steps = i - m_history_current;
+            connect(act, &QAction::triggered, this, [this, steps] {
+                for (int s = 0; s < steps; ++s)
+                    servoq::go_forward(m_controller_id);
+                applyControllerState();
+            });
+        }
+        if (!menu.isEmpty())
+            menu.exec(forward_btn->mapToGlobal(pos));
+    });
+
+    navigation_layout->addWidget(back_btn);                             // [ladybird: Tab.cpp:216]
+    navigation_layout->addWidget(forward_btn);                          // [ladybird: Tab.cpp:217]
+    navigation_layout->addWidget(createToolbarButton(m_reload_action)); // [ladybird: Tab.cpp:218]
 
     m_reset_zoom_action = new QAction(this); // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
     m_reset_zoom_action->setToolTip("Reset zoom");
@@ -450,7 +500,7 @@ void Tab::buildToolbar()
 
     auto* location_container = new QWidget(m_toolbar);
     auto* location_layout = new QHBoxLayout(location_container);
-    location_layout->setContentsMargins(0, 0, 32, 0);
+    location_layout->setContentsMargins(32, 0, 32, 0);
     location_layout->setSpacing(0);
     location_layout->addWidget(m_location_edit);
 

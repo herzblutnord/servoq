@@ -5,15 +5,21 @@
 #include "Settings.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFormLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QStyle>
 #include <QStyleOptionToolButton>
@@ -156,6 +162,7 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     setObjectName("LadybirdBookmarksBar");  // [ladybird: BookmarksBar.cpp:29-35]
     setMovable(false);
     setFloatable(false);
+    setAcceptDrops(true);
     setIconSize({ BookmarkButtonIconSize, BookmarkButtonIconSize }); // [ladybird: BookmarksBar.cpp:30]
     updateChromeStyle();
 
@@ -277,8 +284,49 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
         }
     }
 
+    if (event->type() == QEvent::MouseButtonRelease) {
+        m_drag_source_id.clear();
+    }
+
+    if (event->type() == QEvent::MouseMove) {
+        auto& mouse_event = static_cast<QMouseEvent&>(*event);
+        if ((mouse_event.buttons() & Qt::LeftButton) && !m_drag_source_id.isEmpty()) {
+            auto delta = (mouse_event.position().toPoint() - m_drag_start_pos).manhattanLength();
+            if (delta >= QApplication::startDragDistance()) {
+                QString id = m_drag_source_id;
+                QString type = m_drag_source_type;
+                m_drag_source_id.clear();
+                auto* drag = new QDrag(this);
+                auto* mime = new QMimeData();
+                mime->setData("application/x-servoq-bookmark", (type + ":" + id).toUtf8());
+                drag->setMimeData(mime);
+                if (auto* button = qobject_cast<QToolButton*>(object))
+                    drag->setPixmap(button->grab());
+                drag->exec(Qt::MoveAction);
+                return true;
+            }
+        }
+    }
+
     if (event->type() == QEvent::MouseButtonPress) {
         auto& mouse_event = static_cast<QMouseEvent&>(*event);
+
+        if (mouse_event.button() == Qt::LeftButton) {
+            if (auto* button = qobject_cast<QToolButton*>(object)) {
+                auto* action = button->defaultAction();
+                if (action) {
+                    auto bm_type = action->property("bookmark_type").toString();
+                    if (bm_type == QStringLiteral("bookmark")) {
+                        m_drag_source_id = action->property("bookmark_id").toString();
+                        m_drag_source_type = QStringLiteral("bookmark");
+                    } else if (bm_type == QStringLiteral("folder")) {
+                        m_drag_source_id = action->property("folder_id").toString();
+                        m_drag_source_type = QStringLiteral("folder");
+                    }
+                    m_drag_start_pos = mouse_event.position().toPoint();
+                }
+            }
+        }
 
         if (mouse_event.button() == Qt::MiddleButton) {
             // Middle-click opens in new tab — [ladybird: BookmarksBar.cpp:323-343]
@@ -437,6 +485,84 @@ void BookmarksBar::showNewFolderDialog()
         QStringLiteral("Folder name:"), QLineEdit::Normal, {}, &ok);
     if (ok && !title.isEmpty())
         BookmarkStore::the()->addFolder(title);
+}
+
+void BookmarksBar::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+        event->acceptProposedAction();
+}
+
+void BookmarksBar::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+        event->acceptProposedAction();
+}
+
+void BookmarksBar::dropEvent(QDropEvent* event)
+{
+    if (!event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+        return;
+
+    auto data = QString::fromUtf8(event->mimeData()->data("application/x-servoq-bookmark"));
+    auto colon = data.indexOf(':');
+    if (colon < 0) return;
+    auto type = data.left(colon);
+    auto id = data.mid(colon + 1);
+    auto drop_pos = event->position().toPoint();
+
+    auto compute_target_index = [this, &drop_pos](QList<QAction*> const& type_actions, QStringList const& ids) -> int {
+        QAction* target = actionAt(drop_pos);
+        int count = ids.size();
+        if (!target) return count; // append to end
+        for (int i = 0; i < type_actions.size(); ++i) {
+            if (type_actions[i] == target) {
+                auto* w = widgetForAction(target);
+                if (w && drop_pos.x() > w->geometry().center().x())
+                    return i + 1;
+                return i;
+            }
+        }
+        return count;
+    };
+
+    if (type == QStringLiteral("bookmark")) {
+        auto const& bms = BookmarkStore::the()->rootBookmarks();
+        int from_index = -1;
+        QList<QAction*> bm_actions;
+        QStringList bm_ids;
+        for (auto const& bm : bms)
+            bm_ids.append(bm.id);
+        for (auto* a : actions()) {
+            if (a->property("bookmark_type").toString() == QStringLiteral("bookmark"))
+                bm_actions.append(a);
+        }
+        for (int i = 0; i < bms.size(); ++i) {
+            if (bms[i].id == id) { from_index = i; break; }
+        }
+        if (from_index < 0) return;
+        int to_index = compute_target_index(bm_actions, bm_ids);
+        BookmarkStore::the()->moveRootBookmark(from_index, to_index);
+        event->acceptProposedAction();
+    } else if (type == QStringLiteral("folder")) {
+        auto const& folders = BookmarkStore::the()->folders();
+        int from_index = -1;
+        QList<QAction*> folder_actions;
+        QStringList folder_ids;
+        for (auto const& f : folders)
+            folder_ids.append(f.id);
+        for (auto* a : actions()) {
+            if (a->property("bookmark_type").toString() == QStringLiteral("folder"))
+                folder_actions.append(a);
+        }
+        for (int i = 0; i < folders.size(); ++i) {
+            if (folders[i].id == id) { from_index = i; break; }
+        }
+        if (from_index < 0) return;
+        int to_index = compute_target_index(folder_actions, folder_ids);
+        BookmarkStore::the()->moveFolder(from_index, to_index);
+        event->acceptProposedAction();
+    }
 }
 
 }

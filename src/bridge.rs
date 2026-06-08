@@ -17,6 +17,21 @@ pub mod ffi {
         fn content_blocking_enabled() -> bool;
         fn webcontent_frame_pending(tab_id: i32) -> bool;
         fn request_wayland_window_repaint(tab_id: i32);
+        // Favicon: RGBA8 bytes (width*height*4), 0 size = clear to default icon.
+        fn notify_favicon_changed(tab_id: i32, data: &[u8], width: i32, height: i32);
+        // Cursor shape: integer Qt::CursorShape value.
+        fn notify_cursor_changed(tab_id: i32, cursor_shape: i32);
+        // Fullscreen toggle.
+        fn notify_fullscreen_changed(tab_id: i32, fullscreen: bool);
+        // History list: newline-separated URLs, current index.
+        fn notify_history_changed(tab_id: i32, urls: &str, current: i32);
+        // window.open() / target=_blank: create a new tab for an already-built WebView.
+        fn request_open_tab_for_id(tab_id: i32);
+        // Context menu: newline-separated "action_id\tlabel\tenabled" or "sep".
+        // Returns selected action_id (>=0) or -1 for dismissed.
+        fn show_context_menu_sync(tab_id: i32, items: &str) -> i32;
+        // Web Notification API desktop notification.
+        fn show_notification(tab_id: i32, title: &str, body: &str);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.

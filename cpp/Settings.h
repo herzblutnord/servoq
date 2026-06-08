@@ -58,6 +58,10 @@ public:
     bool content_blocking_enabled() const;
     void set_content_blocking_enabled(bool enabled);
 
+    QString search_engine_name() const;
+    void set_search_engine_name(QString const& name);
+    QString search_url_for_query(QString const& query) const;
+
     QStringList bookmarks() const;
     void set_bookmarks(QStringList const& bookmarks);
     bool has_bookmark(QString const& url) const;

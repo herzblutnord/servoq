@@ -238,6 +238,26 @@ void BookmarkStore::toggleBookmark(QString const& title, QString const& url)
     addBookmark(title, url, {});
 }
 
+void BookmarkStore::moveRootBookmark(int from_index, int to_index)
+{
+    if (from_index < 0 || from_index >= m_root_bookmarks.size()) return;
+    if (to_index < 0 || to_index > m_root_bookmarks.size()) return;
+    if (from_index == to_index) return;
+    m_root_bookmarks.move(from_index, to_index < from_index ? to_index : to_index - 1);
+    save();
+    emit changed();
+}
+
+void BookmarkStore::moveFolder(int from_index, int to_index)
+{
+    if (from_index < 0 || from_index >= m_folders.size()) return;
+    if (to_index < 0 || to_index > m_folders.size()) return;
+    if (from_index == to_index) return;
+    m_folders.move(from_index, to_index < from_index ? to_index : to_index - 1);
+    save();
+    emit changed();
+}
+
 QStringList BookmarkStore::toFlatList() const
 {
     QStringList list;

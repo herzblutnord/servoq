@@ -11,6 +11,7 @@
 #include "Settings.h"
 
 #include <QFileInfo>
+#include <QUrl>
 
 namespace ServoQ {
 namespace {
@@ -128,6 +129,28 @@ bool Settings::content_blocking_enabled() const
 void Settings::set_content_blocking_enabled(bool enabled)
 {
     m_qsettings.setValue(QStringLiteral("content_blocking/enabled"), enabled);
+}
+
+QString Settings::search_engine_name() const
+{
+    return m_qsettings.value(QStringLiteral("search/engine"), QStringLiteral("DuckDuckGo")).toString();
+}
+
+void Settings::set_search_engine_name(QString const& name)
+{
+    m_qsettings.setValue(QStringLiteral("search/engine"), name);
+}
+
+QString Settings::search_url_for_query(QString const& query) const
+{
+    auto encoded = QString::fromUtf8(QUrl::toPercentEncoding(query));
+    auto engine = search_engine_name();
+    if (engine == QStringLiteral("Google"))
+        return QStringLiteral("https://www.google.com/search?q=") + encoded;
+    if (engine == QStringLiteral("Yandex"))
+        return QStringLiteral("https://yandex.com/search/?text=") + encoded;
+    // Default: DuckDuckGo
+    return QStringLiteral("https://duckduckgo.com/?q=") + encoded;
 }
 
 QStringList Settings::bookmarks() const

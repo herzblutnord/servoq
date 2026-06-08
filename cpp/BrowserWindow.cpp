@@ -1,5 +1,6 @@
 #include "BrowserWindow.h"
 #include "BookmarksBar.h"
+#include "HistoryStore.h"
 #include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
@@ -13,13 +14,19 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QEvent>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QFileDialog>
 #include <QKeySequence>
 #include <QMenu>
 #include <QMenuBar>
 #include <QShortcut>
 #include <QStatusBar>
+#include <QDesktopServices>
+#include <QMessageBox>
+#include <QStandardPaths>
 #include <QUrl>
 #include <QWidgetAction>
 #include <QCloseEvent>
@@ -213,6 +220,31 @@ void BrowserWindow::createMenus()
 
     m_hamburger_menu->addMenu(edit_menu);
 
+    auto* history_menu = menuBar()->addMenu("&History");
+    connect(history_menu, &QMenu::aboutToShow, this, [this, history_menu] {
+        history_menu->clear();
+        auto* clear_action = history_menu->addAction(QStringLiteral("Clear History"), this, [this] {
+            HistoryStore::the()->clearHistory();
+        });
+        Q_UNUSED(clear_action);
+        auto const& entries = HistoryStore::the()->entries();
+        if (!entries.isEmpty()) {
+            history_menu->addSeparator();
+            int count = qMin(entries.size(), 30);
+            for (int i = 0; i < count; ++i) {
+                auto const& e = entries[i];
+                auto label = e.title.isEmpty() ? e.url : QStringLiteral("%1 — %2").arg(e.title, e.url);
+                if (label.length() > 80)
+                    label = label.left(77) + QStringLiteral("…");
+                auto* act = history_menu->addAction(label, this, [this, url = e.url] {
+                    createNewTab(url);
+                });
+                act->setToolTip(e.url);
+            }
+        }
+    });
+    m_hamburger_menu->addMenu(history_menu);
+
     auto* view_menu = menuBar()->addMenu("&View");
     m_toggle_bookmarks_action = new QAction("Toggle &Bookmarks Bar", this);
     m_toggle_bookmarks_action->setCheckable(true);
@@ -322,6 +354,36 @@ void BrowserWindow::createMenus()
     });
     content_blocking_action->setDefaultWidget(content_blocking_checkbox);
     settings_menu->addAction(content_blocking_action);
+
+    // Search engine selector
+    auto* search_engine_action = new QWidgetAction(this);
+    auto* search_engine_widget = new QWidget(this);
+    auto* search_engine_layout = new QHBoxLayout(search_engine_widget);
+    search_engine_layout->setContentsMargins(16, 4, 8, 4);
+    search_engine_layout->addWidget(new QLabel("Search engine:", search_engine_widget));
+    auto* search_combo = new QComboBox(search_engine_widget);
+    search_combo->addItems({ "DuckDuckGo", "Google", "Yandex" });
+    search_combo->setCurrentText(Settings::the()->search_engine_name());
+    connect(search_combo, &QComboBox::currentTextChanged, this, [](QString const& name) {
+        Settings::the()->set_search_engine_name(name);
+    });
+    search_engine_layout->addWidget(search_combo);
+    search_engine_action->setDefaultWidget(search_engine_widget);
+    settings_menu->addAction(search_engine_action);
+
+    settings_menu->addSeparator();
+
+    auto* blocklist_action = new QAction(QStringLiteral("Custom filter list…"), this);
+    connect(blocklist_action, &QAction::triggered, this, [] {
+        auto config_dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        auto blocklist_path = config_dir + QStringLiteral("/blocklist.txt");
+        QDesktopServices::openUrl(QUrl::fromLocalFile(blocklist_path));
+        QMessageBox::information(nullptr,
+            QStringLiteral("Custom filter list"),
+            QStringLiteral("Place EasyList-compatible rules in:\n%1\n\nRestart ServoQ to apply changes.").arg(blocklist_path));
+    });
+    settings_menu->addAction(blocklist_action);
+
     m_hamburger_menu->addMenu(settings_menu);
 
     auto* help_menu = menuBar()->addMenu("&Help");
@@ -372,6 +434,29 @@ void BrowserWindow::createNewTab(QString const& url)
     if (url != QStringLiteral("about:blank"))
         tab->navigate(url);
     updateCurrentTabState();
+}
+
+void BrowserWindow::openTabForExistingId(int tab_id)
+{
+    auto* tab = new Tab(this, tab_id);
+    auto index = m_tabs->addTab(tab, tab->title());
+    m_tabs->setCurrentIndex(index);
+    debug_log("open_tab_for_existing_id", tab_id, QStringLiteral("index=%1").arg(index));
+    tab->setHamburgerButtonVisible(!menuBar()->isVisible());
+    updateCurrentTabState();
+}
+
+void BrowserWindow::setFullscreen(bool fullscreen)
+{
+    if (fullscreen) {
+        m_was_maximized_before_fullscreen = isMaximized();
+        showFullScreen();
+    } else {
+        if (m_was_maximized_before_fullscreen)
+            showMaximized();
+        else
+            showNormal();
+    }
 }
 
 void BrowserWindow::closeTab(int index)
@@ -563,6 +648,25 @@ void BrowserWindow::wheelEvent(QWheelEvent* event)
         else if (event->angleDelta().y() < 0)
             currentTab()->zoomOut();  // [ladybird: BrowserWindow.cpp:1374]
     }
+}
+
+void BrowserWindow::closeTabFromContextMenu(int index)
+{
+    closeTab(index);
+}
+
+void BrowserWindow::closeOtherTabs(int keep_index)
+{
+    for (int i = m_tabs->count() - 1; i >= 0; --i) {
+        if (i != keep_index)
+            closeTab(i);
+    }
+}
+
+void BrowserWindow::closeTabsToRight(int from_index)
+{
+    for (int i = m_tabs->count() - 1; i > from_index; --i)
+        closeTab(i);
 }
 
 }

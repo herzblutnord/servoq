@@ -7,6 +7,7 @@
 //   vendor/reference-ladybird/UI/Qt/WebContentView.cpp
 // Specific line citations appear inline below.
 
+#include "BrowserWindow.h"
 #include "WebContentView.h"
 #include "Settings.h"
 #include "Tab.h"
@@ -15,13 +16,18 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QSystemTrayIcon>
+#include <QCursor>
 #include <QFocusEvent>
 #include <QGuiApplication>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMap>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPixmap>
 #include <QDebug>
 #include <QResizeEvent>
 #include <QStyleHints>
@@ -1081,6 +1087,124 @@ void servoq_wake_event_loop()
 void mark_servo_wake_event_consumed()
 {
     g_servo_wake_pending().store(false, std::memory_order_release);
+}
+
+static ServoQ::BrowserWindow* find_browser_window()
+{
+    for (auto* widget : QApplication::topLevelWidgets()) {
+        if (auto* window = dynamic_cast<ServoQ::BrowserWindow*>(widget))
+            return window;
+    }
+    return nullptr;
+}
+
+void notify_favicon_changed(::std::int32_t tab_id,
+                            ::rust::Slice<const ::std::uint8_t> data,
+                            ::std::int32_t width,
+                            ::std::int32_t height)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* view = find_view(tab_id);
+    if (!view || !view->tab())
+        return;
+    if (width <= 0 || height <= 0 || data.empty()) {
+        view->tab()->on_favicon_change({});
+        return;
+    }
+    QImage img(data.data(), width, height, QImage::Format_RGBA8888);
+    view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(img.copy())));
+}
+
+void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* view = find_view(tab_id);
+    if (!view)
+        return;
+    view->setCursor(QCursor(static_cast<Qt::CursorShape>(cursor_shape)));
+}
+
+void notify_fullscreen_changed(::std::int32_t tab_id, bool fullscreen)
+{
+    if (servo_shutdown_started())
+        return;
+    if (auto* window = find_browser_window())
+        window->setFullscreen(fullscreen);
+    (void)tab_id;
+}
+
+void notify_history_changed(::std::int32_t tab_id, ::rust::Str urls, ::std::int32_t current)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* view = find_view(tab_id);
+    if (!view || !view->tab())
+        return;
+    auto url_str = QString::fromUtf8(urls.data(), static_cast<qsizetype>(urls.size()));
+    auto url_list = url_str.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    view->tab()->on_history_changed(url_list, static_cast<int>(current));
+}
+
+void request_open_tab_for_id(::std::int32_t tab_id)
+{
+    if (servo_shutdown_started())
+        return;
+    if (auto* window = find_browser_window())
+        window->openTabForExistingId(static_cast<int>(tab_id));
+}
+
+::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str)
+{
+    if (servo_shutdown_started())
+        return -1;
+    auto* view = find_view(tab_id);
+    if (!view)
+        return -1;
+
+    auto items_text = QString::fromUtf8(items_str.data(), static_cast<qsizetype>(items_str.size()));
+    auto lines = items_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+
+    QMenu menu(view);
+    QMap<QAction*, int> action_map;
+
+    for (auto const& line : lines) {
+        if (line.trimmed() == QStringLiteral("sep")) {
+            menu.addSeparator();
+            continue;
+        }
+        auto parts = line.split(QLatin1Char('\t'));
+        if (parts.size() < 3)
+            continue;
+        bool ok = false;
+        int action_id = parts[0].toInt(&ok);
+        if (!ok)
+            continue;
+        auto label = parts[1];
+        bool enabled = (parts[2].trimmed() != QStringLiteral("false"));
+        auto* act = menu.addAction(label);
+        act->setEnabled(enabled);
+        action_map[act] = action_id;
+    }
+
+    auto* selected = menu.exec(QCursor::pos());
+    if (!selected || !action_map.contains(selected))
+        return -1;
+    return action_map[selected];
+}
+
+void show_notification(int32_t /*tab_id*/, rust::Str title, rust::Str body)
+{
+    static QSystemTrayIcon* s_tray = nullptr;
+    if (!s_tray) {
+        s_tray = new QSystemTrayIcon(QApplication::windowIcon(), nullptr);
+        s_tray->show();
+    }
+    s_tray->showMessage(
+        QString::fromUtf8(title.data(), static_cast<int>(title.size())),
+        QString::fromUtf8(body.data(), static_cast<int>(body.size())),
+        QSystemTrayIcon::Information, 5000);
 }
 
 } // namespace servoq

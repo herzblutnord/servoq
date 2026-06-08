@@ -34,6 +34,31 @@ bool content_blocking_enabled();
 bool webcontent_frame_pending(::std::int32_t tab_id);
 void request_wayland_window_repaint(::std::int32_t tab_id);
 
+// Favicon: RGBA8 pixel data, width × height pixels. Empty data = clear to default globe.
+void notify_favicon_changed(::std::int32_t tab_id,
+                            ::rust::Slice<const ::std::uint8_t> data,
+                            ::std::int32_t width,
+                            ::std::int32_t height);
+
+// Cursor: Qt::CursorShape integer value.
+void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape);
+
+// Fullscreen state change.
+void notify_fullscreen_changed(::std::int32_t tab_id, bool fullscreen);
+
+// History list: newline-separated URLs and current index.
+void notify_history_changed(::std::int32_t tab_id, ::rust::Str urls, ::std::int32_t current);
+
+// window.open(): open a Tab widget for a WebView already registered in the Rust engine.
+void request_open_tab_for_id(::std::int32_t tab_id);
+
+// Context menu (synchronous): newline-delimited "action_id\tlabel\tenabled" or "sep".
+// Returns selected action_id (>=0) or -1 for dismissed.
+::std::int32_t show_context_menu_sync(::std::int32_t tab_id, ::rust::Str items_str);
+
+// Web Notification API: show a desktop notification via QSystemTrayIcon.
+void show_notification(::std::int32_t tab_id, ::rust::Str title, ::rust::Str body);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();
