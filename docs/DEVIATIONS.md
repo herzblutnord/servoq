@@ -93,6 +93,8 @@ ServoQ keeps Ladybird-style Qt chrome while using Servo as the web engine. Ladyb
 | Bookmark store is ServoQ JSON. | Mirrors Ladybird data semantics where needed, avoids AK/LibWebView dependency. | `Libraries/LibWebView/BookmarkStore.*` |
 | Content blocking uses Servo delegate interception. | Ladybird's loader/fetch hooks are LibWeb internals unavailable in ServoQ. | `Libraries/LibWeb/Loader/ContentBlocker.*` |
 | One active native Wayland render surface. | Current ServoQ Wayland lifecycle is designed around one shared active `WindowRenderingContext`; multiple simultaneous native surfaces are not proven safe. | Servoshell active WebView/rendering context model |
+| Custom CSS cursor images are not supported. | Servo 0.2.0 exposes only keyword cursor variants through `WebViewDelegate::notify_cursor_changed`; image data and hotspot coordinates are not present in the embedder API path. | CSS cursor image handling in engine internals |
+| KDE/Wayland app icon requires desktop identity installation. | Qt `setWindowIcon()` sets the in-process window icon, but KDE/Wayland/portals resolve the taskbar app icon from the desktop id. Use `scripts/install-dev-desktop-file.sh` to install `servoq.desktop` and `servoq.png` for development runs. | System-installed Ladybird desktop integration |
 
 ## Historical Debugging Notes
 

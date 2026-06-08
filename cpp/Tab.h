@@ -30,6 +30,7 @@ public:
     QWidget* toolbarContainer() const { return m_toolbar_container; }
     BookmarksBar* bookmarksBar() const { return m_bookmarks_bar; }
     FindInPageWidget* findInPageWidget() const { return m_find_in_page; }
+    LocationEdit* locationEdit() const { return m_location_edit; }
 
     void setToolbarContainerInTabLayout(bool in_tab_layout);
     void setVerticalTabsEnabled(bool enabled);

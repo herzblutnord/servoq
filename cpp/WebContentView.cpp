@@ -203,6 +203,135 @@ static void debug_log_favicon(int tab_id, QString const& detail)
     debug_log("favicon", tab_id, detail);
 }
 
+static char const* cursor_code_name(int code)
+{
+    switch (code) {
+    case 0: return "none";
+    case 1: return "default";
+    case 2: return "pointer";
+    case 3: return "context-menu";
+    case 4: return "help";
+    case 5: return "progress";
+    case 6: return "wait";
+    case 7: return "cell";
+    case 8: return "crosshair";
+    case 9: return "text";
+    case 10: return "vertical-text";
+    case 11: return "alias";
+    case 12: return "copy";
+    case 13: return "move";
+    case 14: return "no-drop";
+    case 15: return "not-allowed";
+    case 16: return "grab";
+    case 17: return "grabbing";
+    case 18: return "e-resize";
+    case 19: return "n-resize";
+    case 20: return "ne-resize";
+    case 21: return "nw-resize";
+    case 22: return "s-resize";
+    case 23: return "se-resize";
+    case 24: return "sw-resize";
+    case 25: return "w-resize";
+    case 26: return "ew-resize";
+    case 27: return "ns-resize";
+    case 28: return "nesw-resize";
+    case 29: return "nwse-resize";
+    case 30: return "col-resize";
+    case 31: return "row-resize";
+    case 32: return "all-scroll";
+    case 33: return "zoom-in";
+    case 34: return "zoom-out";
+    default: return "unknown";
+    }
+}
+
+static Qt::CursorShape cursor_shape_from_servoq_code(int code)
+{
+    switch (code) {
+    case 2:
+        return Qt::PointingHandCursor;
+    case 9:
+    case 10:
+        return Qt::IBeamCursor;
+    case 6:
+        return Qt::WaitCursor;
+    case 5:
+        return Qt::BusyCursor;
+    case 7:
+    case 8:
+        return Qt::CrossCursor;
+    case 13:
+    case 32:
+        return Qt::SizeAllCursor;
+    case 16:
+        return Qt::OpenHandCursor;
+    case 17:
+        return Qt::ClosedHandCursor;
+    case 14:
+    case 15:
+        return Qt::ForbiddenCursor;
+    case 4:
+        return Qt::WhatsThisCursor;
+    case 18:
+    case 25:
+    case 26:
+        return Qt::SizeHorCursor;
+    case 19:
+    case 22:
+    case 27:
+        return Qt::SizeVerCursor;
+    case 20:
+    case 24:
+    case 28:
+        return Qt::SizeBDiagCursor;
+    case 21:
+    case 23:
+    case 29:
+        return Qt::SizeFDiagCursor;
+    case 30:
+        return Qt::SplitHCursor;
+    case 31:
+        return Qt::SplitVCursor;
+    case 11:
+        return Qt::DragLinkCursor;
+    case 12:
+        return Qt::DragCopyCursor;
+    case 0:
+    case 1:
+    case 3:
+    case 33:
+    case 34:
+    default:
+        return Qt::ArrowCursor;
+    }
+}
+
+static char const* qt_cursor_name(Qt::CursorShape shape)
+{
+    switch (shape) {
+    case Qt::ArrowCursor: return "ArrowCursor";
+    case Qt::PointingHandCursor: return "PointingHandCursor";
+    case Qt::IBeamCursor: return "IBeamCursor";
+    case Qt::WaitCursor: return "WaitCursor";
+    case Qt::BusyCursor: return "BusyCursor";
+    case Qt::CrossCursor: return "CrossCursor";
+    case Qt::SizeAllCursor: return "SizeAllCursor";
+    case Qt::OpenHandCursor: return "OpenHandCursor";
+    case Qt::ClosedHandCursor: return "ClosedHandCursor";
+    case Qt::ForbiddenCursor: return "ForbiddenCursor";
+    case Qt::WhatsThisCursor: return "WhatsThisCursor";
+    case Qt::SizeHorCursor: return "SizeHorCursor";
+    case Qt::SizeVerCursor: return "SizeVerCursor";
+    case Qt::SizeBDiagCursor: return "SizeBDiagCursor";
+    case Qt::SizeFDiagCursor: return "SizeFDiagCursor";
+    case Qt::SplitHCursor: return "SplitHCursor";
+    case Qt::SplitVCursor: return "SplitVCursor";
+    case Qt::DragLinkCursor: return "DragLinkCursor";
+    case Qt::DragCopyCursor: return "DragCopyCursor";
+    default: return "Other";
+    }
+}
+
 static void debug_log(char const* event, int tab_id, QSize const& size, qreal dpr)
 {
     if (debug_enabled()) {
@@ -1639,10 +1768,29 @@ void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape)
     auto* view = find_view(tab_id);
     if (!view)
         return;
-    auto qt_cursor = QCursor(static_cast<Qt::CursorShape>(cursor_shape));
+    auto qt_shape = cursor_shape_from_servoq_code(cursor_shape);
+    auto qt_cursor = QCursor(qt_shape);
     view->setCursor(qt_cursor);
-    if (auto* container = g_wayland_container())
+    bool applied_container = false;
+    bool applied_window = false;
+    if (auto* container = g_wayland_container()) {
         container->setCursor(qt_cursor);
+        applied_container = true;
+    }
+    if (auto* window = g_wayland_window()) {
+        window->setCursor(qt_cursor);
+        applied_window = true;
+    }
+    if (debug_enabled()) {
+        qInfo().nospace()
+            << "SERVOQ_DEBUG notify_cursor_changed tab_id=" << tab_id
+            << " raw_cursor_code=" << cursor_shape
+            << " servo_cursor=" << cursor_code_name(cursor_shape)
+            << " qt_cursor=" << qt_cursor_name(qt_shape)
+            << " apply_webcontent=1"
+            << " apply_wayland_container=" << (applied_container ? 1 : 0)
+            << " apply_wayland_window=" << (applied_window ? 1 : 0);
+    }
 }
 
 void notify_fullscreen_changed(::std::int32_t tab_id, bool fullscreen)

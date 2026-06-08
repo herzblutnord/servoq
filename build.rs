@@ -156,4 +156,5 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/icons/ladybird.png");
     println!("cargo:rerun-if-changed=cpp/icons/servo.png");
     println!("cargo:rerun-if-changed=data/servoq.desktop");
+    println!("cargo:rerun-if-changed=scripts/install-dev-desktop-file.sh");
 }

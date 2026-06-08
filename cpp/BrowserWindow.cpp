@@ -4,6 +4,7 @@
 #include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
+#include "LocationEdit.h"
 #include "Settings.h"
 #include "Tab.h"
 #include "TabBar.h"
@@ -12,6 +13,8 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractButton>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -33,6 +36,7 @@
 #include <QStatusBar>
 #include <QDesktopServices>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QWidgetAction>
@@ -55,6 +59,28 @@ void debug_log(char const* event, int tab_id, QString const& detail)
 {
     if (debug_enabled())
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+bool is_child_or_self(QObject const* candidate, QObject const* ancestor)
+{
+    for (auto const* object = candidate; object; object = object->parent()) {
+        if (object == ancestor)
+            return true;
+    }
+    return false;
+}
+
+bool is_location_completion_popup(QObject const* object)
+{
+    for (auto const* candidate = object; candidate; candidate = candidate->parent()) {
+        if (candidate->objectName() == QStringLiteral("LadybirdAutocompletePopup"))
+            return true;
+    }
+    if (auto const* widget = qobject_cast<QWidget const*>(object)) {
+        auto* popup = qobject_cast<QAbstractItemView*>(widget->window());
+        return popup && popup->objectName() == QStringLiteral("LadybirdAutocompletePopup");
+    }
+    return false;
 }
 
 }
@@ -102,6 +128,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
 
     updateChromeStyle();
     createInitialTab();
+    applyBrowserChromeCursors(this);
     if (Settings::the()->is_maximized())
         showMaximized();
 }
@@ -145,7 +172,44 @@ bool BrowserWindow::eventFilter(QObject* obj, QEvent* event)
         servoq::tick_servo();
         return true;
     }
+    if (event->type() == QEvent::MouseButtonPress)
+        clearLocationEditFocusForMousePress(obj);
+    if (event->type() == QEvent::ChildAdded) {
+        if (auto* child_event = static_cast<QChildEvent*>(event); child_event->child()) {
+            if (auto* widget = qobject_cast<QWidget*>(child_event->child()))
+                applyBrowserChromeCursors(widget);
+        }
+    }
     return QMainWindow::eventFilter(obj, event);
+}
+
+void BrowserWindow::clearLocationEditFocusForMousePress(QObject* target)
+{
+    auto* focused = QApplication::focusWidget();
+    auto* location_edit = dynamic_cast<LocationEdit*>(focused);
+    if (!location_edit)
+        return;
+    if (is_child_or_self(target, location_edit) || is_location_completion_popup(target))
+        return;
+
+    if (debug_enabled()) {
+        auto widget_name = target ? target->objectName() : QString {};
+        auto class_name = target ? target->metaObject()->className() : "null";
+        qInfo().nospace()
+            << "SERVOQ_DEBUG focus_clear_location_edit reason=qt_chrome_click widget="
+            << class_name << "(" << widget_name << ")";
+    }
+    location_edit->clearFocus();
+}
+
+void BrowserWindow::applyBrowserChromeCursors(QWidget* root)
+{
+    if (!root)
+        return;
+    if (auto* button = qobject_cast<QAbstractButton*>(root))
+        button->setCursor(Qt::PointingHandCursor);
+    for (auto* button : root->findChildren<QAbstractButton*>())
+        button->setCursor(Qt::PointingHandCursor);
 }
 
 void BrowserWindow::createMenus()

@@ -401,26 +401,43 @@ mod engine {
         }
     }
 
-    fn cursor_to_qt_shape(cursor: &Cursor) -> i32 {
-        // Qt::CursorShape integer values (stable across Qt 5/6)
+    fn cursor_to_servoq_code(cursor: &Cursor) -> i32 {
         match cursor {
-            Cursor::None | Cursor::Default => 0,  // Qt::ArrowCursor
-            Cursor::Pointer => 13,                 // Qt::PointingHandCursor
-            Cursor::Text | Cursor::VerticalText => 4, // Qt::IBeamCursor
-            Cursor::Crosshair | Cursor::Cell => 2,    // Qt::CrossCursor
-            Cursor::Move | Cursor::AllScroll => 9,    // Qt::SizeAllCursor
-            Cursor::Grab => 17,                        // Qt::OpenHandCursor
-            Cursor::Grabbing => 18,                    // Qt::ClosedHandCursor
-            Cursor::Wait | Cursor::Progress => 3,     // Qt::WaitCursor
-            Cursor::NotAllowed | Cursor::NoDrop => 14, // Qt::ForbiddenCursor
-            Cursor::ColResize | Cursor::EwResize | Cursor::EResize | Cursor::WResize => 6, // Qt::SizeHorCursor
-            Cursor::RowResize | Cursor::NsResize | Cursor::NResize | Cursor::SResize => 5, // Qt::SizeVerCursor
-            Cursor::NwseResize | Cursor::NwResize | Cursor::SeResize => 8,  // Qt::SizeFDiagCursor
-            Cursor::NeswResize | Cursor::NeResize | Cursor::SwResize => 7,  // Qt::SizeBDiagCursor
-            Cursor::Help => 15,                        // Qt::WhatsThisCursor
-            Cursor::Copy => 19,                        // Qt::DragCopyCursor
-            Cursor::Alias => 21,                       // Qt::DragLinkCursor
-            Cursor::ZoomIn | Cursor::ZoomOut | Cursor::ContextMenu => 0, // Qt::ArrowCursor
+            Cursor::None => 0,
+            Cursor::Default => 1,
+            Cursor::Pointer => 2,
+            Cursor::ContextMenu => 3,
+            Cursor::Help => 4,
+            Cursor::Progress => 5,
+            Cursor::Wait => 6,
+            Cursor::Cell => 7,
+            Cursor::Crosshair => 8,
+            Cursor::Text => 9,
+            Cursor::VerticalText => 10,
+            Cursor::Alias => 11,
+            Cursor::Copy => 12,
+            Cursor::Move => 13,
+            Cursor::NoDrop => 14,
+            Cursor::NotAllowed => 15,
+            Cursor::Grab => 16,
+            Cursor::Grabbing => 17,
+            Cursor::EResize => 18,
+            Cursor::NResize => 19,
+            Cursor::NeResize => 20,
+            Cursor::NwResize => 21,
+            Cursor::SResize => 22,
+            Cursor::SeResize => 23,
+            Cursor::SwResize => 24,
+            Cursor::WResize => 25,
+            Cursor::EwResize => 26,
+            Cursor::NsResize => 27,
+            Cursor::NeswResize => 28,
+            Cursor::NwseResize => 29,
+            Cursor::ColResize => 30,
+            Cursor::RowResize => 31,
+            Cursor::AllScroll => 32,
+            Cursor::ZoomIn => 33,
+            Cursor::ZoomOut => 34,
         }
     }
 
@@ -842,7 +859,8 @@ mod engine {
         fn notify_cursor_changed(&self, _webview: WebView, cursor: Cursor) {
             if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
             if !tab_exists(self.tab_id) { return; }
-            crate::bridge::ffi::notify_cursor_changed(self.tab_id, cursor_to_qt_shape(&cursor));
+            debug_log_detail("notify_cursor_changed", self.tab_id, format!("{cursor:?}"));
+            crate::bridge::ffi::notify_cursor_changed(self.tab_id, cursor_to_servoq_code(&cursor));
         }
 
         fn notify_history_changed(&self, _webview: WebView, entries: Vec<url::Url>, current: usize) {

@@ -42,6 +42,8 @@ protected:
 private:
     void createMenus();
     void createInitialTab();
+    void clearLocationEditFocusForMousePress(QObject* target);
+    void applyBrowserChromeCursors(QWidget* root);
     void closeTab(int index);
     void setHorizontalTabs();
     void setVerticalTabsCollapsed();
