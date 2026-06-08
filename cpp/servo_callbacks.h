@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
 // servo_callbacks.h
 //
 // C++ free functions in namespace servoq that Rust calls (via CXX unsafe extern "C++")
@@ -27,7 +31,7 @@ void notify_load_started(::std::int32_t tab_id, ::rust::Str url);
 void notify_load_finished(::std::int32_t tab_id);
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text);
 
-// Called when Servo panics / crashes during event loop spin. [ladybird: WebContentView crash signal]
+// Called when Servo panics / crashes during event loop spin.
 void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason);
 void notify_request_blocked(::std::int32_t tab_id, ::rust::Str url);
 bool content_blocking_enabled();

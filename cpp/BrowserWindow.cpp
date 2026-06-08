@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/BrowserWindow.cpp
+ *   Libraries/LibWebView/SearchEngine.cpp
+ *   Libraries/LibWebView/Settings.cpp
+ *   Libraries/LibWeb/Loader/ContentBlocker.cpp
+ */
 #include "BrowserWindow.h"
 #include "BookmarksBar.h"
 #include "HistoryStore.h"
@@ -109,13 +120,11 @@ BrowserWindow::BrowserWindow(QWidget* parent)
         auto* previous_tab = m_active_tab;
         auto* next_tab = currentTab();
         if (previous_tab && previous_tab != next_tab) {
-            // [ladybird: BrowserWindow.cpp:696-702] inactive tab becomes hidden.
             previous_tab->setActive(false);
         }
         m_active_tab = next_tab;
         if (auto* tab = currentTab()) {
             debug_log("tab_switch", tab->controllerId(), QStringLiteral("active=1"));
-            // [ladybird: BrowserWindow.cpp:701-702] active tab becomes visible.
             tab->setActive(true);
             tab->applyControllerState();
         }
@@ -227,7 +236,6 @@ void BrowserWindow::createMenus()
     file_menu->addAction(m_close_tab_action);
     m_hamburger_menu->addAction(m_close_tab_action);
 
-    // [ladybird: BrowserWindow.cpp — reopen last closed tab, Ctrl+Shift+T]
     m_reopen_tab_action = new QAction("&Reopen Last Tab", this);
     m_reopen_tab_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
     m_reopen_tab_action->setEnabled(false); // disabled until a tab is closed
@@ -240,12 +248,10 @@ void BrowserWindow::createMenus()
     file_menu->addAction(m_reopen_tab_action);
     m_hamburger_menu->addAction(m_reopen_tab_action);
 
-    // [ladybird: BrowserWindow.cpp ~line 260 — Ctrl+O open local file]
     auto* open_file_action = new QAction("&Open File…", this);
     open_file_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Open));
     connect(open_file_action, &QAction::triggered, this, [this] {
         if (auto* tab = currentTab()) {
-            // [ladybird: BrowserWindow.cpp:263] filter matches common web file types
             auto path = QFileDialog::getOpenFileName(this, QStringLiteral("Open File"), {},
                 QStringLiteral("Web files (*.html *.htm *.xhtml *.svg *.xml *.txt *.pdf);;All files (*)"));
             if (!path.isEmpty())
@@ -255,7 +261,6 @@ void BrowserWindow::createMenus()
     file_menu->addAction(open_file_action);
     m_hamburger_menu->addAction(open_file_action);
 
-    // [ladybird: BrowserWindow.cpp:360 — Ctrl+D add bookmark]
     auto* add_bookmark_action = new QAction("Add &Bookmark…", this);
     add_bookmark_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
     connect(add_bookmark_action, &QAction::triggered, this, [this] {
@@ -283,7 +288,6 @@ void BrowserWindow::createMenus()
     });
     edit_menu->addAction(m_find_action);
 
-    // [ladybird: BrowserWindow.cpp:311-323]
     for (auto const& shortcut : QKeySequence::keyBindings(QKeySequence::FindPrevious))
         new QShortcut(shortcut, this, [this] { if (auto* tab = currentTab()) tab->findPrevious(); });
     for (auto const& shortcut : QKeySequence::keyBindings(QKeySequence::FindNext))
@@ -362,7 +366,6 @@ void BrowserWindow::createMenus()
 
     view_menu->addSeparator();
 
-    // [ladybird: BrowserWindow.cpp:334-356]
     auto* open_next_tab_action = new QAction("Open &Next Tab", this);
     open_next_tab_action->setShortcuts({
         QKeySequence(Qt::CTRL | Qt::Key_PageDown),
@@ -379,7 +382,6 @@ void BrowserWindow::createMenus()
     view_menu->addAction(open_previous_tab_action);
     connect(open_previous_tab_action, &QAction::triggered, this, &BrowserWindow::openPreviousTab);
 
-    // [ladybird: BrowserWindow.cpp:358-360] — zoom submenu added to View menu
     view_menu->addSeparator();
     {
         auto* zoom_in_action = new QAction("Zoom &In", this);
@@ -555,7 +557,6 @@ void BrowserWindow::createMenus()
     help_menu->addAction(about_action);
     m_hamburger_menu->addMenu(help_menu);
 
-    // [ladybird: BrowserWindow.cpp:447-461]
     for (int i = 0; i <= 7; ++i) {
         new QShortcut(QKeySequence(Qt::CTRL | static_cast<Qt::Key>(Qt::Key_1 + i)), this, [this, i] {
             if (m_tabs->count() <= 1)
@@ -643,7 +644,6 @@ void BrowserWindow::closeTab(int index)
     auto tab_id = tab ? tab->controllerId() : 0;
     debug_log("close_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(tab == currentTab() ? 1 : 0));
 
-    // [ladybird: BrowserWindow.cpp reopen last closed tab] push before removal, cap at 10
     if (tab) {
         m_closed_tabs.append({ tab->url(), tab->title() });
         if (m_closed_tabs.size() > 10)
@@ -706,7 +706,7 @@ void BrowserWindow::setVerticalTabsExpandOnHover(bool enabled)
     Settings::the()->set_vertical_tabs_expand_on_hover(enabled);
 }
 
-void BrowserWindow::toggleVerticalTabsExpanded() // [ladybird: Tab.cpp:176,213 — application.toggle_vertical_tabs_expanded_action()]
+void BrowserWindow::toggleVerticalTabsExpanded()
 {
     if (!Settings::the()->vertical_tabs_enabled() || !Settings::the()->vertical_tabs_expanded())
         setVerticalTabsExpanded();
@@ -721,7 +721,7 @@ void BrowserWindow::toggleVerticalTabsExpanded() // [ladybird: Tab.cpp:176,213 �
     }
 }
 
-void BrowserWindow::openNextTab() // [ladybird: BrowserWindow.cpp:1065-1073]
+void BrowserWindow::openNextTab()
 {
     if (m_tabs->count() <= 1)
         return;
@@ -731,7 +731,7 @@ void BrowserWindow::openNextTab() // [ladybird: BrowserWindow.cpp:1065-1073]
     m_tabs->setCurrentIndex(next_index);
 }
 
-void BrowserWindow::openPreviousTab() // [ladybird: BrowserWindow.cpp:1076-1084]
+void BrowserWindow::openPreviousTab()
 {
     if (m_tabs->count() <= 1)
         return;
@@ -794,7 +794,7 @@ void BrowserWindow::updateCurrentTabState()
     if (!tab)
         return;
     setWindowTitle(QStringLiteral("%1 - ServoQ").arg(tab->title()));
-    // Status/link-hover text is shown by Tab's in-view m_hover_label [ladybird: Tab.cpp:748-763].
+    // Status/link-hover text is shown by Tab's in-view m_hover_label
     // Reference BrowserWindow does not route link hover to statusBar().
 }
 
@@ -807,7 +807,6 @@ void BrowserWindow::updateChromeStyle()
     m_is_updating_chrome_style = false;
 }
 
-// [ladybird: BrowserWindow.cpp:1365-1376]
 void BrowserWindow::wheelEvent(QWheelEvent* event)
 {
     if (!currentTab())
@@ -815,9 +814,9 @@ void BrowserWindow::wheelEvent(QWheelEvent* event)
 
     if ((event->modifiers() & Qt::ControlModifier) != 0) {
         if (event->angleDelta().y() > 0)
-            currentTab()->zoomIn();   // [ladybird: BrowserWindow.cpp:1372]
+            currentTab()->zoomIn();
         else if (event->angleDelta().y() < 0)
-            currentTab()->zoomOut();  // [ladybird: BrowserWindow.cpp:1374]
+            currentTab()->zoomOut();
     }
 }
 

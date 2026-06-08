@@ -1,3 +1,11 @@
+// Copyright (c) 2018-2026, Ladybird Browser Initiative and contributors
+// Copyright (c) 2024-2025, Valentin Gusel
+// SPDX-License-Identifier: BSD-2-Clause
+//
+// Derived from Ladybird:
+//   UI/Qt/WebContentView.cpp
+//   Libraries/LibWeb/HTML/HTMLLinkElement.cpp
+//   Libraries/LibWeb/Loader/ContentBlocker.cpp
 // servo_engine.rs
 //
 // Real Servo embedder compiled only under the `servo-engine` Cargo feature.
@@ -775,7 +783,6 @@ mod engine {
             self.animating.set(animating);
         }
 
-        // [ladybird: WebContentView crash signal] — Servo crashed; notify the Qt side so it can
         // show an error page. Matches the reference notify_crashed() contract.
         fn notify_crashed(&self, _webview: WebView, reason: String, _backtrace: Option<String>) {
             if SHUTTING_DOWN.load(Ordering::Acquire) {
@@ -1435,7 +1442,6 @@ mod engine {
     // This allows delegate callbacks fired inside spin_event_loop to borrow ENGINE.
     // catch_unwind guards against Servo panicking during font loading or similar
     // background operations — a Rust panic must NOT cross the FFI boundary into C++.
-    // [ladybird: WebContentView crash signal, B2 fix]
     pub fn tick_webview(id: i32) {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return;
@@ -1732,7 +1738,6 @@ mod engine {
         }
     }
 
-    // [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out/reset_zoom on view()
     // Servo 0.2.0: WebView::set_page_zoom(f32) — clamped to [0.1, 10.0] internally
     pub fn set_page_zoom(id: i32, zoom: f32) {
         ENGINE.with(|s| {

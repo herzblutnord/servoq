@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2022-2025, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/WebContentView.cpp
+ */
 // WebContentView.cpp
 //
 // Implements the Qt widget that hosts the Servo engine (or shows a placeholder
 // when the engine is disabled / before the first frame arrives).
-//
-// Ladybird reference for the EVENT SURFACE (structure, not engine calls):
-//   vendor/reference-ladybird/UI/Qt/WebContentView.cpp
 // Specific line citations appear inline below.
 
 #include "BrowserWindow.h"
@@ -563,7 +568,6 @@ WebContentView::WebContentView(QWidget* parent)
 
     // No child placeholder widget. Empty new tabs and crash states are painted
     // directly by this widget; real pages are handed to Servo on first navigation.
-    // [ladybird: Tab.cpp:158] — m_view added directly to tab_layout, no stacked widget.
 
     // Fallback timer: spins servo.spin_event_loop() at 5 Hz when the tab is visible.
     // With QtEventLoopWaker installed, Servo background threads (paint, font, layout)
@@ -578,7 +582,6 @@ WebContentView::WebContentView(QWidget* parent)
     });
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    // [ladybird: WebContentView.cpp:100-105] defer after Qt color-scheme change.
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
         QTimer::singleShot(0, this, [this] {
             notifyThemeChange();
@@ -835,7 +838,6 @@ void WebContentView::receiveFrameBytes(uint8_t const* bytes, int width, int heig
     update();
 }
 
-// [ladybird: WebContentView crash signal] — Servo crashed; paint the reason inline.
 // No placeholder widget: crash state is tracked via m_crashed + m_crash_reason and
 // drawn directly in paintEvent so there is no QWidget child to manage.
 void WebContentView::receiveWebViewCrash(QString const& reason)
@@ -995,7 +997,7 @@ void WebContentView::forwardResizeToEngine()
 // Use Qt's idiomatic HiDPI path: set devicePixelRatio on the image so Qt maps
 // physical-pixel image dimensions to the widget's logical rect automatically.
 // This avoids the painter.scale(1/dpr) trick which breaks when DPR changes
-// between frame delivery and the repaint. [ladybird: WebContentView.cpp:676-708]
+// between frame delivery and the repaint.
 void WebContentView::paintEvent(QPaintEvent*)
 {
     if (m_wayland_renderer_active)
@@ -1012,9 +1014,9 @@ void WebContentView::paintEvent(QPaintEvent*)
         return;
     }
     if (!m_frame.isNull() && !m_crashed) {
-        m_frame.setDevicePixelRatio(devicePixelRatioF()); // [ladybird: WebContentView.cpp:690]
+        m_frame.setDevicePixelRatio(devicePixelRatioF());
         QPainter painter(this);
-        painter.drawImage(QPoint(0, 0), m_frame);         // [ladybird: WebContentView.cpp:696]
+        painter.drawImage(QPoint(0, 0), m_frame);
         qt_perf_stats().draw_image_calls++;
         m_pending_frame_repaint = false;
         maybe_log_qt_perf();
@@ -1252,7 +1254,7 @@ void WebContentView::showEvent(QShowEvent* event)
     if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
-        servoq::set_webview_active(m_tab_id, true); // [ladybird: WebContentView.cpp:774-778]
+        servoq::set_webview_active(m_tab_id, true);
 }
 
 void WebContentView::hideEvent(QHideEvent* event)
@@ -1290,7 +1292,7 @@ void WebContentView::hideEvent(QHideEvent* event)
             QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
     }
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
-        servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
+        servoq::set_webview_active(m_tab_id, false);
 }
 
 // focusInEvent / focusOutEvent — mirrors Ladybird (vendor lines 646-652).
@@ -1323,12 +1325,10 @@ bool WebContentView::event(QEvent* ev)
         keyReleaseEvent(static_cast<QKeyEvent*>(ev));
         return true;
     }
-    // [ladybird: WebContentView.cpp:712-714] — DPR change when window moves between monitors
     if (ev->type() == QEvent::DevicePixelRatioChange) {
         forwardResizeToEngine(); // sends new physical size + new hidpi scale factor
     }
     if (ev->type() == QEvent::PaletteChange || ev->type() == QEvent::ApplicationPaletteChange || ev->type() == QEvent::ThemeChange) {
-        // [ladybird: WebContentView.cpp:990-994] defer palette/theme work until Qt settles.
         QTimer::singleShot(0, this, [this] {
             notifyThemeChange();
             update();

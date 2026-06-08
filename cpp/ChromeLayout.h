@@ -1,7 +1,9 @@
 /*
- * Copyright (c) 2026-present, the Ladybird developers.
- *
+ * Copyright (c) 2026, Ladybird Browser Initiative and contributors
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/ChromeLayout.h
  */
 
 #pragma once

@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/Tab.cpp
+ *   UI/Qt/BrowserWindow.cpp
+ */
 #include "Tab.h"
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
@@ -33,9 +42,9 @@
 namespace ServoQ {
 
 namespace {
-constexpr int ToolbarHorizontalMargin = 12;                  // [ladybird: Tab.cpp:91]
-constexpr int ToolbarVerticalMargin = 2;                     // [ladybird: Tab.cpp:92]
-constexpr int ToolbarSidebarToggleNavigationGap = 8;         // [ladybird: Tab.cpp:94]
+constexpr int ToolbarHorizontalMargin = 12;
+constexpr int ToolbarVerticalMargin = 2;
+constexpr int ToolbarSidebarToggleNavigationGap = 8;
 
 bool debug_enabled()
 {
@@ -84,7 +93,7 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     toolbar_container_layout->addWidget(m_toolbar);
     toolbar_container_layout->addWidget(m_bookmarks_bar);
 
-    // Wire BookmarksBar URL-open callbacks — [ladybird: BookmarksBar.cpp:223-225]
+    // Wire BookmarksBar URL-open callbacks
     m_bookmarks_bar->setOpenUrlCallback([this](QString const& url) { navigate(url); });
     m_bookmarks_bar->setOpenUrlInNewTabCallback([window](QString const& url) {
         if (window) window->createNewTab(url);
@@ -97,8 +106,8 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     tab_layout->addWidget(m_view, 1);
     tab_layout->addWidget(m_find_in_page);
 
-    m_hover_label->setContentsMargins(4, 2, 4, 2); // [ladybird: Tab.cpp:141]
-    m_hover_label->setAutoFillBackground(true);     // [ladybird: Tab.cpp:142]
+    m_hover_label->setContentsMargins(4, 2, 4, 2);
+    m_hover_label->setAutoFillBackground(true);
     m_hover_label->hide();
     m_loading_animation_timer->setInterval(80);
     connect(m_loading_animation_timer, &QTimer::timeout, this, [this] {
@@ -145,7 +154,7 @@ void Tab::setToolbarContainerInTabLayout(bool in_tab_layout)
 void Tab::setVerticalTabsEnabled(bool enabled)
 {
     m_toolbar->setProperty("verticalTabsEnabled", enabled);
-    if (m_sidebar_toggle_spacer) // [ladybird: Tab.cpp:584-585]
+    if (m_sidebar_toggle_spacer)
         m_sidebar_toggle_spacer->changeSize(enabled ? ToolbarSidebarToggleNavigationGap : 0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
     updateToggleVerticalTabsIcon();
     m_toolbar->layout()->invalidate();
@@ -254,7 +263,6 @@ void Tab::setStatusText(QString const& status)
         m_window->tabStateChanged(this);
 }
 
-// [ladybird: BrowserWindow.cpp:1372] — zoom_in step = 0.1, clamped to [0.1, 10.0]
 // Servo 0.2.0 also clamps internally, so our outer clamp matches the stricter bound.
 static constexpr float ZoomStep = 0.1f;
 static constexpr float ZoomMin  = 0.1f;
@@ -264,7 +272,7 @@ static float round_zoom(float v) {
     return std::round(v * 10.0f) / 10.0f;
 }
 
-void Tab::zoomIn() // [ladybird: BrowserWindow.cpp:1372 — view().zoom_in()]
+void Tab::zoomIn()
 {
     auto current = servoq::page_zoom(m_controller_id);
     auto next = std::min(round_zoom(current + ZoomStep), ZoomMax);
@@ -272,7 +280,7 @@ void Tab::zoomIn() // [ladybird: BrowserWindow.cpp:1372 — view().zoom_in()]
     updateZoomAction();
 }
 
-void Tab::zoomOut() // [ladybird: BrowserWindow.cpp:1374 — view().zoom_out()]
+void Tab::zoomOut()
 {
     auto current = servoq::page_zoom(m_controller_id);
     auto next = std::max(round_zoom(current - ZoomStep), ZoomMin);
@@ -280,7 +288,7 @@ void Tab::zoomOut() // [ladybird: BrowserWindow.cpp:1374 — view().zoom_out()]
     updateZoomAction();
 }
 
-void Tab::resetZoom() // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
+void Tab::resetZoom()
 {
     servoq::set_page_zoom(m_controller_id, 1.0f);
     updateZoomAction();
@@ -291,7 +299,7 @@ void Tab::updateZoomAction()
     if (!m_reset_zoom_action)
         return;
     auto zoom = servoq::page_zoom(m_controller_id);
-    // Visible only when zoom != 1.0 — [ladybird: LocationEdit.cpp:684]
+    // Visible only when zoom != 1.0
     bool at_default = (std::abs(zoom - 1.0f) < 0.005f);
     m_reset_zoom_action->setVisible(!at_default);
     m_reset_zoom_action->setText(at_default ? QString() : QStringLiteral("%1%").arg(qRound(zoom * 100)));
@@ -370,7 +378,6 @@ void Tab::on_favicon_change(QIcon const& icon)
         m_window->tabStateChanged(this);
 }
 
-// [ladybird: Tab.cpp:253-260] — link hover updates the hover label and status text.
 void Tab::on_history_changed(QStringList const& urls, int current)
 {
     m_history_urls = urls;
@@ -406,7 +413,6 @@ bool Tab::openHoveredLinkInNewTab()
     return m_window != nullptr;
 }
 
-// [ladybird: Tab.cpp:748-763] — position the hover label at the bottom-left of the
 // tab, eliding text to half the tab width. If the mouse is over the label, shift it
 // to the right side so it doesn't obscure the hovered link.
 void Tab::updateHoverLabel()
@@ -451,7 +457,7 @@ void Tab::buildToolbar()
     navigation_layout->setContentsMargins(0, 0, 0, 0);
     navigation_layout->setSpacing(2);
 
-    // Toggle vertical tabs expanded/collapsed — always present in toolbar [ladybird: Tab.cpp:176,213-215]
+    // Toggle vertical tabs expanded/collapsed — always present in toolbar
     m_toggle_vertical_tabs_action = new QAction(this);
     m_toggle_vertical_tabs_action->setToolTip(QStringLiteral("Toggle Sidebar"));
     updateToggleVerticalTabsIcon();
@@ -459,19 +465,19 @@ void Tab::buildToolbar()
         if (m_window)
             m_window->toggleVerticalTabsExpanded();
     });
-    navigation_layout->addWidget(createToolbarButton(m_toggle_vertical_tabs_action)); // [ladybird: Tab.cpp:213]
-    m_sidebar_toggle_spacer = new QSpacerItem(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum); // [ladybird: Tab.cpp:214]
-    navigation_layout->addItem(m_sidebar_toggle_spacer);                                        // [ladybird: Tab.cpp:215]
+    navigation_layout->addWidget(createToolbarButton(m_toggle_vertical_tabs_action));
+    m_sidebar_toggle_spacer = new QSpacerItem(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+    navigation_layout->addItem(m_sidebar_toggle_spacer);
 
     m_back_action = new QAction("‹", this);
     m_back_action->setToolTip("Back");
-    m_back_action->setShortcut(QKeySequence::Back);   // [ladybird: Menu.cpp:172]
+    m_back_action->setShortcut(QKeySequence::Back);
     m_forward_action = new QAction("›", this);
     m_forward_action->setToolTip("Forward");
-    m_forward_action->setShortcut(QKeySequence::Forward); // [ladybird: Menu.cpp:177]
+    m_forward_action->setShortcut(QKeySequence::Forward);
     m_reload_action = new QAction("↻", this);
     m_reload_action->setToolTip("Reload");
-    m_reload_action->setShortcuts({ QKeySequence(Qt::CTRL | Qt::Key_R), QKeySequence(Qt::Key_F5) }); // [ladybird: Menu.cpp:182]
+    m_reload_action->setShortcuts({ QKeySequence(Qt::CTRL | Qt::Key_R), QKeySequence(Qt::Key_F5) });
     m_bookmark_action = new QAction("☆", this);
     m_bookmark_action->setToolTip("Bookmark this page");
 
@@ -490,7 +496,7 @@ void Tab::buildToolbar()
     });
     connect(m_bookmark_action, &QAction::triggered, this, [this] {
         servoq::toggle_bookmark(m_controller_id);
-        BookmarkStore::the()->toggleBookmark(m_title, m_url); // [ladybird: Tab.cpp:BookmarkStore]
+        BookmarkStore::the()->toggleBookmark(m_title, m_url);
         refreshBookmarkIcon();
         applyControllerState();
     });
@@ -535,17 +541,17 @@ void Tab::buildToolbar()
             menu.exec(forward_btn->mapToGlobal(pos));
     });
 
-    navigation_layout->addWidget(back_btn);                             // [ladybird: Tab.cpp:216]
-    navigation_layout->addWidget(forward_btn);                          // [ladybird: Tab.cpp:217]
-    navigation_layout->addWidget(createToolbarButton(m_reload_action)); // [ladybird: Tab.cpp:218]
+    navigation_layout->addWidget(back_btn);
+    navigation_layout->addWidget(forward_btn);
+    navigation_layout->addWidget(createToolbarButton(m_reload_action));
 
-    m_reset_zoom_action = new QAction(this); // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
+    m_reset_zoom_action = new QAction(this);
     m_reset_zoom_action->setToolTip("Reset zoom");
     m_reset_zoom_action->setVisible(false);
     connect(m_reset_zoom_action, &QAction::triggered, this, &Tab::resetZoom);
 
     m_location_edit->setTrailingAction(m_bookmark_action);
-    m_location_edit->setZoomAction(m_reset_zoom_action); // [ladybird: Tab.cpp:233]
+    m_location_edit->setZoomAction(m_reset_zoom_action);
     connect(m_location_edit, &QLineEdit::returnPressed, this, &Tab::location_edit_return_pressed);
 
     m_hamburger_button = new QToolButton(m_toolbar);
@@ -570,7 +576,7 @@ void Tab::buildToolbar()
     toolbar_layout->addWidget(m_hamburger_button, 0, Qt::AlignTop);
 }
 
-void Tab::updateToggleVerticalTabsIcon() // [ladybird: Tab.cpp:794-797]
+void Tab::updateToggleVerticalTabsIcon()
 {
     if (!m_toggle_vertical_tabs_action)
         return;

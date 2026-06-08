@@ -1,3 +1,9 @@
+// Copyright (c) 2026, Ladybird Browser Initiative and contributors
+// Copyright (c) 2024-2025, Valentin Gusel
+// SPDX-License-Identifier: BSD-2-Clause
+//
+// Derived from Ladybird:
+//   Libraries/LibWeb/Loader/ContentBlocker.cpp
 // EasyList-compatible ad/tracker blocking engine backed by the `adblock` crate.
 // The bundled list at data/blocklist.txt is loaded at first use.
 // A user-supplied list at $XDG_CONFIG_HOME/servoq/blocklist.txt is merged on top.

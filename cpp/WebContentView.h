@@ -1,14 +1,14 @@
+/*
+ * Copyright (c) 2022-2025, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/WebContentView.h
+ */
 // WebContentView.h
 //
-// Widget that hosts one Servo WebView per tab. Shape mirrors Ladybird's
-// WebContentView (vendor/reference-ladybird/UI/Qt/WebContentView.h:47-78):
-// identical event-surface, set_zoom_level, show/hideEvent, focus events.
-//
-// Engine calls live behind the bridge:
-//   - empty new tab      → chrome-side grey placeholder; no Servo navigation
-//   - before first frame → default widget background while a real page loads
-//   - frame received      → blits the RGBA QImage in paintEvent
-//   - engine crashed      → paints inline crash message in paintEvent
+// Widget that hosts one Servo WebView per tab.
 
 #pragma once
 
@@ -57,7 +57,7 @@ public:
     void requestWaylandRepaint();
     bool takeWaylandPresentPending();
 
-    // Called when Servo panics. Renders inline crash message. [ladybird: WebContentView crash signal]
+    // Called when Servo panics. Renders inline crash message.
     void receiveWebViewCrash(QString const& reason);
     void receiveRequestBlocked(QString const& url);
     void notifyThemeChange();

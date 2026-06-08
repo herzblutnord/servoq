@@ -1,3 +1,11 @@
+/*
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/BrowserWindow.cpp
+ */
 #pragma once
 
 #include <QMainWindow>
@@ -23,9 +31,9 @@ public:
     Tab* currentTab() const;
     void tabStateChanged(Tab* tab);
     bool showMenuBar() const;
-    void toggleVerticalTabsExpanded(); // [ladybird: Tab.cpp:176,213]
-    void openNextTab();                // [ladybird: BrowserWindow.cpp:1065]
-    void openPreviousTab();            // [ladybird: BrowserWindow.cpp:1076]
+    void toggleVerticalTabsExpanded();
+    void openNextTab();
+    void openPreviousTab();
     void createNewTab(QString const& url = {}, bool background = false);
     void openTabForExistingId(int tab_id);
     void setFullscreen(bool fullscreen);
@@ -37,7 +45,7 @@ protected:
     bool event(QEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
-    void wheelEvent(QWheelEvent* event) override; // [ladybird: BrowserWindow.cpp:1365]
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void createMenus();
@@ -68,7 +76,7 @@ private:
     QAction* m_vertical_tabs_hover_expand_action { nullptr };
     QAction* m_toggle_bookmarks_action { nullptr };
     QAction* m_show_menu_bar_action { nullptr };
-    QAction* m_reopen_tab_action { nullptr }; // [ladybird: BrowserWindow.cpp reopen last closed tab]
+    QAction* m_reopen_tab_action { nullptr };
     QVector<QPair<QString, QString>> m_closed_tabs; // url, title stack; capped at 10
     bool m_is_updating_chrome_style { false };
     bool m_was_maximized_before_fullscreen { false };

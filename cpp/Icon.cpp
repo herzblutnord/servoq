@@ -1,7 +1,10 @@
 /*
- * Copyright (c) 2023, Tim Flynn <trflynn89@serenityos.org>
- *
+ * Copyright (c) 2023, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/Icon.cpp
  */
 
 #include "ChromeStyle.h"

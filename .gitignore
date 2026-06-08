@@ -1,8 +1,12 @@
-/target/
+docs/
+target/
+build/
+.idea/
 *.kdev4
 *.user
-.idea/
+.vscode/
 .DS_Store
+Thumbs.db
 
 # Reference repositories, not part of ServoQ source
 /vendor/reference-kdab-servo-webview/

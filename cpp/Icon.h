@@ -1,7 +1,9 @@
 /*
- * Copyright (c) 2023, Tim Flynn <trflynn89@serenityos.org>
- *
+ * Copyright (c) 2023, Ladybird Browser Initiative and contributors
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/Icon.h
  */
 
 #pragma once

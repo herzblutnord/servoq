@@ -1,3 +1,15 @@
+/*
+ * Copyright (c) 2018-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/BookmarksBar.cpp
+ *   Libraries/LibWebView/BookmarkStore.cpp
+ *   Libraries/LibWeb/HTML/HTMLLinkElement.cpp
+ *   Libraries/LibWebView/ViewImplementation.cpp
+ *   UI/Qt/Menu.cpp
+ */
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
 #include "ChromeStyle.h"
@@ -32,7 +44,6 @@
 
 namespace ServoQ {
 
-// [ladybird: BookmarksBar.cpp:29-35]
 static constexpr int BookmarkButtonMaxWidth         = 150;
 static constexpr int BookmarkButtonIconSize         = 16;
 static constexpr int BookmarkButtonMinHeight        = 24;
@@ -111,7 +122,7 @@ static QIcon bookmark_icon_from_base64(QString const& favicon_base64_png, QPalet
     return create_chrome_icon(ChromeIcon::Globe, palette);
 }
 
-// Custom paint replicates reference paint_bookmark_button — [ladybird: BookmarksBar.cpp:130-160]
+// Custom paint replicates reference paint_bookmark_button
 static void paint_bookmark_button(QToolButton& button)
 {
     QStylePainter painter(&button);
@@ -139,7 +150,7 @@ static void paint_bookmark_button(QToolButton& button)
     if (button.isDown())
         option.state |= QStyle::State_Sunken;
 
-    // Menu indicator width for folders — [ladybird: BookmarksBar.cpp:96]
+    // Menu indicator width for folders
     int menu_indicator_width = button.menu()
         ? button.style()->pixelMetric(QStyle::PM_MenuButtonIndicator, &option, &button)
         : 0;
@@ -165,13 +176,13 @@ static void paint_bookmark_button(QToolButton& button)
         };
     }
 
-    // Draw frame only (suppress icon/text in drawComplexControl) — [ladybird: BookmarksBar.cpp:137-140]
+    // Draw frame only (suppress icon/text in drawComplexControl)
     auto frame_option = option;
     frame_option.icon = {};
     frame_option.text.clear();
     painter.drawComplexControl(QStyle::CC_ToolButton, frame_option);
 
-    // Draw icon — [ladybird: BookmarksBar.cpp:142-148]
+    // Draw icon
     if (icon_width > 0) {
         auto mode = button.isEnabled() ? QIcon::Normal : QIcon::Disabled;
         if (button.isEnabled() && (option.state & QStyle::State_MouseOver))
@@ -179,7 +190,7 @@ static void paint_bookmark_button(QToolButton& button)
         option.icon.paint(&painter, icon_rect, Qt::AlignCenter, mode, button.isChecked() ? QIcon::On : QIcon::Off);
     }
 
-    // Elide and draw text — [ladybird: BookmarksBar.cpp:150-159]
+    // Elide and draw text
     auto elided = button.fontMetrics().elidedText(option.text, Qt::ElideRight, available_text_width);
     button.style()->drawItemText(
         &painter, text_rect,
@@ -202,7 +213,6 @@ static void set_bookmark_button_size(QToolButton* button, QString const& title)
     int icon_width = button->icon().isNull() ? 0 : button->iconSize().width();
     int icon_text_spacing = (icon_width > 0 && !title.isEmpty()) ? BookmarkButtonIconTextSpacing : 0;
 
-    // [ladybird: BookmarksBar.cpp:221-234]
     int bookmark_height = qMax(BookmarkButtonMinHeight,
         qMax(button->fontMetrics().height(), button->iconSize().height()) + BookmarkButtonVerticalPadding);
 
@@ -232,11 +242,11 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     : QToolBar(parent)
     , m_drop_indicator(new QWidget(this))
 {
-    setObjectName("LadybirdBookmarksBar");  // [ladybird: BookmarksBar.cpp:29-35]
+    setObjectName("LadybirdBookmarksBar");
     setMovable(false);
     setFloatable(false);
     setAcceptDrops(true);
-    setIconSize({ BookmarkButtonIconSize, BookmarkButtonIconSize }); // [ladybird: BookmarksBar.cpp:30]
+    setIconSize({ BookmarkButtonIconSize, BookmarkButtonIconSize });
     updateChromeStyle();
     m_drop_indicator->setObjectName("BookmarkDropIndicator");
     m_drop_indicator->setFixedWidth(2);
@@ -287,9 +297,9 @@ void BookmarksBar::hideDropIndicator()
         m_drop_indicator->hide();
 }
 
-void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
+void BookmarksBar::rebuild()
 {
-    // Close any open menus before clearing — [ladybird: BookmarksBar.cpp:207-210]
+    // Close any open menus before clearing
     for (auto* action : actions()) {
         if (auto* menu = action->menu())
             menu->close();
@@ -341,7 +351,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
             showAddBookmarkDialog(folder.id);
         });
 
-        // Install event filter on submenu for middle-click / right-click — [ladybird: BookmarksBar.cpp:162-170]
+        // Install event filter on submenu for middle-click / right-click
         submenu->installEventFilter(this);
 
         auto* folder_action = new QAction(folder.title, this);
@@ -352,7 +362,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
         addAction(folder_action);
 
         if (auto* button = qobject_cast<QToolButton*>(widgetForAction(folder_action))) {
-            button->setPopupMode(QToolButton::InstantPopup); // [ladybird: BookmarksBar.cpp:266]
+            button->setPopupMode(QToolButton::InstantPopup);
             button->setAutoRaise(true);
             set_bookmark_button_size(button, folder.title);
             button->installEventFilter(this);
@@ -388,10 +398,9 @@ void BookmarksBar::updateChromeStyle()
     m_is_updating_chrome_style = false;
 }
 
-// [ladybird: BookmarksBar.cpp:293-313]
 bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
 {
-    // Custom paint for bookmark/folder buttons — [ladybird: BookmarksBar.cpp:295-299]
+    // Custom paint for bookmark/folder buttons
     if (event->type() == QEvent::Paint) {
         if (auto* button = qobject_cast<QToolButton*>(object);
             button && button->property(BookmarkItemProperty).toBool()) {
@@ -482,7 +491,7 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
         }
 
         if (mouse_event.button() == Qt::MiddleButton) {
-            // Middle-click opens in new tab — [ladybird: BookmarksBar.cpp:323-343]
+            // Middle-click opens in new tab
             QString url;
             if (auto* button = qobject_cast<QToolButton*>(object)) {
                 url = button->defaultAction() ? button->defaultAction()->toolTip() : QString();
@@ -497,7 +506,7 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
         }
 
         if (mouse_event.button() == Qt::RightButton) {
-            // Right-click context menu — [ladybird: BookmarksBar.cpp:345-393]
+            // Right-click context menu
             if (auto* button = qobject_cast<QToolButton*>(object)) {
                 auto* action = button->defaultAction();
                 if (!action) return QToolBar::eventFilter(object, event);
@@ -572,7 +581,6 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
     return QToolBar::eventFilter(object, event);
 }
 
-// [ladybird: BrowserWindow.cpp:360 — Ctrl+D add bookmark]
 void BookmarksBar::showAddBookmarkDialog(QString const& title, QString const& url)
 {
     showAddBookmarkDialog({}, title, url);

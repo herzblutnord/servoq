@@ -1,3 +1,11 @@
+/*
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/Tab.h
+ */
 #pragma once
 
 #include <QStringList>
@@ -38,7 +46,7 @@ public:
     void setActive(bool active);
     void showEmptyNewTab();
     void attachExistingWebView(QString const& initial_url = {});
-    void updateToggleVerticalTabsIcon(); // [ladybird: Tab.cpp:794-797]
+    void updateToggleVerticalTabsIcon();
     void navigate(QString const& url);
     void location_edit_return_pressed();
     void focusLocationEditor();
@@ -48,7 +56,7 @@ public:
     void setStatusText(QString const& status);
     void applyControllerState();
 
-    // Page zoom — [ladybird: BrowserWindow.cpp:1372-1374]
+    // Page zoom
     void zoomIn();
     void zoomOut();
     void resetZoom();
@@ -68,8 +76,8 @@ private:
     void update_tab_title();
     void set_loading(bool is_loading);
     void refreshBookmarkIcon();
-    void updateZoomAction(); // [ladybird: Tab.cpp:233 — reset_zoom_action text/visibility]
-    void updateHoverLabel(); // [ladybird: Tab.cpp:748-763] — positions label at bottom-left
+    void updateZoomAction();
+    void updateHoverLabel();
 
     BrowserWindow* m_window { nullptr };
     int m_controller_id { 0 };
@@ -81,15 +89,15 @@ private:
     FindInPageWidget* m_find_in_page { nullptr };
     QLabel* m_hover_label { nullptr };
     QToolButton* m_hamburger_button { nullptr };
-    QAction* m_toggle_vertical_tabs_action { nullptr }; // [ladybird: Tab.h:149]
-    QSpacerItem* m_sidebar_toggle_spacer { nullptr };   // [ladybird: Tab.cpp:214]
+    QAction* m_toggle_vertical_tabs_action { nullptr };
+    QSpacerItem* m_sidebar_toggle_spacer { nullptr };
     QAction* m_back_action { nullptr };
     QAction* m_forward_action { nullptr };
     QAction* m_reload_action { nullptr };
     QStringList m_history_urls;
     int m_history_current { -1 };
     QAction* m_bookmark_action { nullptr };
-    QAction* m_reset_zoom_action { nullptr }; // [ladybird: Tab.cpp:233 — view().reset_zoom_action()]
+    QAction* m_reset_zoom_action { nullptr };
     QTimer* m_loading_animation_timer { nullptr };
     QIcon m_favicon;
     QString m_url { QStringLiteral("about:blank") };

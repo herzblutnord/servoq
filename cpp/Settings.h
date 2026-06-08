@@ -1,11 +1,11 @@
 /*
- * Adapted from Ladybird UI/Qt/Settings.h.
- *
- * Copyright (c) 2022, Filiph Sandström <filiph.sandstrom@filfatstudios.com>
- * Copyright (c) 2023, Cameron Youell <cameronyouell@gmail.com>
- * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
- *
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/Settings.h
+ *   Libraries/LibWebView/Settings.cpp
  */
 
 #pragma once

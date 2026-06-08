@@ -1,3 +1,9 @@
+// Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+// Copyright (c) 2024-2025, Valentin Gusel
+// SPDX-License-Identifier: BSD-2-Clause
+//
+// Derived from Ladybird:
+//   UI/Qt/BrowserWindow.cpp
 #[cxx::bridge(namespace = "servoq")]
 pub mod ffi {
     unsafe extern "C++" {
@@ -63,7 +69,7 @@ pub mod ffi {
         fn status_text(id: i32) -> String;
         fn find_bar_visible(id: i32) -> bool;
 
-        // Page zoom — [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out on view()
+        // Page zoom
         fn set_page_zoom(id: i32, zoom: f32);
         fn page_zoom(id: i32) -> f32;
 

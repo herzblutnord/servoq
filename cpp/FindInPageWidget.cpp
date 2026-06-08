@@ -1,3 +1,11 @@
+/*
+ * Copyright (c) 2024, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/FindInPageWidget.cpp
+ */
 #include "FindInPageWidget.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
@@ -31,7 +39,7 @@ FindInPageWidget::FindInPageWidget(QWidget* parent)
     layout->setContentsMargins(5, 5, 5, 5);
     layout->setSpacing(6);
 
-    m_find_text->setFocusPolicy(Qt::StrongFocus); // [ladybird: FindInPageWidget.cpp:36]
+    m_find_text->setFocusPolicy(Qt::StrongFocus);
     m_find_text->setPlaceholderText("Search");
     m_find_text->setMinimumWidth(50);
     m_find_text->setMaximumWidth(250);
@@ -48,8 +56,8 @@ FindInPageWidget::FindInPageWidget(QWidget* parent)
         button->setFlat(true);
     }
 
-    m_result_label->setStyleSheet("font-weight: bold;"); // [ladybird: FindInPageWidget.cpp:83]
-    m_result_label->setVisible(false);                   // [ladybird: FindInPageWidget.cpp:82]
+    m_result_label->setStyleSheet("font-weight: bold;");
+    m_result_label->setVisible(false);
 
     connect(m_find_text, &QLineEdit::textChanged, this, [this] { updateResultLabel(); });
     connect(m_previous_button, &QPushButton::clicked, this, [this] { updateResultLabel(); });
@@ -77,9 +85,9 @@ bool FindInPageWidget::event(QEvent* event)
 {
     if (event->type() == QEvent::PaletteChange) {
         updateChromeStyle();
-        m_previous_button->setIcon(create_chrome_icon(ChromeIcon::ChevronUp, palette()));   // [ladybird: FindInPageWidget.cpp:100]
-        m_next_button->setIcon(create_chrome_icon(ChromeIcon::ChevronDown, palette()));     // [ladybird: FindInPageWidget.cpp:101]
-        m_exit_button->setIcon(create_chrome_icon(ChromeIcon::Close, palette()));           // [ladybird: FindInPageWidget.cpp:102]
+        m_previous_button->setIcon(create_chrome_icon(ChromeIcon::ChevronUp, palette()));
+        m_next_button->setIcon(create_chrome_icon(ChromeIcon::ChevronDown, palette()));
+        m_exit_button->setIcon(create_chrome_icon(ChromeIcon::Close, palette()));
     }
     return QWidget::event(event);
 }

@@ -1,3 +1,5 @@
+// Copyright (c) 2024-2025, Valentin Gusel
+// SPDX-License-Identifier: BSD-2-Clause
 mod blocklist;
 mod bridge;
 mod servo_controller;

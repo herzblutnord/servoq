@@ -1,3 +1,11 @@
+/*
+ * Copyright (c) 2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   Libraries/LibWebView/HistoryStore.cpp
+ */
 #include "HistoryStore.h"
 
 #include <QDir>

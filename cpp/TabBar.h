@@ -1,14 +1,12 @@
-#pragma once
-
 /*
- * Portions of this file are adapted from Ladybird UI/Qt/TabBar.h.
- *
- * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
- * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
- * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
- *
+ * Copyright (c) 2024-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/TabBar.h
  */
+#pragma once
 
 #include <QStackedWidget>
 #include <QTabBar>
@@ -61,7 +59,7 @@ protected:
     QSize minimumSizeHint() const override;
     QSize tabSizeHint(int index) const override;
     void resizeEvent(QResizeEvent* event) override;
-    void tabLayoutChange() override; // [ladybird: TabBar.cpp:427-432]
+    void tabLayoutChange() override;
     void paintEvent(QPaintEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;

@@ -1,12 +1,12 @@
+/*
+ * Copyright (c) 2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/ChromeStyle.cpp
+ */
 #include "ChromeStyle.h"
-
-// Chrome roles, object names, colors, and stylesheet selectors are ported from
-// Ladybird UI/Qt/ChromeStyle.cpp. ServoQ-only placeholder styling is kept in
-// web_placeholder_style_sheet().
-//
-// Copyright (c) 2026-present, the Ladybird developers.
-//
-// SPDX-License-Identifier: BSD-2-Clause
 
 #include <QGuiApplication>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
@@ -73,7 +73,6 @@ QColor control_pressed(QPalette const& palette)
     return mix(chrome_surface(palette), is_dark(palette) ? QColor(70, 74, 80) : QColor(219, 220, 221), is_dark(palette) ? 0.86 : 0.66);
 }
 
-// [ladybird: ChromeStyle.cpp:138-145]
 QColor chrome_surface_recessed(QPalette const& palette)
 {
     if (is_dark(palette))
@@ -217,7 +216,6 @@ QWidget#LadybirdNavigationToolbar QToolButton::menu-indicator { image: none; }
 )").arg(background, hover, pressed, border, text, muted);
 }
 
-// [ladybird: ChromeStyle.cpp:501-612]
 QString location_edit_style_sheet(QPalette const& palette)
 {
     auto dark = is_dark(palette);
@@ -237,14 +235,14 @@ QString location_edit_style_sheet(QPalette const& palette)
     auto selection     = style_sheet_color(chrome_accent(palette));
     auto selection_text= style_sheet_color(palette.color(QPalette::HighlightedText));
 
-    // "Not secure" pill colors — [ladybird: ChromeStyle.cpp:524-528]
+    // "Not secure" pill colors
     auto not_secure_text       = style_sheet_color(dark ? QColor(224, 142, 136) : QColor(144, 62, 56));
     auto not_secure_background = style_sheet_color(dark ? mix(surface_color, QColor(102, 52, 48), 0.28) : QColor(246, 235, 233));
     auto not_secure_hover      = style_sheet_color(dark ? mix(surface_color, QColor(104, 55, 51), 0.34) : QColor(242, 226, 223));
     auto not_secure_pressed    = style_sheet_color(dark ? mix(surface_color, QColor(112, 60, 55), 0.40) : QColor(236, 215, 211));
     auto not_secure_border     = style_sheet_color(dark ? mix(QColor(92, 48, 45), chrome_border(palette), 0.52) : QColor(224, 203, 199));
 
-    // Zoom indicator pill colors — [ladybird: ChromeStyle.cpp:529-533]
+    // Zoom indicator pill colors
     auto surf_recessed = chrome_surface_recessed(palette);
     auto zoom_text        = style_sheet_color(chrome_muted_text(palette));
     auto zoom_background  = style_sheet_color(dark ? mix(surface_color, surf_recessed, 0.28) : mix(surface_color, surf_recessed, 0.14));
@@ -252,7 +250,6 @@ QString location_edit_style_sheet(QPalette const& palette)
     auto zoom_pressed     = style_sheet_color(dark ? mix(surface_color, surf_recessed, 0.44) : mix(surface_color, surf_recessed, 0.28));
     auto zoom_border      = style_sheet_color(dark ? mix(chrome_border(palette), surface_color, 0.38) : mix(chrome_border(palette), surface_color, 0.54));
 
-    // [ladybird: ChromeStyle.cpp:535-611]
     return QStringLiteral(R"(
 QLineEdit#LadybirdLocationEdit {
     color: %4;
@@ -316,7 +313,6 @@ QToolButton#LadybirdLocationAction { background: transparent; border: 0; margin:
 
 QString bookmarks_bar_style_sheet(QPalette const& palette)
 {
-    // [ladybird: ChromeStyle.cpp:614-648]
     auto hover = style_sheet_color(control_hover(palette));             // chrome_control_surface_hover
     auto pressed = style_sheet_color(control_pressed(palette));         // chrome_control_surface_pressed
     auto ctrl_border = style_sheet_color(chrome_control_border(palette));
@@ -331,7 +327,6 @@ QToolBar#LadybirdBookmarksBar QToolButton:pressed, QToolBar#LadybirdBookmarksBar
 
 QString find_in_page_style_sheet(QPalette const& palette)
 {
-    // [ladybird: ChromeStyle.cpp:650-706]
     auto background = style_sheet_color(chrome_background(palette));
     auto surface = style_sheet_color(chrome_surface(palette));
     auto hover = style_sheet_color(control_hover(palette));
@@ -354,7 +349,6 @@ QWidget#LadybirdFindInPageBar QCheckBox, QWidget#LadybirdFindInPageBar QLabel { 
 
 QString tab_widget_style_sheet(QPalette const& palette)
 {
-    // [ladybird: ChromeStyle.cpp:742-886]
     auto dark = is_dark(palette);
     auto chrome_bg = chrome_background(palette);
     auto background = style_sheet_color(chrome_bg);
@@ -362,11 +356,11 @@ QString tab_widget_style_sheet(QPalette const& palette)
     auto pressed = style_sheet_color(control_pressed(palette));                                      // chrome_control_surface_pressed
     auto ctrl_border = style_sheet_color(chrome_control_border(palette));
     auto text = style_sheet_color(chrome_button_text(palette));
-    // Destructive close button colors [ladybird: ChromeStyle.cpp:235-243]
+    // Destructive close button colors
     auto close_hover = style_sheet_color(QColor(196, 43, 28));
     auto close_text = style_sheet_color(QColor(255, 255, 255));
     auto strip_sep = style_sheet_color(chrome_border(palette));
-    // Sidebar separator: mix of background and border — less prominent than strip [ladybird: ChromeStyle.cpp:754]
+    // Sidebar separator: mix of background and border — less prominent than strip
     auto sidebar_sep = style_sheet_color(mix(chrome_bg, chrome_border(palette), dark ? 0.44 : 0.58));
     auto sidebar_sep_hover = style_sheet_color(mix(chrome_bg, chrome_border(palette), dark ? 0.64 : 0.76));
     auto vtab_active_bg = style_sheet_color(chrome_active_tab_surface_top(palette));

@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2023-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   Libraries/LibWebView/SearchEngine.cpp
+ *   Libraries/LibWebView/Settings.cpp
+ */
 #include "WebViewURL.h"
 #include "Settings.h"
 

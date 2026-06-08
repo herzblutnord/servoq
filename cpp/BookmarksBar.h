@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/BookmarksBar.h
+ *   Libraries/LibWebView/BookmarkStore.cpp
+ */
 #pragma once
 
 #include <QPoint>
@@ -16,12 +25,12 @@ class BookmarksBar final : public QToolBar {
     Q_OBJECT
 public:
     explicit BookmarksBar(QWidget* parent = nullptr);
-    void rebuild(); // [ladybird: BookmarksBar.cpp:205-273]
+    void rebuild();
 
     void setOpenUrlCallback(std::function<void(QString const&)> cb)          { m_open_url_callback = std::move(cb); }
     void setOpenUrlInNewTabCallback(std::function<void(QString const&)> cb)  { m_open_url_in_new_tab_callback = std::move(cb); }
 
-    // Called by BrowserWindow on Ctrl+D — [ladybird: BrowserWindow.cpp:360]
+    // Called by BrowserWindow on Ctrl+D
     void showAddBookmarkDialog(QString const& title = {}, QString const& url = {});
 
 protected:

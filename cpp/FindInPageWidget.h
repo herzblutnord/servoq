@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2024, Ladybird Browser Initiative and contributors
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/FindInPageWidget.h
+ */
 #pragma once
 
 #include <QWidget>

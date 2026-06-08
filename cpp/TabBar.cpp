@@ -1,15 +1,13 @@
-#include "TabBar.h"
-
 /*
- * Portions of this file are adapted from Ladybird UI/Qt/TabBar.cpp and
- * UI/Qt/ChromeLayout.h.
- *
- * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
- * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
- * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
- *
+ * Copyright (c) 2024-2026, Ladybird Browser Initiative and contributors
+ * Copyright (c) 2024-2025, Valentin Gusel
  * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Derived from Ladybird:
+ *   UI/Qt/TabBar.cpp
+ *   UI/Qt/ChromeLayout.h
  */
+#include "TabBar.h"
 
 #include "BrowserWindow.h"
 #include "ChromeStyle.h"
@@ -351,7 +349,6 @@ void TabBar::resizeEvent(QResizeEvent* event)
     updateTabButtonGeometry();
 }
 
-// [ladybird: TabBar.cpp:427-432] — Qt calls tabLayoutChange() when tab geometry is
 // recalculated (initial show, tab insert/remove, layout mode change). Without this
 // override the close button stays at its construction-time position until the next
 // resizeEvent or hover, causing the "wrong position on first render" bug.
@@ -454,12 +451,12 @@ void TabBar::paintEvent(QPaintEvent*)
         painter.drawText(contents_rect, Qt::AlignLeft | Qt::AlignVCenter, title);
     }
 
-    if (m_drop_indicator_index >= 0 && count() > 0) { // [ladybird: TabBar.cpp:548]
+    if (m_drop_indicator_index >= 0 && count() > 0) {
         auto indicator_color = ChromeStyle::chrome_accent(palette());
-        indicator_color.setAlpha(220);                // [ladybird: TabBar.cpp:550]
-        painter.setPen(QPen(indicator_color, 3, Qt::SolidLine, Qt::RoundCap)); // [ladybird: TabBar.cpp:551]
+        indicator_color.setAlpha(220);
+        painter.setPen(QPen(indicator_color, 3, Qt::SolidLine, Qt::RoundCap));
 
-        if (is_vertical) { // [ladybird: TabBar.cpp:553-559]
+        if (is_vertical) {
             auto indicator_y = m_drop_indicator_index >= count()
                 ? visualTabRect(count() - 1).bottom() + 3
                 : visualTabRect(m_drop_indicator_index).top() + 1;
@@ -468,7 +465,7 @@ void TabBar::paintEvent(QPaintEvent*)
             return;
         }
 
-        auto indicator_x = m_drop_indicator_index >= count() // [ladybird: TabBar.cpp:561-567]
+        auto indicator_x = m_drop_indicator_index >= count()
             ? visualTabRect(count() - 1).right() + 3
             : visualTabRect(m_drop_indicator_index).left() + 1;
         indicator_x = std::max(2, std::min(width() - 3, indicator_x));
@@ -1232,11 +1229,11 @@ void TabWidget::rebuildLayoutForHorizontalTabs()
     m_tab_bar_row_layout->setSpacing(0);
     m_tab_bar_row_layout->setContentsMargins(12, 2, 4, 1);
     m_new_tab_button->setText({});
-    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsExpandedProperty, false); // [ladybird: TabBar.cpp:1658]
-    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsButtonProperty, true);    // [ladybird: TabBar.cpp:1659] must be true so custom paintEvent fires
+    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsExpandedProperty, false);
+    setDynamicPropertyIfNeeded(*m_new_tab_button, VerticalTabsButtonProperty, true);
     m_new_tab_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_new_tab_button->setFixedSize(HorizontalTabHeight, HorizontalTabHeight);
-    m_new_tab_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed); // [ladybird: TabBar.cpp:1662]
+    m_new_tab_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_tab_bar_row_layout->addWidget(m_tab_bar);
     m_tab_bar_row_layout->addWidget(m_new_tab_button, 0, Qt::AlignVCenter);
     m_tab_bar_row_layout->addStretch(1);
@@ -1378,7 +1375,7 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     updateTabLayout();
 }
 
-void TabWidget::deferUpdateVerticalTabsHoverExpanded() // [ladybird: TabBar.cpp:1944-1949]
+void TabWidget::deferUpdateVerticalTabsHoverExpanded()
 {
     QTimer::singleShot(0, this, [this]() {
         updateVerticalTabsHoverExpanded();
@@ -1420,10 +1417,10 @@ void TabWidget::updateChromeStyle()
         return;
     m_is_updating_chrome_style = true;
     auto style_sheet = ChromeStyle::tab_widget_style_sheet(palette());
-    m_tab_bar_row->setStyleSheet(style_sheet);                  // [ladybird: TabBar.cpp:1907]
-    m_vertical_tab_bar_column->setStyleSheet(style_sheet);      // [ladybird: TabBar.cpp:1908]
-    m_vertical_tabs_separator->setStyleSheet(style_sheet);      // [ladybird: TabBar.cpp:1909]
-    m_vertical_tabs_resize_handle->setStyleSheet(style_sheet);  // [ladybird: TabBar.cpp:1910]
+    m_tab_bar_row->setStyleSheet(style_sheet);
+    m_vertical_tab_bar_column->setStyleSheet(style_sheet);
+    m_vertical_tabs_separator->setStyleSheet(style_sheet);
+    m_vertical_tabs_resize_handle->setStyleSheet(style_sheet);
     m_is_updating_chrome_style = false;
 }
 
