@@ -21,14 +21,35 @@ file's header identifies which Ladybird source it was derived from. The Rust sid
 more and more, but I also intend to keep pulling in improvements from upstream where they
 make sense.
 
+# Feature status
+
+## Missing browser features (WIP)
+
+* Downloads UI
+* Search suggestions from search engines
+* Nested bookmark folders
+* Automatic filter-list updates
+* Per-site zoom settings
+* DevTools
+
+### Features currently blocked by Servo
+
+* Find in page, including match count
+* Stop loading the current page
+* Printing pages
+* Tab audio indicator
+* Accessing selected page text from the browser UI
+* Cosmetic content blocking
+
+
 ## A note on how this was built
 
 I'm a computer science student from Germany. I know my way around code, but I'm not
 particularly experienced, and systems-level C++/Rust is well outside my usual territory.
-This was a personal experiment: could I actually pull this off, leaning on AI tools
-(mainly Claude Code) for the parts I'd otherwise get stuck on? Turns out, mostly yes.
+This was a personal experiment: could I actually pull this off, leaning on AI tools 
+for the parts I'd otherwise get stuck on? Turns out, mostly yes.
 
-Worth being upfront about: both Ladybird and Servo are not fans of AI-generated
+Worth being upfront about: both Ladybird and Servo are not to keen on AI-generated
 contributions to their own codebases. ServoQ is an independent hobbyist project and does
 not contribute back to either upstream.
 

@@ -1077,6 +1077,13 @@ bool TabWidget::event(QEvent* event)
 
 bool TabWidget::eventFilter(QObject* watched, QEvent* event)
 {
+    if (m_main_window_filter_installed && watched == window() &&
+        (event->type() == QEvent::Move || event->type() == QEvent::Resize)) {
+        if (m_vertical_tab_bar_column->isWindow())
+            updateVerticalTabsOverlayGeometry();
+        return false;
+    }
+
     if (watched == m_vertical_tabs_resize_handle) {
         auto reset_resize = [this] {
             m_is_resizing_vertical_tabs = false;
@@ -1311,7 +1318,14 @@ void TabWidget::updateVerticalTabsOverlayGeometry()
         return;
     }
     auto chrome_height = m_toolbar_container->height();
-    m_vertical_tab_bar_column->setGeometry(0, chrome_height, currentVerticalTabsWidth(), std::max(0, height() - chrome_height));
+    auto panel_width = currentVerticalTabsWidth();
+    auto panel_height = std::max(0, height() - chrome_height);
+    if (m_vertical_tab_bar_column->isWindow()) {
+        m_vertical_tab_bar_column->move(mapToGlobal(QPoint(0, chrome_height)));
+        m_vertical_tab_bar_column->resize(panel_width, panel_height);
+    } else {
+        m_vertical_tab_bar_column->setGeometry(0, chrome_height, panel_width, panel_height);
+    }
     m_vertical_tab_bar_column->show();
     m_vertical_tab_bar_column->raise();
 }
@@ -1367,13 +1381,38 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     if (m_vertical_tabs_hover_expanded == expanded)
         return;
     m_vertical_tabs_hover_expanded = expanded;
-    if (expanded)
+    if (expanded) {
+        // The tab column must be a floating window while hover-expanded so it
+        // paints above the native embedded webview surface, which always renders
+        // above ordinary child widgets regardless of z-order calls.
+        //
+        // Qt::ToolTip (with a parent) maps to xdg_popup on Wayland, which lets
+        // xdg_positioner enforce the exact position.  Qt::Tool maps to
+        // xdg_toplevel, whose position is compositor-controlled and ignored.
+        // Keep the parent as window() so the compositor knows which surface to
+        // anchor against when computing the popup offset.
+        m_vertical_tab_bar_column->hide();
+        m_vertical_tab_bar_column->setParent(window(), Qt::ToolTip | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+        m_vertical_tab_bar_column->setAttribute(Qt::WA_ShowWithoutActivating);
         m_vertical_tabs_hover_collapse_timer->start();
-    else
+        if (!m_main_window_filter_installed) {
+            if (auto* w = window()) {
+                w->installEventFilter(this);
+                m_main_window_filter_installed = true;
+            }
+        }
+    } else {
+        // setParent(parent, Qt::Widget) resets the window-type flags in one
+        // call so isWindow() returns false and the overlay reverts to a normal
+        // child widget positioned via setGeometry().
+        m_vertical_tab_bar_column->hide();
+        m_vertical_tab_bar_column->setParent(this, Qt::Widget);
         m_vertical_tabs_hover_collapse_timer->stop();
+    }
     m_tab_bar->setTabLayout(currentTabLayout());
     auto side_margin = verticalTabsSideMargin(m_tab_bar->tabLayout() != TabLayout::VerticalCollapsed);
     m_vertical_tab_bar_column_layout->setContentsMargins(side_margin, VerticalTabsTopMargin, side_margin, 8);
+    updateChromeStyle();
     updateTabLayout();
 }
 
