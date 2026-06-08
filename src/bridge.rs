@@ -1,6 +1,4 @@
 // Copyright (c) 2022-2026, Ladybird Browser Initiative and contributors
-// Copyright (c) 2024-2025, Valentin Gusel
-// SPDX-License-Identifier: BSD-2-Clause
 //
 // Derived from Ladybird:
 //   UI/Qt/BrowserWindow.cpp

@@ -1,5 +1,3 @@
-// Copyright (c) 2024-2025, Valentin Gusel
-// SPDX-License-Identifier: BSD-2-Clause
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug)]
