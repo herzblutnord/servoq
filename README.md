@@ -37,11 +37,11 @@ not contribute back to either upstream.
 **Dependencies** (Arch Linux package names):
 
 ```
-rust cargo base-devel gcc qt6-base qt6-svg qt6-networkauth qt6-wayland pkg-config qt6-tools
+rust cargo base-devel gcc qt6-base qt6-svg qt6-networkauth qt6-wayland pkg-config qt6-tools clang
 ```
 
 ```sh
-git clone https://github.com/yourusername/servoq
+git clone https://github.com/herzblutnord/servoq
 cd servoq
 cargo build --release --features servo-engine
 cargo run --release --features servo-engine
