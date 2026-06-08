@@ -160,8 +160,10 @@ void LocationEdit::setUrl(QString const& url)
 void LocationEdit::setUrl(std::optional<QString> url)
 {
     m_url = std::move(url);
-    if (!hasFocus())
+    if (!hasFocus()) {
         setText(m_url.has_value() ? WebViewURL::url_for_display(*m_url) : text());
+        setCursorPosition(0); // [ladybird: LocationEdit.cpp:773] show URL from start when unfocused
+    }
     updateLocationIcon(); // [ladybird: LocationEdit.cpp:776]
 }
 

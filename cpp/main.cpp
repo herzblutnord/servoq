@@ -1,9 +1,12 @@
 #include "qt_app.h"
 #include "BrowserWindow.h"
+#include "Icon.h"
 #include "servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QDebug>
 
 namespace servoq {
 
@@ -14,6 +17,16 @@ int run_qt_application()
     static char* argv[] = { app_name, nullptr };
 
     QApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("ServoQ"));
+    QCoreApplication::setOrganizationName(QStringLiteral("ServoQ"));
+    auto icon = ServoQ::app_icon();
+    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+        qInfo().nospace() << "SERVOQ_DEBUG app_icon loaded=" << !icon.isNull()
+                          << " available_sizes=" << icon.availableSizes().size();
+    app.setWindowIcon(icon);
+#ifdef Q_OS_LINUX
+    app.setDesktopFileName(QStringLiteral("servoq"));
+#endif
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
         servoq::begin_servo_shutdown();
     });
@@ -35,6 +48,7 @@ int run_qt_application()
     servoq::init_servo();
 
     ServoQ::BrowserWindow window;
+    window.setWindowIcon(icon);
     window.show();
     int result = app.exec();
     servoq::begin_servo_shutdown();

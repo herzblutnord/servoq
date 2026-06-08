@@ -13,6 +13,14 @@ fn main() {
         .atleast_version("6")
         .probe("Qt6Widgets")
         .expect("Qt 6 Widgets development package must be available via pkg-config");
+    let qt_svg = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6Svg")
+        .expect("Qt 6 Svg development package must be available via pkg-config");
+    let qt_network = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6Network")
+        .expect("Qt 6 Network development package must be available via pkg-config");
     let qt_wayland = pkg_config::Config::new()
         .atleast_version("6")
         .probe("Qt6WaylandClient")
@@ -62,6 +70,12 @@ fn main() {
     for path in &qt.include_paths {
         build.include(path);
     }
+    for path in &qt_svg.include_paths {
+        build.include(path);
+    }
+    for path in &qt_network.include_paths {
+        build.include(path);
+    }
     if let Some(qt_wayland) = &qt_wayland {
         for path in &qt_wayland.include_paths {
             build.include(path);
@@ -78,6 +92,12 @@ fn main() {
     }
 
     for flag in &qt.defines {
+        match &flag.1 {
+            Some(value) => build.define(&flag.0, Some(value.as_str())),
+            None => build.define(&flag.0, None),
+        };
+    }
+    for flag in qt_svg.defines.iter().chain(qt_network.defines.iter()) {
         match &flag.1 {
             Some(value) => build.define(&flag.0, Some(value.as_str())),
             None => build.define(&flag.0, None),
@@ -134,4 +154,6 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp");
     println!("cargo:rerun-if-changed=cpp/resources.qrc");
     println!("cargo:rerun-if-changed=cpp/icons/ladybird.png");
+    println!("cargo:rerun-if-changed=cpp/icons/servo.png");
+    println!("cargo:rerun-if-changed=data/servoq.desktop");
 }

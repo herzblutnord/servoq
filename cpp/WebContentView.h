@@ -90,6 +90,7 @@ protected:
 private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
     void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
+    void takeFocusFromContentClick();
     bool startEngineIfNeeded();
     void forwardResizeToEngine();
     bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl);

@@ -23,18 +23,26 @@
 #include <QCursor>
 #include <QFocusEvent>
 #include <QGuiApplication>
+#include <QHash>
 #include <QImage>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QMap>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QStyleHints>
+#include <QSvgRenderer>
 #include <QTimer>
+#include <QUrl>
 #include <QWheelEvent>
 #include <QWindow>
 #include <QtGui/qguiapplication_platform.h>
@@ -44,6 +52,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 // ── Global registry (file-local, accessible to both namespace blocks below) ──
 // Maps tab_id -> WebContentView* so Rust-side callbacks can locate their widget.
@@ -135,6 +144,24 @@ static ServoQ::WebContentView*& g_wayland_owner()
     return s_owner;
 }
 
+static int& g_wayland_owner_generation()
+{
+    static int s_generation { 0 };
+    return s_generation;
+}
+
+static QHash<int, int>& g_favicon_generations()
+{
+    static QHash<int, int> s_generations;
+    return s_generations;
+}
+
+static QNetworkAccessManager& favicon_network_manager()
+{
+    static QNetworkAccessManager manager;
+    return manager;
+}
+
 static void maybe_log_qt_perf()
 {
     if (!perf_enabled())
@@ -169,6 +196,11 @@ static void debug_log(char const* event, int tab_id, QString const& detail)
 {
     if (debug_enabled())
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+static void debug_log_favicon(int tab_id, QString const& detail)
+{
+    debug_log("favicon", tab_id, detail);
 }
 
 static void debug_log(char const* event, int tab_id, QSize const& size, qreal dpr)
@@ -214,6 +246,7 @@ public:
 
     void requestServoPresent()
     {
+        m_present_generation_requested = g_wayland_owner_generation();
         requestUpdate();
     }
 
@@ -224,11 +257,37 @@ protected:
             qt_perf_stats().qwindow_update_requests++;
             if (g_servo_shutting_down().load(std::memory_order_acquire))
                 return true;
-            if (m_owner && m_owner->waylandRendererActive() && m_owner->takeWaylandPresentPending()) {
+            if (!m_owner || g_wayland_owner() != m_owner || m_present_generation_requested != g_wayland_owner_generation()) {
+                if (m_owner)
+                    m_owner->m_wayland_present_pending = false;
+                debug_log("wayland_present_skipped_stale_owner", m_owner ? m_owner->tabId() : 0);
+                maybe_log_qt_perf();
+                return true;
+            }
+            if (!m_owner->isVisible() || (g_wayland_container() && !g_wayland_container()->isVisible())) {
+                m_owner->m_wayland_present_pending = false;
+                debug_log("wayland_present_skipped_hidden", m_owner->tabId());
+                maybe_log_qt_perf();
+                return true;
+            }
+            if (m_owner->waylandRendererActive() && m_owner->takeWaylandPresentPending()) {
                 qt_perf_stats().qwindow_presents++;
+                auto owner_generation = g_wayland_owner_generation();
                 m_owner->m_wayland_present_in_progress = true;
+                debug_log("wayland_present_enter", m_owner->tabId(),
+                    QStringLiteral("owner_generation=%1").arg(owner_generation));
                 servoq::present_wayland_webview(m_owner->tabId());
                 m_owner->m_wayland_present_in_progress = false;
+                debug_log("wayland_present_leave", m_owner->tabId(),
+                    QStringLiteral("owner_generation=%1 current_owner=%2 current_generation=%3")
+                        .arg(owner_generation)
+                        .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                        .arg(g_wayland_owner_generation()));
+                if (g_wayland_owner() != m_owner || owner_generation != g_wayland_owner_generation()) {
+                    m_owner->m_wayland_dirty_after_present = false;
+                    maybe_log_qt_perf();
+                    return true;
+                }
                 if (m_owner->m_wayland_dirty_after_present) {
                     m_owner->m_wayland_dirty_after_present = false;
                     m_owner->requestWaylandRepaint();
@@ -266,8 +325,10 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override
     {
-        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire)) {
+            m_owner->takeFocusFromContentClick();
             m_owner->forwardWindowMouseButton(0, qtMouseButtonToServo(event->button()), event);
+        }
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override
@@ -355,6 +416,7 @@ private:
     }
 
     WebContentView* m_owner { nullptr };
+    int m_present_generation_requested { 0 };
 };
 
 WebContentView::WebContentView(QWidget* parent)
@@ -396,6 +458,7 @@ WebContentView::~WebContentView()
     m_engine_tick_timer->stop();
     if (g_wayland_owner() == this) {
         g_wayland_owner() = nullptr;
+        ++g_wayland_owner_generation();
         if (g_wayland_window())
             g_wayland_window()->setOwner(nullptr);
         if (g_wayland_container())
@@ -403,6 +466,7 @@ WebContentView::~WebContentView()
     }
     if (m_tab_id != 0) {
         debug_log("close_webview", m_tab_id);
+        g_favicon_generations().remove(m_tab_id);
         g_view_registry().remove(m_tab_id);
         if (!g_servo_shutting_down().load(std::memory_order_acquire))
             servoq::close_webview(m_tab_id);
@@ -503,6 +567,7 @@ bool WebContentView::attachSharedWaylandWindow()
             previous_owner->m_wayland_present_in_progress = false;
         }
         g_wayland_owner() = this;
+        ++g_wayland_owner_generation();
         m_wayland_window->setOwner(this);
         // Do NOT call setParent() — the container lives under a stable parent
         // (the QStackedWidget) for the lifetime of the app. Just reposition it.
@@ -513,8 +578,13 @@ bool WebContentView::attachSharedWaylandWindow()
                 << "tab_switch_path=shared-qt-surface-attached previous_tab_id="
                 << (previous_owner ? previous_owner->m_tab_id : 0)
                 << " active_tab_id=" << m_tab_id
-                << " webview_id=" << m_tab_id;
+                << " webview_id=" << m_tab_id
+                << " owner_generation=" << g_wayland_owner_generation();
         }
+        debug_log("wayland_owner_changed", m_tab_id,
+            QStringLiteral("previous=%1 owner_generation=%2")
+                .arg(previous_owner ? previous_owner->m_tab_id : 0)
+                .arg(g_wayland_owner_generation()));
     }
     return true;
 }
@@ -652,23 +722,32 @@ void WebContentView::requestWaylandRepaint()
 {
     if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire))
         return;
-    if (!isVisible())
+    if (!isVisible()) {
+        debug_log("wayland_present_skipped_request_hidden_view", m_tab_id);
         return;
-    if (g_wayland_owner() != this)
+    }
+    if (g_wayland_owner() != this) {
+        debug_log("wayland_present_skipped_request_inactive_owner", m_tab_id,
+            QStringLiteral("current_owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
         return;
+    }
     qt_perf_stats().qwindow_present_requests++;
     if (m_wayland_present_in_progress) {
         m_wayland_dirty_after_present = true;
+        debug_log("wayland_present_deferred_in_progress", m_tab_id);
         qt_perf_stats().qwindow_present_requests_coalesced++;
         maybe_log_qt_perf();
         return;
     }
     if (m_wayland_present_pending) {
+        debug_log("wayland_present_coalesced_pending", m_tab_id);
         qt_perf_stats().qwindow_present_requests_coalesced++;
         maybe_log_qt_perf();
         return;
     }
     m_wayland_present_pending = true;
+    debug_log("wayland_present_requested", m_tab_id,
+        QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
     m_wayland_window->requestServoPresent();
     maybe_log_qt_perf();
 }
@@ -861,6 +940,19 @@ void WebContentView::forwardWindowMouseButton(int action, int button, QMouseEven
     servoq::forward_mouse_button(m_tab_id, action, button, x, y);
 }
 
+void WebContentView::takeFocusFromContentClick()
+{
+    if (auto* focus_widget = QApplication::focusWidget()) {
+        if (focus_widget != this && focus_widget != m_wayland_container)
+            focus_widget->clearFocus();
+    }
+    setFocus(Qt::MouseFocusReason);
+    if (m_wayland_container && g_wayland_owner() == this)
+        m_wayland_container->setFocus(Qt::MouseFocusReason);
+    if (!g_servo_shutting_down().load(std::memory_order_acquire))
+        servoq::forward_focus(m_tab_id, true);
+}
+
 // action 0 = Down, 1 = Up  (maps to MouseButtonAction::Down/Up in servo_engine.rs)
 // button 0 = Left, 1 = Middle, 2 = Right
 
@@ -868,6 +960,7 @@ void WebContentView::mousePressEvent(QMouseEvent* event)
 {
     if (g_servo_shutting_down().load(std::memory_order_acquire))
         return;
+    takeFocusFromContentClick();
     int button = -1;
     if (event->button() == Qt::LeftButton)        button = 0;
     else if (event->button() == Qt::MiddleButton) button = 1;
@@ -994,12 +1087,16 @@ void WebContentView::hideEvent(QHideEvent* event)
         if (m_wayland_window)
             m_wayland_window->setOwner(nullptr);
         g_wayland_owner() = nullptr;
+        ++g_wayland_owner_generation();
         if (perf_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
                 << "tab_switch_path=shared-qt-surface-offscreen previous_tab_id=" << m_tab_id
-                << " active_tab_id=0 webview_id=" << m_tab_id;
+                << " active_tab_id=0 webview_id=" << m_tab_id
+                << " owner_generation=" << g_wayland_owner_generation();
         }
+        debug_log("wayland_owner_cleared", m_tab_id,
+            QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
     }
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
@@ -1062,6 +1159,232 @@ namespace servoq {
 static ServoQ::WebContentView* find_view(::std::int32_t tab_id)
 {
     return g_view_registry().value(static_cast<int>(tab_id), nullptr);
+}
+
+static QString http_header_value(QNetworkReply* reply, QByteArray const& header)
+{
+    return QString::fromLatin1(reply->rawHeader(header).trimmed());
+}
+
+static QNetworkRequest favicon_request(QUrl const& url)
+{
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("ServoQ/0.1"));
+    request.setTransferTimeout(15000);
+    return request;
+}
+
+static bool bytes_look_like_svg(QByteArray const& bytes)
+{
+    auto prefix = bytes.left(512).trimmed().toLower();
+    return prefix.startsWith("<svg") || (prefix.startsWith("<?xml") && prefix.contains("<svg"));
+}
+
+static QString detect_favicon_format(QUrl const& favicon_url, QString const& content_type, QByteArray const& bytes)
+{
+    auto path = favicon_url.path().toLower();
+    auto mime = content_type.toLower();
+    if (path.endsWith(QStringLiteral(".svg")) || mime.contains(QStringLiteral("image/svg+xml")) || bytes_look_like_svg(bytes))
+        return QStringLiteral("svg");
+    QBuffer buffer;
+    buffer.setData(bytes);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);
+    auto format = reader.format();
+    if (!format.isEmpty())
+        return QString::fromLatin1(format).toLower();
+    if (path.endsWith(QStringLiteral(".ico")))
+        return QStringLiteral("ico");
+    if (path.endsWith(QStringLiteral(".png")))
+        return QStringLiteral("png");
+    if (path.endsWith(QStringLiteral(".jpg")) || path.endsWith(QStringLiteral(".jpeg")))
+        return QStringLiteral("jpeg");
+    return QStringLiteral("unknown");
+}
+
+static std::optional<QImage> decode_favicon_bytes(int tab_id, QUrl const& page_url, QUrl const& favicon_url, QString const& content_type, QByteArray const& bytes)
+{
+    auto format = detect_favicon_format(favicon_url, content_type, bytes);
+    debug_log_favicon(tab_id,
+        QStringLiteral("page_url=%1 favicon_url=%2 mime=%3 input_bytes=%4 detected_input_format=%5")
+            .arg(page_url.toString(), favicon_url.toString(), content_type.isEmpty() ? QStringLiteral("<none>") : content_type)
+            .arg(bytes.size())
+            .arg(format));
+
+    if (format == QStringLiteral("svg")) {
+        QSvgRenderer renderer(bytes);
+        if (!renderer.isValid()) {
+            debug_log_favicon(tab_id,
+                QStringLiteral("page_url=%1 favicon_url=%2 decode_failure=invalid_svg").arg(page_url.toString(), favicon_url.toString()));
+            return {};
+        }
+
+        static constexpr int FaviconBitmapSize = 64;
+        QImage image(FaviconBitmapSize, FaviconBitmapSize, QImage::Format_RGBA8888);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        renderer.render(&painter, QRectF(0, 0, FaviconBitmapSize, FaviconBitmapSize));
+        painter.end();
+        debug_log_favicon(tab_id,
+            QStringLiteral("page_url=%1 favicon_url=%2 decoded_output=%3x%4")
+                .arg(page_url.toString(), favicon_url.toString())
+                .arg(image.width())
+                .arg(image.height()));
+        return image;
+    }
+
+    QBuffer buffer;
+    buffer.setData(bytes);
+    if (!buffer.open(QIODevice::ReadOnly)) {
+        debug_log_favicon(tab_id,
+            QStringLiteral("page_url=%1 favicon_url=%2 decode_failure=buffer_open_failed").arg(page_url.toString(), favicon_url.toString()));
+        return {};
+    }
+
+    QImageReader reader(&buffer);
+    reader.setAutoTransform(true);
+    QImage image = reader.read();
+    if (image.isNull()) {
+        debug_log_favicon(tab_id,
+            QStringLiteral("page_url=%1 favicon_url=%2 decode_failure=%3")
+                .arg(page_url.toString(), favicon_url.toString(), reader.errorString()));
+        return {};
+    }
+
+    auto rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    debug_log_favicon(tab_id,
+        QStringLiteral("page_url=%1 favicon_url=%2 decoded_output=%3x%4")
+            .arg(page_url.toString(), favicon_url.toString())
+            .arg(rgba.width())
+            .arg(rgba.height()));
+    return rgba;
+}
+
+static void apply_decoded_favicon(ServoQ::WebContentView* view, QImage const& image)
+{
+    if (!view || !view->tab())
+        return;
+    auto copy = image.convertToFormat(QImage::Format_RGBA8888);
+    view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(copy)));
+
+    QByteArray png_bytes;
+    QBuffer buffer(&png_bytes);
+    if (buffer.open(QIODevice::WriteOnly) && copy.save(&buffer, "PNG")) {
+        auto url = view->tab()->url();
+        auto favicon = QString::fromLatin1(png_bytes.toBase64());
+        auto changed = ServoQ::BookmarkStore::the()->updateFavicon(url, favicon);
+        debug_log_favicon(view->tabId(),
+            QStringLiteral("page_url=%1 storage=png_base64 png_bytes=%2 bookmark_updated=%3")
+                .arg(url)
+                .arg(png_bytes.size())
+                .arg(changed ? 1 : 0));
+    }
+}
+
+static QString extract_html_attr(QString const& tag, QString const& attr)
+{
+    QRegularExpression re(QStringLiteral("\\b%1\\s*=\\s*(['\"])(.*?)\\1").arg(QRegularExpression::escape(attr)),
+        QRegularExpression::CaseInsensitiveOption);
+    auto match = re.match(tag);
+    if (match.hasMatch())
+        return match.captured(2);
+
+    QRegularExpression unquoted(QStringLiteral("\\b%1\\s*=\\s*([^\\s>]+)").arg(QRegularExpression::escape(attr)),
+        QRegularExpression::CaseInsensitiveOption);
+    match = unquoted.match(tag);
+    return match.hasMatch() ? match.captured(1) : QString {};
+}
+
+static QUrl favicon_url_from_html(QUrl const& page_url, QByteArray const& html)
+{
+    auto text = QString::fromUtf8(html);
+    QRegularExpression link_re(QStringLiteral("<link\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    auto it = link_re.globalMatch(text);
+    while (it.hasNext()) {
+        auto tag = it.next().captured(0);
+        auto rel = extract_html_attr(tag, QStringLiteral("rel")).toLower();
+        if (!rel.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).contains(QStringLiteral("icon")))
+            continue;
+        auto href = extract_html_attr(tag, QStringLiteral("href"));
+        if (!href.isEmpty())
+            return page_url.resolved(QUrl(href));
+    }
+    return page_url.resolved(QUrl(QStringLiteral("/favicon.ico")));
+}
+
+static void fetch_favicon_bytes(int tab_id, int generation, QUrl const& page_url, QUrl const& favicon_url)
+{
+    debug_log_favicon(tab_id,
+        QStringLiteral("page_url=%1 favicon_url=%2 fetch=icon").arg(page_url.toString(), favicon_url.toString()));
+    auto* reply = favicon_network_manager().get(favicon_request(favicon_url));
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, tab_id, generation, page_url, favicon_url] {
+        reply->deleteLater();
+        if (g_favicon_generations().value(tab_id) != generation) {
+            debug_log_favicon(tab_id,
+                QStringLiteral("page_url=%1 favicon_url=%2 skipped=stale_generation").arg(page_url.toString(), favicon_url.toString()));
+            return;
+        }
+        if (reply->error() != QNetworkReply::NoError) {
+            debug_log_favicon(tab_id,
+                QStringLiteral("page_url=%1 favicon_url=%2 decode_failure=network_error:%3")
+                    .arg(page_url.toString(), favicon_url.toString(), reply->errorString()));
+            return;
+        }
+        auto content_type = http_header_value(reply, "content-type");
+        auto bytes = reply->readAll();
+        auto decoded = decode_favicon_bytes(tab_id, page_url, favicon_url, content_type, bytes);
+        if (!decoded.has_value())
+            return;
+        auto* view = find_view(tab_id);
+        if (!view || !view->tab() || QUrl(view->tab()->url()) != page_url) {
+            debug_log_favicon(tab_id,
+                QStringLiteral("page_url=%1 favicon_url=%2 skipped=stale_page").arg(page_url.toString(), favicon_url.toString()));
+            return;
+        }
+        apply_decoded_favicon(view, decoded.value());
+    });
+}
+
+static void start_favicon_probe(ServoQ::WebContentView* view)
+{
+    if (!view || !view->tab())
+        return;
+    QUrl page_url(view->tab()->url());
+    if (!page_url.isValid() || (page_url.scheme() != QStringLiteral("http") && page_url.scheme() != QStringLiteral("https")))
+        return;
+
+    auto tab_id = view->tabId();
+    auto generation = g_favicon_generations().value(tab_id) + 1;
+    g_favicon_generations().insert(tab_id, generation);
+    debug_log_favicon(tab_id, QStringLiteral("page_url=%1 fetch=html generation=%2").arg(page_url.toString()).arg(generation));
+
+    auto* reply = favicon_network_manager().get(favicon_request(page_url));
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, tab_id, generation, page_url] {
+        reply->deleteLater();
+        if (g_favicon_generations().value(tab_id) != generation) {
+            debug_log_favicon(tab_id, QStringLiteral("page_url=%1 skipped=stale_html_generation").arg(page_url.toString()));
+            return;
+        }
+
+        if (reply->error() != QNetworkReply::NoError) {
+            debug_log_favicon(tab_id,
+                QStringLiteral("page_url=%1 html_fetch_failure=%2 fallback=/favicon.ico")
+                    .arg(page_url.toString(), reply->errorString()));
+            fetch_favicon_bytes(tab_id, generation, page_url, page_url.resolved(QUrl(QStringLiteral("/favicon.ico"))));
+            return;
+        }
+
+        auto content_type = http_header_value(reply, "content-type");
+        auto html = reply->readAll();
+        auto favicon_url = favicon_url_from_html(page_url, html);
+        debug_log_favicon(tab_id,
+            QStringLiteral("page_url=%1 html_mime=%2 html_bytes=%3 favicon_url=%4")
+                .arg(page_url.toString(), content_type.isEmpty() ? QStringLiteral("<none>") : content_type)
+                .arg(html.size())
+                .arg(favicon_url.toString()));
+        fetch_favicon_bytes(tab_id, generation, page_url, favicon_url);
+    });
 }
 
 bool servo_shutdown_started()
@@ -1158,6 +1481,7 @@ void notify_load_finished(::std::int32_t tab_id)
     }
     debug_log("notify_load_finished", tab_id);
     view->tab()->on_load_finish();
+    start_favicon_probe(view);
 }
 
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)
@@ -1276,9 +1600,17 @@ void notify_favicon_changed(::std::int32_t tab_id,
     if (!view || !view->tab())
         return;
     if (width <= 0 || height <= 0 || data.empty()) {
+        debug_log_favicon(tab_id,
+            QStringLiteral("page_url=%1 source=servo decoded_output=empty action=clear").arg(view->tab()->url()));
         view->tab()->on_favicon_change({});
         return;
     }
+    debug_log_favicon(tab_id,
+        QStringLiteral("page_url=%1 source=servo input_bytes=%2 detected_input_format=servo-decoded-rgba decoded_output=%3x%4")
+            .arg(view->tab()->url())
+            .arg(data.size())
+            .arg(width)
+            .arg(height));
     QImage img(data.data(), width, height, QImage::Format_RGBA8888);
     auto copy = img.copy();
     view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(copy)));
@@ -1307,7 +1639,10 @@ void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape)
     auto* view = find_view(tab_id);
     if (!view)
         return;
-    view->setCursor(QCursor(static_cast<Qt::CursorShape>(cursor_shape)));
+    auto qt_cursor = QCursor(static_cast<Qt::CursorShape>(cursor_shape));
+    view->setCursor(qt_cursor);
+    if (auto* container = g_wayland_container())
+        container->setCursor(qt_cursor);
 }
 
 void notify_fullscreen_changed(::std::int32_t tab_id, bool fullscreen)

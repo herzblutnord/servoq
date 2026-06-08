@@ -811,6 +811,9 @@ mod engine {
                 let w = favicon.width as i32;
                 let h = favicon.height as i32;
                 let raw = favicon.data();
+                if std::env::var_os("SERVOQ_DEBUG").is_some() {
+                    eprintln!("[servoq favicon] tab_id={} format={:?} size={}x{} bytes={}", self.tab_id, favicon.format, w, h, raw.len());
+                }
                 let rgba8: Vec<u8> = match favicon.format {
                     PixelFormat::RGBA8 => raw.to_vec(),
                     PixelFormat::BGRA8 => {
@@ -820,7 +823,15 @@ mod engine {
                         }
                         out
                     }
-                    _ => { return; }
+                    PixelFormat::RGB8 => {
+                        raw.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255u8]).collect()
+                    }
+                    PixelFormat::K8 => {
+                        raw.iter().flat_map(|&k| [k, k, k, 255u8]).collect()
+                    }
+                    PixelFormat::KA8 => {
+                        raw.chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect()
+                    }
                 };
                 crate::bridge::ffi::notify_favicon_changed(self.tab_id, &rgba8, w, h);
             } else {
@@ -1441,7 +1452,7 @@ mod engine {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return;
         }
-        let Some((webview, context, size, url)) = ENGINE.with(|s| {
+        let Some((webview, context, size, url, active)) = ENGINE.with(|s| {
             let s = s.borrow();
             let engine = s.as_ref()?;
             let tab = engine.tabs.get(&id)?;
@@ -1451,12 +1462,18 @@ mod engine {
                 context,
                 tab.physical_size,
                 tab.current_url.clone(),
+                tab.active,
             ))
         }) else {
             return;
         };
+        if !active {
+            debug_log_detail("wayland_present_skipped_inactive_tab", id, &url);
+            return;
+        }
 
         let started = Instant::now();
+        debug_log_detail("wayland_present_enter", id, &url);
         let make_current_started = Instant::now();
         if let Err(error) = context.make_current() {
             eprintln!("[servoq] Wayland window renderer present failed: make_current: {error:?}");
@@ -1477,6 +1494,7 @@ mod engine {
             size,
             &url,
         );
+        debug_log_detail("wayland_present_leave", id, format!("url={url} swap_ms={:.2}", swap_time.as_secs_f64() * 1000.0));
     }
 
     pub fn load_url(id: i32, url_str: &str) {

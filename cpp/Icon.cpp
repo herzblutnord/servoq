@@ -27,7 +27,7 @@ QIcon load_icon_from_uri(QString const& uri)
 
 QIcon app_icon()
 {
-    return QIcon { QStringLiteral(":/Icons/ladybird.png") };
+    return QIcon { QStringLiteral(":/Icons/servo.png") };
 }
 
 static QPen chrome_icon_pen(QColor const& color, qreal width)
