@@ -1,0 +1,135 @@
+#[cxx::bridge(namespace = "servoq")]
+pub mod ffi {
+    unsafe extern "C++" {
+        include!("servoq/cpp/qt_app.h");
+        fn run_qt_application() -> i32;
+
+        // Frame and delegate notifications: Rust -> C++ (safe per CXX's unsafe extern "C++" contract)
+        include!("servoq/cpp/servo_callbacks.h");
+        fn deliver_frame(tab_id: i32, bytes: &[u8], width: i32, height: i32);
+        fn notify_url_changed(tab_id: i32, url: &str);
+        fn notify_title_changed(tab_id: i32, title: &str);
+        fn notify_load_started(tab_id: i32, url: &str);
+        fn notify_load_finished(tab_id: i32);
+        fn notify_status_changed(tab_id: i32, text: &str);
+        fn notify_webview_crashed(tab_id: i32, reason: &str);
+        fn notify_request_blocked(tab_id: i32, url: &str);
+        fn content_blocking_enabled() -> bool;
+        fn content_blocking_host_allowlisted(host: &str) -> bool;
+        fn webcontent_frame_pending(tab_id: i32) -> bool;
+        fn request_wayland_window_repaint(tab_id: i32);
+        // Favicon: RGBA8 bytes (width*height*4), 0 size = clear to default icon.
+        fn notify_favicon_changed(tab_id: i32, data: &[u8], width: i32, height: i32);
+        // Cursor shape: ServoQ cursor code; C++ maps it explicitly to Qt.
+        fn notify_cursor_changed(tab_id: i32, cursor_shape: i32);
+        // Fullscreen toggle.
+        fn notify_fullscreen_changed(tab_id: i32, fullscreen: bool);
+        // History list: newline-separated URLs, current index.
+        fn notify_history_changed(tab_id: i32, urls: &str, current: i32);
+        // window.open() / target=_blank: create a new tab for an already-built WebView.
+        fn request_open_tab_for_id(tab_id: i32);
+        // Context menu: newline-separated "action_id\tlabel\tenabled" or "sep".
+        // Returns selected action_id (>=0) or -1 for dismissed.
+        fn show_context_menu_sync(tab_id: i32, items: &str) -> i32;
+        // Web Notification API desktop notification.
+        fn show_notification(tab_id: i32, title: &str, body: &str);
+        // Posts a custom QEvent to the Qt main thread to wake the event loop.
+        // Called from Servo's background threads (paint, layout, font loading).
+        // QCoreApplication::postEvent() is thread-safe.
+        fn servoq_wake_event_loop();
+    }
+
+    extern "Rust" {
+        // Called from run_qt_application() before window.show() to initialize
+        // Servo at startup, before Qt show/resize/paint events begin flowing.
+        fn init_servo();
+
+        // Existing tab-lifecycle bridge (used by BrowserWindow / Tab chrome)
+        fn create_tab() -> i32;
+        fn close_tab(id: i32);
+        fn load_url(id: i32, url: &str);
+        fn go_back(id: i32);
+        fn go_forward(id: i32);
+        fn reload(id: i32);
+        fn toggle_bookmark(id: i32);
+        fn show_find_in_page(id: i32);
+        fn hide_find_in_page(id: i32);
+
+        fn current_url(id: i32) -> String;
+        fn title(id: i32) -> String;
+        fn loading(id: i32) -> bool;
+        fn can_go_back(id: i32) -> bool;
+        fn can_go_forward(id: i32) -> bool;
+        fn status_text(id: i32) -> String;
+        fn find_bar_visible(id: i32) -> bool;
+
+        // Page zoom — [ladybird: BrowserWindow.cpp:1372-1374] mirrors zoom_in/zoom_out on view()
+        fn set_page_zoom(id: i32, zoom: f32);
+        fn page_zoom(id: i32) -> f32;
+
+        // Engine lifecycle: called by WebContentView when widget is shown/hidden/destroyed
+        fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
+        fn create_webview_wayland_window(
+            id: i32,
+            url: &str,
+            w: i32,
+            h: i32,
+            scale: f32,
+            wl_display: u64,
+            wl_surface: u64,
+            allow_software_gl: bool,
+        ) -> bool;
+        fn close_webview(id: i32);
+        fn shutdown_servo();
+        fn tick_webview(id: i32);
+        // Called by BrowserWindow::eventFilter on the Qt EventLoopWaker wake event.
+        fn tick_servo();
+        fn present_wayland_webview(id: i32);
+
+        // Input forwarding: called by WebContentView event handlers
+        fn forward_mouse_move(id: i32, x: f32, y: f32);
+        fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32);
+        fn forward_wheel(id: i32, dx: f64, dy: f64, x: f32, y: f32);
+        fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32);
+        fn forward_focus(id: i32, focused: bool);
+        fn forward_resize(id: i32, w: i32, h: i32, scale: f32);
+        fn forward_theme_change(id: i32, dark: bool);
+        fn set_webview_active(id: i32, active: bool);
+
+        fn reload_blocklists() -> bool;
+        fn user_blocklist_path() -> String;
+    }
+}
+
+// ------------------------------------------------------------------
+// Always-present: controller functions not affected by the engine
+// ------------------------------------------------------------------
+pub use crate::servo_controller::{
+    create_tab, find_bar_visible, hide_find_in_page, show_find_in_page, toggle_bookmark,
+};
+
+// Navigation / state functions: placeholder when engine is off, real WebView when on
+#[cfg(not(feature = "servo-engine"))]
+pub use crate::servo_controller::{
+    can_go_back, can_go_forward, close_tab, current_url, go_back, go_forward, load_url, loading,
+    reload, status_text, title,
+};
+
+#[cfg(feature = "servo-engine")]
+pub use crate::servo_engine::{
+    can_go_back, can_go_forward, close_tab, current_url, go_back, go_forward, load_url, loading,
+    reload, status_text, title,
+};
+
+// Engine-lifecycle and input functions (always present; no-ops when feature is off)
+pub use crate::servo_engine::{
+    close_webview, create_webview, create_webview_wayland_window, forward_focus, forward_key,
+    forward_mouse_button, forward_mouse_move, forward_resize, forward_theme_change, forward_wheel,
+    init_servo, present_wayland_webview, set_webview_active, shutdown_servo, tick_servo,
+    tick_webview,
+};
+
+// Page zoom — always present; no-ops when servo-engine feature is off
+pub use crate::servo_engine::{page_zoom, set_page_zoom};
+
+pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
