@@ -11,6 +11,7 @@ struct BookmarkItem {
     QString title;
     QString url;
     QString folder_id; // empty = root level
+    QString favicon_base64_png;
 };
 
 struct BookmarkFolder {
@@ -38,6 +39,7 @@ public:
     void addBookmark(QString const& title, QString const& url, QString const& folder_id = {});
     void addFolder(QString const& title);
     void editBookmark(QString const& id, QString const& title, QString const& url);
+    bool updateFavicon(QString const& url, QString const& favicon_base64_png);
     void editFolder(QString const& id, QString const& title);
     void removeBookmark(QString const& id);
     void removeFolder(QString const& id);

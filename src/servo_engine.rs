@@ -1136,6 +1136,82 @@ mod engine {
         let scale_factor = Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
         let url = Url::parse(url_str).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
 
+        let reused_existing_wayland_context = ENGINE.with(|state| {
+            let mut state = state.borrow_mut();
+            let Some(engine) = state.as_mut() else {
+                return false;
+            };
+            if !matches!(engine.rendering_context, EngineRenderingContext::WaylandWindow(_)) {
+                return false;
+            }
+
+            if let Some(tab) = engine.tabs.get_mut(&id) {
+                tab.physical_size = size;
+                tab.hidpi_scale_factor = scale_factor;
+                if tab.active {
+                    resize_webview_to_entry(tab);
+                }
+                if perf_enabled() {
+                    eprintln!(
+                        "SERVOQ_PERF renderer=wayland-window tab_id={id} webview_id={id} active_tab_id={id} wayland_surface_count=1 window_rendering_context_instances=1 new-tab-path=reuse-existing-webview"
+                    );
+                }
+                return true;
+            }
+
+            let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
+                tab_id: id,
+                rendering_context: engine.rendering_context.clone(),
+                animating: Cell::new(false),
+                initial_resize_done: Cell::new(false),
+            });
+
+            let webview = WebViewBuilder::new(
+                &engine.servo,
+                engine.rendering_context.as_rendering_context(),
+            )
+            .url(url.clone())
+            .hidpi_scale_factor(scale_factor)
+            .user_content_manager(engine.user_content_manager.clone())
+            .delegate(delegate)
+            .build();
+            configure_webview_diagnostics(&webview);
+
+            engine.tabs.insert(
+                id,
+                TabEntry {
+                    webview,
+                    current_url: url.to_string(),
+                    title: "New Tab".to_string(),
+                    loading: false,
+                    status_text: String::new(),
+                    active: true,
+                    physical_size: size,
+                    hidpi_scale_factor: scale_factor,
+                },
+            );
+            if perf_enabled() {
+                eprintln!(
+                    "SERVOQ_PERF renderer=wayland-window tab_id={id} webview_id={id} active_tab_id={id} wayland_surface_count=1 window_rendering_context_instances=1 new-tab-path=reuse-existing-window-context"
+                );
+            }
+            true
+        });
+        if reused_existing_wayland_context {
+            return true;
+        }
+
+        let software_webviews_already_exist = ENGINE.with(|state| {
+            state.borrow().as_ref().is_some_and(|engine| {
+                matches!(engine.rendering_context, EngineRenderingContext::Software(_))
+                    && !engine.tabs.is_empty()
+            })
+        });
+        if software_webviews_already_exist {
+            eprintln!("[servoq] Wayland window renderer unavailable: software WebViews already exist; falling back to software");
+            return false;
+        }
+
         let wayland_context = match create_wayland_rendering_context(wl_display, wl_surface, size) {
             Ok(context) => context,
             Err(reason) => {
@@ -1173,7 +1249,7 @@ mod engine {
                 engine.rendering_context = EngineRenderingContext::WaylandWindow(wayland_context.clone());
                 if perf_enabled() {
                     eprintln!(
-                        "SERVOQ_PERF renderer=wayland-window active=true software_context=false window_context=true size={}x{} scale={scale}",
+                        "SERVOQ_PERF renderer=wayland-window tab_id={id} webview_id={id} active_tab_id={id} wayland_surface_count=1 window_rendering_context_instances=1 new-tab-path=create-window-context software_context=false window_context=true size={}x{} scale={scale}",
                         size.width, size.height
                     );
                 }

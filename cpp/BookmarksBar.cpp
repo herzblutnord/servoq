@@ -6,11 +6,13 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QByteArray>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QDragLeaveEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEvent>
@@ -25,6 +27,7 @@
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 #include <QToolButton>
+#include <QWidget>
 
 namespace ServoQ {
 
@@ -38,6 +41,16 @@ static constexpr int BookmarkButtonIconTextSpacing  = 6;
 static constexpr int BookmarkButtonTextElisionPadding = 2;
 
 static constexpr char const* BookmarkItemProperty = "bookmark_item";
+
+static QIcon bookmark_icon_from_base64(QString const& favicon_base64_png, QPalette const& palette)
+{
+    if (!favicon_base64_png.isEmpty()) {
+        QPixmap pixmap;
+        if (pixmap.loadFromData(QByteArray::fromBase64(favicon_base64_png.toLatin1()), "PNG"))
+            return QIcon(pixmap);
+    }
+    return create_chrome_icon(ChromeIcon::Globe, palette);
+}
 
 // Custom paint replicates reference paint_bookmark_button — [ladybird: BookmarksBar.cpp:130-160]
 static void paint_bookmark_button(QToolButton& button)
@@ -158,6 +171,7 @@ static void set_bookmark_button_size(QToolButton* button, QString const& title)
 
 BookmarksBar::BookmarksBar(QWidget* parent)
     : QToolBar(parent)
+    , m_drop_indicator(new QWidget(this))
 {
     setObjectName("LadybirdBookmarksBar");  // [ladybird: BookmarksBar.cpp:29-35]
     setMovable(false);
@@ -165,6 +179,10 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     setAcceptDrops(true);
     setIconSize({ BookmarkButtonIconSize, BookmarkButtonIconSize }); // [ladybird: BookmarksBar.cpp:30]
     updateChromeStyle();
+    m_drop_indicator->setObjectName("BookmarkDropIndicator");
+    m_drop_indicator->setFixedWidth(2);
+    m_drop_indicator->setStyleSheet(QStringLiteral("background: palette(highlight); border-radius: 1px;"));
+    m_drop_indicator->hide();
 
     installEventFilter(this);
 
@@ -180,6 +198,36 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     rebuild();
 }
 
+int BookmarksBar::insertionIndicatorX(QString const& type, QPoint const& drop_pos) const
+{
+    QList<QAction*> candidates;
+    for (auto* action : actions()) {
+        if (action->property("bookmark_type").toString() == type)
+            candidates.append(action);
+    }
+    if (candidates.isEmpty())
+        return 4;
+
+    QAction* target = const_cast<BookmarksBar*>(this)->actionAt(drop_pos);
+    if (!target || target->property("bookmark_type").toString() != type) {
+        if (auto* last = const_cast<BookmarksBar*>(this)->widgetForAction(candidates.last()))
+            return last->geometry().right() + 4;
+        return width() - 4;
+    }
+
+    if (auto* widget = const_cast<BookmarksBar*>(this)->widgetForAction(target)) {
+        auto rect = widget->geometry();
+        return drop_pos.x() > rect.center().x() ? rect.right() + 4 : rect.left() - 3;
+    }
+    return width() - 4;
+}
+
+void BookmarksBar::hideDropIndicator()
+{
+    if (m_drop_indicator)
+        m_drop_indicator->hide();
+}
+
 void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
 {
     // Close any open menus before clearing — [ladybird: BookmarksBar.cpp:207-210]
@@ -192,7 +240,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
 
     auto add_bookmark_button = [this](BookmarkItem const& item) {
         auto* action = new QAction(this);
-        action->setIcon(create_chrome_icon(ChromeIcon::Globe, palette()));
+        action->setIcon(bookmark_icon_from_base64(item.favicon_base64_png, palette()));
         action->setToolTip(item.url);
         action->setProperty("bookmark_id", item.id);
         action->setProperty("bookmark_type", QStringLiteral("bookmark"));
@@ -220,7 +268,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
 
         for (auto const& child : folder.items) {
             auto* child_action = submenu->addAction(
-                create_chrome_icon(ChromeIcon::Globe, palette()), child.title);
+                bookmark_icon_from_base64(child.favicon_base64_png, palette()), child.title);
             child_action->setToolTip(child.url);
             child_action->setProperty("bookmark_id", child.id);
             child_action->setProperty("bookmark_type", QStringLiteral("bookmark"));
@@ -285,7 +333,24 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
     }
 
     if (event->type() == QEvent::MouseButtonRelease) {
+        auto& mouse_event = static_cast<QMouseEvent&>(*event);
+        if (mouse_event.button() == Qt::LeftButton && !m_drag_source_id.isEmpty()) {
+            if (auto* button = qobject_cast<QToolButton*>(object)) {
+                auto* action = button->defaultAction();
+                if (action && action->property("bookmark_type").toString() == QStringLiteral("folder")
+                    && action->property("folder_id").toString() == m_drag_source_id) {
+                    auto delta = (mouse_event.position().toPoint() - m_drag_start_pos).manhattanLength();
+                    auto folder_id = m_drag_source_id;
+                    m_drag_source_id.clear();
+                    m_drag_source_type.clear();
+                    if (delta < QApplication::startDragDistance())
+                        button->showMenu();
+                    return true;
+                }
+            }
+        }
         m_drag_source_id.clear();
+        m_drag_source_type.clear();
     }
 
     if (event->type() == QEvent::MouseMove) {
@@ -322,6 +387,8 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
                     } else if (bm_type == QStringLiteral("folder")) {
                         m_drag_source_id = action->property("folder_id").toString();
                         m_drag_source_type = QStringLiteral("folder");
+                        m_drag_start_pos = mouse_event.position().toPoint();
+                        return true;
                     }
                     m_drag_start_pos = mouse_event.position().toPoint();
                 }
@@ -493,10 +560,27 @@ void BookmarksBar::dragEnterEvent(QDragEnterEvent* event)
         event->acceptProposedAction();
 }
 
+void BookmarksBar::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    hideDropIndicator();
+    QToolBar::dragLeaveEvent(event);
+}
+
 void BookmarksBar::dragMoveEvent(QDragMoveEvent* event)
 {
-    if (event->mimeData()->hasFormat("application/x-servoq-bookmark"))
-        event->acceptProposedAction();
+    if (!event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+        return;
+
+    auto data = QString::fromUtf8(event->mimeData()->data("application/x-servoq-bookmark"));
+    auto colon = data.indexOf(':');
+    if (colon < 0)
+        return;
+    auto type = data.left(colon);
+    auto x = insertionIndicatorX(type, event->position().toPoint());
+    m_drop_indicator->setGeometry(x, 4, 2, qMax(1, height() - 8));
+    m_drop_indicator->raise();
+    m_drop_indicator->show();
+    event->acceptProposedAction();
 }
 
 void BookmarksBar::dropEvent(QDropEvent* event)
@@ -510,6 +594,7 @@ void BookmarksBar::dropEvent(QDropEvent* event)
     auto type = data.left(colon);
     auto id = data.mid(colon + 1);
     auto drop_pos = event->position().toPoint();
+    hideDropIndicator();
 
     auto compute_target_index = [this, &drop_pos](QList<QAction*> const& type_actions, QStringList const& ids) -> int {
         QAction* target = actionAt(drop_pos);

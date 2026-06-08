@@ -6,6 +6,7 @@
 #include <functional>
 
 class QDragEnterEvent;
+class QDragLeaveEvent;
 class QDragMoveEvent;
 class QDropEvent;
 
@@ -27,6 +28,7 @@ protected:
     bool event(QEvent* event) override;
     bool eventFilter(QObject* object, QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
@@ -36,6 +38,8 @@ private:
     void showEditBookmarkDialog(QString const& id);
     void showEditFolderDialog(QString const& id);
     void showNewFolderDialog();
+    int insertionIndicatorX(QString const& type, QPoint const& drop_pos) const;
+    void hideDropIndicator();
 
     std::function<void(QString const&)> m_open_url_callback;
     std::function<void(QString const&)> m_open_url_in_new_tab_callback;
@@ -43,6 +47,7 @@ private:
     QString m_drag_source_id;
     QString m_drag_source_type;
     QPoint m_drag_start_pos;
+    QWidget* m_drop_indicator { nullptr };
 };
 
 }

@@ -8,6 +8,7 @@
 // Specific line citations appear inline below.
 
 #include "BrowserWindow.h"
+#include "BookmarkStore.h"
 #include "WebContentView.h"
 #include "Settings.h"
 #include "Tab.h"
@@ -15,6 +16,7 @@
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
+#include <QBuffer>
 #include <QCoreApplication>
 #include <QSystemTrayIcon>
 #include <QCursor>
@@ -114,6 +116,24 @@ static QtPerfStats& qt_perf_stats()
     return stats;
 }
 
+static ServoQ::ServoWaylandContentWindow*& g_wayland_window()
+{
+    static ServoQ::ServoWaylandContentWindow* s_window { nullptr };
+    return s_window;
+}
+
+static QWidget*& g_wayland_container()
+{
+    static QWidget* s_container { nullptr };
+    return s_container;
+}
+
+static ServoQ::WebContentView*& g_wayland_owner()
+{
+    static ServoQ::WebContentView* s_owner { nullptr };
+    return s_owner;
+}
+
 static void maybe_log_qt_perf()
 {
     if (!perf_enabled())
@@ -184,6 +204,11 @@ public:
         : m_owner(owner)
     {
         setSurfaceType(QWindow::SurfaceType::OpenGLSurface);
+    }
+
+    void setOwner(WebContentView* owner)
+    {
+        m_owner = owner;
     }
 
     void requestServoPresent()
@@ -338,14 +363,6 @@ WebContentView::WebContentView(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
-    if (waylandRendererRequested()) {
-        m_wayland_window = new ServoWaylandContentWindow(this);
-        m_wayland_container = QWidget::createWindowContainer(m_wayland_window, this);
-        m_wayland_container->setFocusPolicy(Qt::StrongFocus);
-        m_wayland_container->setMouseTracking(true);
-        m_wayland_container->hide();
-    }
-
     // No placeholder widget — the view is shown immediately. Before the first
     // Servo frame arrives the widget simply shows a blank background.
     // [ladybird: Tab.cpp:158] — m_view added directly to tab_layout, no stacked widget.
@@ -376,6 +393,13 @@ WebContentView::WebContentView(QWidget* parent)
 WebContentView::~WebContentView()
 {
     m_engine_tick_timer->stop();
+    if (g_wayland_owner() == this) {
+        g_wayland_owner() = nullptr;
+        if (g_wayland_window())
+            g_wayland_window()->setOwner(nullptr);
+        if (g_wayland_container())
+            g_wayland_container()->hide();
+    }
     if (m_tab_id != 0) {
         debug_log("close_webview", m_tab_id);
         g_view_registry().remove(m_tab_id);
@@ -421,15 +445,53 @@ bool WebContentView::waylandRendererRequested() const
     return mode == RendererMode::Auto || mode == RendererMode::WaylandWindow;
 }
 
-bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl)
+bool WebContentView::attachSharedWaylandWindow()
 {
+    if (!waylandRendererRequested())
+        return false;
+    if (!g_wayland_window()) {
+        g_wayland_window() = new ServoWaylandContentWindow(this);
+        g_wayland_container() = QWidget::createWindowContainer(g_wayland_window(), this);
+        g_wayland_container()->setFocusPolicy(Qt::StrongFocus);
+        g_wayland_container()->setMouseTracking(true);
+        g_wayland_container()->hide();
+        if (perf_enabled()) {
+            qInfo().nospace()
+                << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=0 "
+                << "new-tab-path=shared-qt-surface-created tab_id=" << m_tab_id
+                << " webview_id=" << m_tab_id;
+        }
+    }
+
+    m_wayland_window = g_wayland_window();
+    m_wayland_container = g_wayland_container();
     if (!m_wayland_window || !m_wayland_container)
         return false;
+
+    if (g_wayland_owner() != this) {
+        g_wayland_owner() = this;
+        m_wayland_window->setOwner(this);
+        m_wayland_container->setParent(this);
+        m_wayland_container->setGeometry(rect());
+        if (perf_enabled()) {
+            qInfo().nospace()
+                << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
+                << "new-tab-path=shared-qt-surface-attached tab_id=" << m_tab_id
+                << " webview_id=" << m_tab_id;
+        }
+    }
+    return true;
+}
+
+bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl)
+{
     if (QGuiApplication::platformName() != QStringLiteral("wayland")) {
         qWarning().nospace() << "[servoq] Wayland window renderer unavailable: Qt platform is "
                              << QGuiApplication::platformName() << "; falling back to software";
         return false;
     }
+    if (!attachSharedWaylandWindow())
+        return false;
 
     m_wayland_container->setGeometry(rect());
     m_wayland_container->show();
@@ -539,6 +601,8 @@ void WebContentView::receiveRequestBlocked(QString const& url)
 void WebContentView::requestWaylandRepaint()
 {
     if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    if (g_wayland_owner() != this)
         return;
     qt_perf_stats().qwindow_present_requests++;
     if (m_wayland_present_in_progress) {
@@ -826,6 +890,8 @@ void WebContentView::showEvent(QShowEvent* event)
     startEngineIfNeeded();
     forwardResizeToEngine();
     if (m_wayland_renderer_active && m_wayland_container)
+        attachSharedWaylandWindow();
+    if (m_wayland_renderer_active && m_wayland_container)
         m_wayland_container->show();
     if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
@@ -838,7 +904,7 @@ void WebContentView::hideEvent(QHideEvent* event)
     QWidget::hideEvent(event);
     debug_log("hide", m_tab_id);
     m_engine_tick_timer->stop();
-    if (m_wayland_container)
+    if (m_wayland_container && g_wayland_owner() == this)
         m_wayland_container->hide();
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::set_webview_active(m_tab_id, false); // [ladybird: WebContentView.cpp:780-783]
@@ -1113,7 +1179,24 @@ void notify_favicon_changed(::std::int32_t tab_id,
         return;
     }
     QImage img(data.data(), width, height, QImage::Format_RGBA8888);
-    view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(img.copy())));
+    auto copy = img.copy();
+    view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(copy)));
+
+    QByteArray png_bytes;
+    QBuffer buffer(&png_bytes);
+    if (buffer.open(QIODevice::WriteOnly) && copy.save(&buffer, "PNG")) {
+        auto url = view->tab()->url();
+        auto favicon = QString::fromLatin1(png_bytes.toBase64());
+        auto changed = ServoQ::BookmarkStore::the()->updateFavicon(url, favicon);
+        if (perf_enabled()) {
+            qInfo().nospace()
+                << "SERVOQ_PERF favicon target_tab_id=" << tab_id
+                << " tab_id=" << tab_id
+                << " webview_id=" << tab_id
+                << " url=" << url
+                << " bookmark_updated=" << changed;
+        }
+    }
 }
 
 void notify_cursor_changed(::std::int32_t tab_id, ::std::int32_t cursor_shape)

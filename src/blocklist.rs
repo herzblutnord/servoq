@@ -60,4 +60,4 @@ mod inner {
 }
 
 #[cfg(feature = "servo-engine")]
-pub use inner::{should_block, user_blocklist_path};
+pub use inner::should_block;

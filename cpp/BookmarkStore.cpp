@@ -63,6 +63,7 @@ void BookmarkStore::load()
                 item[QStringLiteral("title")].toString(),
                 item[QStringLiteral("url")].toString(),
                 {},
+                item[QStringLiteral("favicon")].toString(),
             });
         } else if (type == QStringLiteral("folder")) {
             BookmarkFolder folder;
@@ -76,6 +77,7 @@ void BookmarkStore::load()
                     child[QStringLiteral("title")].toString(),
                     child[QStringLiteral("url")].toString(),
                     folder.id,
+                    child[QStringLiteral("favicon")].toString(),
                 });
             }
             m_folders.append(folder);
@@ -93,6 +95,8 @@ void BookmarkStore::save()
         obj[QStringLiteral("id")]    = bm.id;
         obj[QStringLiteral("title")] = bm.title;
         obj[QStringLiteral("url")]   = bm.url;
+        if (!bm.favicon_base64_png.isEmpty())
+            obj[QStringLiteral("favicon")] = bm.favicon_base64_png;
         items.append(obj);
     }
 
@@ -109,6 +113,8 @@ void BookmarkStore::save()
             child_obj[QStringLiteral("id")]    = child.id;
             child_obj[QStringLiteral("title")] = child.title;
             child_obj[QStringLiteral("url")]   = child.url;
+            if (!child.favicon_base64_png.isEmpty())
+                child_obj[QStringLiteral("favicon")] = child.favicon_base64_png;
             children.append(child_obj);
         }
         obj[QStringLiteral("items")] = children;
@@ -155,11 +161,11 @@ BookmarkFolder const* BookmarkStore::findFolder(QString const& id) const
 void BookmarkStore::addBookmark(QString const& title, QString const& url, QString const& folder_id)
 {
     if (folder_id.isEmpty()) {
-        m_root_bookmarks.append(BookmarkItem { generateId(), title, url, {} });
+        m_root_bookmarks.append(BookmarkItem { generateId(), title, url, {}, {} });
     } else {
         for (auto& folder : m_folders) {
             if (folder.id == folder_id) {
-                folder.items.append(BookmarkItem { generateId(), title, url, folder_id });
+                folder.items.append(BookmarkItem { generateId(), title, url, folder_id, {} });
                 break;
             }
         }
@@ -185,6 +191,30 @@ void BookmarkStore::editBookmark(QString const& id, QString const& title, QStrin
             if (bm.id == id) { bm.title = title; bm.url = url; save(); emit changed(); return; }
         }
     }
+}
+
+bool BookmarkStore::updateFavicon(QString const& url, QString const& favicon_base64_png)
+{
+    bool did_change = false;
+    for (auto& bm : m_root_bookmarks) {
+        if (bm.url == url && bm.favicon_base64_png != favicon_base64_png) {
+            bm.favicon_base64_png = favicon_base64_png;
+            did_change = true;
+        }
+    }
+    for (auto& folder : m_folders) {
+        for (auto& bm : folder.items) {
+            if (bm.url == url && bm.favicon_base64_png != favicon_base64_png) {
+                bm.favicon_base64_png = favicon_base64_png;
+                did_change = true;
+            }
+        }
+    }
+    if (!did_change)
+        return false;
+    save();
+    emit changed();
+    return true;
 }
 
 void BookmarkStore::editFolder(QString const& id, QString const& title)
@@ -277,7 +307,7 @@ void BookmarkStore::importFlatList(QStringList const& items)
         auto parts = entry.split(QStringLiteral("\t"));
         if (parts.size() >= 2) {
             m_root_bookmarks.append(BookmarkItem {
-                generateId(), parts.first(), parts.last(), {}
+                generateId(), parts.first(), parts.last(), {}, {}
             });
         }
     }

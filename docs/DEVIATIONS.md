@@ -337,7 +337,7 @@ SERVOQ_RENDERER=wayland-window perf top --call-graph dwarf -- target/release/ser
 
 ---
 
-``## FINAL UI / FEATURE PARITY AUDIT
+## FINAL UI / FEATURE PARITY AUDIT
 
 Audit performed 2026-06-08 against `vendor/reference-ladybird/UI/Qt/` and Servo 0.2.0 (`~/.cargo/registry/src/.../servo-0.2.0/`).
 
@@ -364,7 +364,7 @@ Audit performed 2026-06-08 against `vendor/reference-ladybird/UI/Qt/` and Servo 
 | Bookmarks bar layout | Implemented | Implemented | **same** | |
 | Bookmark hover / pressed style | Custom paint | Custom paint | **same** | |
 | Bookmark folder menu | QMenu with submenus | QMenu with submenus | **same** | |
-| **Bookmark drag-reorder** | ✅ **Implemented** | **Not in Ladybird Qt ref** | — | Pure Qt DnD; drag root bookmarks and folders to reorder within their type |
+| **Bookmark drag-reorder** | ✅ **Implemented** | Design-portable from Ladybird BookmarkStore move model | — | Pure Qt DnD; visible insertion marker; root bookmarks and folders reorder within their type |
 | Window controls (min/max/close) | Custom buttons, right side | Custom buttons, right side | **same** | |
 | Hamburger menu | QToolButton + QMenu | QToolButton + QMenu | **same** | |
 | Status hover label | Bottom-left, shifts right | Bottom-left, shifts right | **same** | Tab.cpp:341-357 |
@@ -392,9 +392,9 @@ Audit performed 2026-06-08 against `vendor/reference-ladybird/UI/Qt/` and Servo 
 | Page zoom in/out/reset + indicator | ✅ | ✅ | — | — | same |
 | Bookmarks — add/edit/delete/folders | ✅ | ✅ | — | — | same |
 | Bookmarks — persistence (JSON) | ✅ | ✅ (different backend) | — | — | behavior-equivalent |
-| Bookmarks — drag-reorder | ✅ Implemented | ❌ (not in Ladybird Qt ref) | No | DONE | Pure Qt DnD; BookmarkStore `moveRootBookmark`/`moveFolder` |
+| Bookmarks — drag-reorder | ✅ Implemented | Design-portable | No | DONE | Visible insertion marker; BookmarkStore `moveRootBookmark`/`moveFolder`; persisted JSON order |
 | Content blocking — static domain list | ✅ `adblock` crate + 100+ rules | Delegated to LibWebView | — | — | `data/blocklist.txt` bundled |
-| **Content blocking — EasyList/network filters** | ✅ Implemented | Via LibWebView (out of Qt scope) | No | DONE | `adblock` crate; custom rules in `~/.config/servoq/blocklist.txt` |
+| **Content blocking — EasyList/network filters** | ✅ Implemented | `LibWeb::ContentBlocker::is_filtered(URL, source_url, ResourceType)` | No | PARTIAL | `adblock` crate; custom rules in `~/.config/servoq/blocklist.txt`; ServoQ currently maps as `other` due limited resource metadata usage |
 | Bookmarks bar toggle | ✅ | ✅ | — | — | same |
 | Menu bar toggle | ✅ | ✅ | — | — | same |
 | Window state persistence | ✅ | ✅ | — | — | same |
@@ -514,7 +514,6 @@ Intentional deviations required by the Servo embedding architecture or platform 
 | No `Autocomplete` dropdown in LocationEdit | Depends on `LibWebView::Autocomplete` search-engine integration |
 | `TOOLBAR_SIDEBAR_TOGGLE_NAVIGATION_GAP` = 8 | Exact match with Tab.cpp:94 |
 | `expanded_sidebar_width` = 232, `collapsed_sidebar_width` = 52, `toolbar_height` = 42 | Exact match with ChromeLayout.h |
-| Bookmark drag-reorder not implemented | Pure Qt DnD work; requires `mousePressEvent`/`mouseMoveEvent`/`dropEvent` in `BookmarksBar` and a `moveBookmark(id, new_index)` in `BookmarkStore`. Not blocked by any Servo or LibWebView API — implementable now |
 | Bookmark store uses local JSON file (not `LibWebView::BookmarkStore`) | No LibWebView dependency; behavior-equivalent: `QSaveFile` atomic writes, `QStandardPaths::AppDataLocation` |
 | "Not secure" indicator uses leading icon only; no cert chain dialog on click | Servo bridge does not expose TLS certificate details |
 | `m_reset_zoom_action` text sourced from `Tab` (not `view().reset_zoom_action()`) | ServoQ has no `LibWebView` action infrastructure; behavior-equivalent |
@@ -534,7 +533,6 @@ Features that cannot be ported because the required infrastructure is missing.
 | `focusInEvent` pre-fills search query from selected text | servo 0.2.0 `WebView::selected_text()` does not exist; no selection-change callback in `WebViewDelegate` |
 | Print (Ctrl+P) | Not implemented in Servo bridge |
 | DevTools / Inspect panel | No DevTools integration |
-| Dynamic filter list (uBlock-style EasyList parsing) | Would require a filter parser crate and rule-list update/storage plumbing |
 | Color scheme / Contrast / Motion menus | `LibWebView::Application` accessibility menus |
 | New window action | Multiple windows not yet supported in ServoQ |
 | Tab audio indicator button | servo 0.2.0 has no general audio-playing signal; `WebViewDelegate::notify_media_session_event(MediaSessionEvent)` only fires for pages using the Media Session API — `PlaybackStateChange(MediaSessionPlaybackState)` variants are `Playing`/`Paused`/`None_`, not a reliable tab-audio indicator |
@@ -543,3 +541,51 @@ Features that cannot be ported because the required infrastructure is missing.
 | Stop button stops loading | Reload button shows Stop icon while `m_is_loading=true` (Tab.cpp:488) but click handler always calls `servoq::reload()`. Servo 0.2.0 has no `WebView::stop_loading()` method. |
 | Downloads | Servo 0.2.0 has no download-started or download-progress callback in `WebViewDelegate`. |
 ``
+
+## CURRENT REMAINING UI / FEATURE GAPS
+
+### Implementable Later
+
+| Feature | Why Not Done Yet | Main Files | Suggested Approach |
+|---------|------------------|------------|--------------------|
+| Cosmetic content blocking | Servo 0.2.0 has `UserContentManager::add_stylesheet`, but ServoQ does not yet generate per-site cosmetic CSS from `adblock` rules. Ladybird uses `LibWeb::ContentBlocker::cosmetic_style_sheet_for_url()` and `has_generic_cosmetic_selectors_for_url()`. | `src/blocklist.rs`, `src/servo_engine.rs` | Build cosmetic-rule extraction/generation from `adblock`, create `UserStyleSheet`, add/remove through `UserContentManager`, and document reload requirement because Servo applies user-content updates after reload. |
+| Content-block resource type mapping | Ladybird maps `Document`, `Font`, `Image`, `Media`, `Object`, `Other`, `Ping`, `Script`, `Stylesheet`, `Subdocument`, `WebSocket`, `XMLHttpRequest`; ServoQ currently uses `other`. | `src/servo_engine.rs`, `src/blocklist.rs` | Inspect `WebResourceLoad::request()` metadata and map what Servo exposes; keep `other` only as fallback. |
+| Filter-list reload/update UI | Current UI opens custom list path and requires restart. | `cpp/BrowserWindow.cpp`, `src/blocklist.rs` | Add reload bridge method and nonblocking list reload; store downloaded lists under `QStandardPaths::AppDataLocation`. |
+| Per-site content-blocking allowlist | Pure browser-shell settings work, not blocked by Servo. | `cpp/Settings.*`, `src/servo_engine.rs` | Persist host allowlist and bypass `should_block_url()` for matching first-party/current page host. |
+| Search engine catalog/custom engines | ServoQ supports DuckDuckGo, Google, Yandex only; Ladybird has Bing, Brave, DuckDuckGo, Ecosia, Google, Kagi, Mojeek, Startpage, Yahoo, Yandex plus custom engines. | `cpp/Settings.*`, `cpp/BrowserWindow.cpp`, `cpp/WebViewURL.cpp` | Replace hard-coded if/else with `{name, query_url}` templates using `%s`, mirror Ladybird `SearchEngine.cpp`, add settings UI for built-ins/custom entries. |
+| History/search autocomplete | Current history menu exists, but location autocomplete is not implemented. | `cpp/LocationEdit.*`, `cpp/HistoryStore.*`, `cpp/WebViewURL.cpp` | Mirror Ladybird `LibWebView::Autocomplete` behavior using local history first; remote suggestions optional. |
+| DevTools / remote debugging UI | Servo 0.2.0 contains devtools server support behind preferences/delegate callbacks, but ServoQ has no safe UI/prefs wiring or connection policy. | `src/servo_engine.rs`, `cpp/BrowserWindow.cpp` | Add explicit setting/env-gated startup, implement `ServoDelegate` devtools callbacks, surface port/token. |
+| Downloads UI | Servo 0.2.0 `WebViewDelegate` search did not show a download-started/progress callback. | `src/servo_engine.rs`, `cpp/BrowserWindow.cpp` | Re-check newer Servo APIs before implementation; if available, add download shelf/dialog and persistent download state. |
+| Stop loading | No public `WebView::stop_loading()` found in local Servo 0.2.0. | `src/servo_engine.rs`, `cpp/Tab.cpp` | Implement only after Servo exposes cancellation for active navigation/load. |
+
+### Truly Blocked by Servo 0.2.0
+
+| Feature | Missing Servo API | Evidence |
+|---------|-------------------|----------|
+| Find-in-page actual search | No public `WebView::find()`, `find_next()`, or `find_previous()` found. | `rg "find_next|find_previous|pub fn find" ~/.cargo/registry/src/.../servo-0.2.0` found no WebView search API. |
+| Find match count | No find-result or match-count callback on `WebViewDelegate`. | `servo-0.2.0/webview_delegate.rs` exposes favicon/history/context/fullscreen/notification/console callbacks, not find callbacks. |
+| Selected text prefill/copy from page | No public `WebView::selected_text()` or selection-change callback found. | Local Servo search for `selected_text` only found unrelated generic selection internals, not WebView API. |
+| TLS certificate details | No WebViewDelegate certificate-chain/security-info callback. | Local Servo options include certificate path/ignore flags, but no per-navigation cert details surfaced to embedder. |
+| General tab audio indicator | No general “tab is producing audio” callback. | Servo exposes media-session events only; that is page API state, not reliable audio playback detection. |
+| Print | No public print API on `WebView`. | Local Servo WebView API search found zoom/paint/input/navigation APIs, not print. |
+
+### Ladybird Differences Kept Intentionally
+
+| Difference | Reason |
+|------------|--------|
+| ServoQ uses Servo `WebView`/`RenderingContext`, not LibWeb/LibWebView runtime objects. | Project goal is Qt chrome over Servo; LibWeb dependencies would replace the engine layer. |
+| Wayland renderer uses one shared active native `QWindow`/`wl_surface`/`WindowRenderingContext`. | Current ServoQ/Surfman Wayland path is not proven safe with multiple simultaneous native surfaces; one active surface preserves hardware GL and avoids the second-tab freeze. |
+| Bookmark store is ServoQ JSON with one folder level. | Behavior-equivalent for current UI and avoids importing AK/LibWebView storage; favicon persistence mirrors Ladybird’s base64 PNG field. |
+| Search fallback defaults to DuckDuckGo and only exposes DuckDuckGo/Google/Yandex for now. | Matches current UI scope; Ladybird’s larger built-in/custom engine model is implementable later. |
+| Content blocker network path uses Servo delegate interception. | Ladybird integrates in LibWeb loader/fetch internals; ServoQ must use Servo 0.2.0 embedder hooks. |
+| Cosmetic blocking is documented, not faked. | Servo can inject stylesheets, but ServoQ does not yet generate correct per-site cosmetic CSS from rules; silently pretending would be misleading. |
+
+### Regression Fix Notes
+
+| Regression | Current Fix |
+|------------|-------------|
+| Second tab freezes/kills ServoQ on Wayland | `WebContentView` now attaches a single shared embedded Wayland window/container to the active tab, and Rust reuses the existing `WindowRenderingContext` before calling `WindowRenderingContext::new()`. `SERVOQ_PERF=1` logs tab ID, webview ID, active path, surface count, and context count. |
+| First-tab favicon resets to globe when second tab opens | Favicon callbacks remain keyed by ServoQ tab ID; bookmark/favicon updates now log target tab ID under `SERVOQ_PERF=1`. Load start still clears only the target tab favicon. |
+| Bookmark favicon does not refresh | `BookmarkStore` persists `favicon` as base64 PNG and `notify_favicon_changed` updates exact URL matches, causing all `BookmarksBar` instances to rebuild. |
+| Bookmark DnD lacks visible insertion marker | `BookmarksBar` shows a vertical drop indicator at the computed insertion point. |
+| Bookmark folders cannot be dragged | Folder mouse press is captured for drag start; a non-drag release still opens the folder menu. `moveFolder()` persists folder order. |
