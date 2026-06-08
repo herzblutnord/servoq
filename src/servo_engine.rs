@@ -929,6 +929,7 @@ mod engine {
                     });
                 }
             });
+            debug_log_detail("popup_new_webview", new_id, "url=<pending>");
             crate::bridge::ffi::request_open_tab_for_id(new_id);
         }
 

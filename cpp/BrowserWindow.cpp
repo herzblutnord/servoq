@@ -608,8 +608,11 @@ void BrowserWindow::openTabForExistingId(int tab_id)
     auto* tab = new Tab(this, tab_id);
     auto index = m_tabs->addTab(tab, tab->title());
     m_tabs->setCurrentIndex(index);
-    debug_log("open_tab_for_existing_id", tab_id, QStringLiteral("index=%1").arg(index));
+    auto initial_url = QString::fromStdString(std::string(servoq::current_url(tab_id)));
+    debug_log("openTabForExistingId", tab_id,
+        QStringLiteral("index=%1 initial_url=%2").arg(index).arg(initial_url));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
+    tab->attachExistingWebView(initial_url);
     updateCurrentTabState();
 }
 

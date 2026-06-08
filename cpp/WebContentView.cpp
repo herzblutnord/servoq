@@ -650,7 +650,10 @@ void WebContentView::setEmptyNewTab(bool empty_new_tab)
 
 bool WebContentView::ensureEngineStarted()
 {
-    return startEngineIfNeeded();
+    auto started = startEngineIfNeeded();
+    debug_log("ensure_engine_started", m_tab_id,
+        QStringLiteral("started=%1 empty=%2").arg(started ? 1 : 0).arg(m_empty_new_tab ? 1 : 0));
+    return started;
 }
 
 bool WebContentView::waylandRendererRequested() const
@@ -1818,6 +1821,7 @@ void request_open_tab_for_id(::std::int32_t tab_id)
 {
     if (servo_shutdown_started())
         return;
+    debug_log("popup_new_webview", tab_id);
     if (auto* window = find_browser_window())
         window->openTabForExistingId(static_cast<int>(tab_id));
 }

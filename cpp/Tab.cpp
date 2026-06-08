@@ -174,6 +174,20 @@ void Tab::showEmptyNewTab()
     update_tab_title();
 }
 
+void Tab::attachExistingWebView(QString const& initial_url)
+{
+    auto normalized_url = initial_url.trimmed().isEmpty() ? QStringLiteral("about:blank") : initial_url.trimmed();
+    m_is_empty_new_tab = false;
+    m_url = normalized_url;
+    m_view->setEmptyNewTab(false);
+    m_view->setInitialUrl(normalized_url);
+    m_location_edit->setUrl(m_url);
+    debug_log("attach_existing_webview", m_controller_id,
+        QStringLiteral("empty=false initial_url=%1").arg(normalized_url));
+    m_view->ensureEngineStarted();
+    applyControllerState();
+}
+
 void Tab::navigate(QString const& url)
 {
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();

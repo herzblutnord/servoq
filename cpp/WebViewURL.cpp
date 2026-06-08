@@ -22,7 +22,8 @@ void debug_log(QString const& event, QString const& detail)
 std::optional<QString> search_url_or_error(QString const& location)
 {
     auto url = Settings::the()->search_url_for_query(location);
-    debug_log(QStringLiteral("search_url"), QStringLiteral("query=%1 url=%2").arg(location, url));
+    debug_log(QStringLiteral("navigate_input"),
+        QStringLiteral("raw=%1 classified=search final=%2").arg(location, url));
     return url;
 }
 
@@ -55,42 +56,29 @@ bool is_ipv4_address(QString const& host)
     return true;
 }
 
-bool is_reserved_tld(QString const& domain)
+bool is_domain_like(QString const& text)
 {
-    static QStringList const reserved_tlds {
-        QStringLiteral(".test"),
-        QStringLiteral(".example"),
-        QStringLiteral(".invalid"),
-        QStringLiteral(".localhost"),
-    };
-
-    for (auto const& tld : reserved_tlds) {
-        if (domain.size() > tld.size() && domain.endsWith(tld, Qt::CaseInsensitive))
-            return true;
+    if (text.isEmpty() || text.startsWith(QLatin1Char('.')))
+        return false;
+    for (auto const& ch : text) {
+        if (ch.isSpace())
+            return false;
     }
 
-    return false;
-}
+    if (text.startsWith(QLatin1Char('[')))
+        return text.contains(QStringLiteral("]:"));
 
-bool has_known_public_suffix(QString const& domain)
-{
-    // Ladybird uses LibURL public suffix data. ServoQ does not link that data yet;
-    // this set covers the common registered suffixes needed by the current chrome
-    // tests while preserving Ladybird's invalid-TLD search/error behavior for
-    // values like example.def.
-    static QSet<QString> const known_tlds {
-        QStringLiteral("abc"), QStringLiteral("app"), QStringLiteral("at"), QStringLiteral("biz"),
-        QStringLiteral("co"), QStringLiteral("com"), QStringLiteral("de"), QStringLiteral("dev"),
-        QStringLiteral("edu"), QStringLiteral("fr"), QStringLiteral("gov"), QStringLiteral("io"),
-        QStringLiteral("me"), QStringLiteral("moe"), QStringLiteral("net"), QStringLiteral("org"),
-        QStringLiteral("rs"), QStringLiteral("uk"), QStringLiteral("us"), QStringLiteral("xyz"),
-    };
+    auto host_part = text;
+    auto slash_index = host_part.indexOf(QLatin1Char('/'));
+    if (slash_index >= 0)
+        host_part = host_part.left(slash_index);
+    auto colon_index = host_part.lastIndexOf(QLatin1Char(':'));
+    if (colon_index > 0)
+        host_part = host_part.left(colon_index);
 
-    auto labels = domain.toLower().split(QLatin1Char('.'), Qt::SkipEmptyParts);
-    if (labels.size() < 2)
-        return false;
-
-    return known_tlds.contains(labels.last());
+    return host_part.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0
+        || is_ipv4_address(host_part)
+        || host_part.split(QLatin1Char('.'), Qt::SkipEmptyParts).size() > 1;
 }
 
 bool host_is_acceptable_without_public_suffix(QString const& host)
@@ -120,7 +108,6 @@ QString serialize(QUrl const& url)
 std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD append_tld)
 {
     auto location = raw_location.trimmed();
-    debug_log(QStringLiteral("raw_location_input"), QStringLiteral("input=%1").arg(raw_location));
 
     QFileInfo file_info(location);
     if (file_info.exists()) {
@@ -128,7 +115,8 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
         if (!canonical_path.isEmpty()) {
             auto file_url = QUrl::fromLocalFile(canonical_path);
             auto serialized = serialize(file_url);
-            debug_log(QStringLiteral("ladybird_navigation_target"), QStringLiteral("url=%1").arg(serialized));
+            debug_log(QStringLiteral("navigate_input"),
+                QStringLiteral("raw=%1 classified=url final=%2").arg(raw_location, serialized));
             return serialized;
         }
         return search_url_or_error(location);
@@ -137,6 +125,8 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
     bool https_scheme_was_guessed = false;
     auto parsed_url = parse_url(location);
     if (!parsed_url.has_value() || parsed_url->scheme().compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+        if (!is_domain_like(location) && append_tld == AppendTLD::No)
+            return search_url_or_error(location);
         parsed_url = parse_url(QStringLiteral("https://") + location);
         if (!parsed_url.has_value())
             return search_url_or_error(location);
@@ -153,13 +143,7 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
         if (host.contains(QLatin1Char('"')))
             return search_url_or_error(location);
 
-        if (is_reserved_tld(host)) {
-            auto serialized = serialize(url);
-            debug_log(QStringLiteral("ladybird_navigation_target"), QStringLiteral("url=%1").arg(serialized));
-            return serialized;
-        }
-
-        if (!host_is_acceptable_without_public_suffix(host) && !has_known_public_suffix(host)) {
+        if (!host_is_acceptable_without_public_suffix(host) && !is_domain_like(host)) {
             if (append_tld == AppendTLD::Yes) {
                 url.setHost(host + QStringLiteral(".com"));
             } else if (https_scheme_was_guessed) {
@@ -169,7 +153,8 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
     }
 
     auto serialized = serialize(url);
-    debug_log(QStringLiteral("ladybird_navigation_target"), QStringLiteral("url=%1").arg(serialized));
+    debug_log(QStringLiteral("navigate_input"),
+        QStringLiteral("raw=%1 classified=url final=%2").arg(raw_location, serialized));
     return serialized;
 }
 

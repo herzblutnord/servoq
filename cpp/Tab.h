@@ -37,6 +37,7 @@ public:
     void setHamburgerButtonVisible(bool visible);
     void setActive(bool active);
     void showEmptyNewTab();
+    void attachExistingWebView(QString const& initial_url = {});
     void updateToggleVerticalTabsIcon(); // [ladybird: Tab.cpp:794-797]
     void navigate(QString const& url);
     void location_edit_return_pressed();
