@@ -50,6 +50,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -462,8 +463,11 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* event) override
     {
-        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
+        if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire)) {
             m_owner->forwardWindowMouseButton(1, qtMouseButtonToServo(event->button()), event);
+            if (m_owner->handleMiddleClickLinkFallback(event))
+                event->accept();
+        }
     }
 
     void mouseDoubleClickEvent(QMouseEvent* event) override
@@ -474,6 +478,8 @@ protected:
     void wheelEvent(QWheelEvent* event) override
     {
         if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
+            return;
+        if (m_owner->handleCtrlWheelZoom(event))
             return;
         double dx = 0.0;
         double dy = 0.0;
@@ -1085,6 +1091,55 @@ void WebContentView::takeFocusFromContentClick()
         servoq::forward_focus(m_tab_id, true);
 }
 
+bool WebContentView::handleCtrlWheelZoom(QWheelEvent* event)
+{
+    if ((event->modifiers() & Qt::ControlModifier) == 0) {
+        m_ctrl_wheel_zoom_remainder = 0.0;
+        return false;
+    }
+    if (!m_tab)
+        return false;
+
+    double angle_delta = event->angleDelta().y();
+    double pixel_delta = event->pixelDelta().y();
+    double delta = angle_delta != 0.0 ? angle_delta : pixel_delta;
+    double threshold = angle_delta != 0.0 ? 120.0 : 80.0;
+    if (delta == 0.0) {
+        event->accept();
+        return true;
+    }
+
+    m_ctrl_wheel_zoom_remainder += delta;
+    if (std::abs(m_ctrl_wheel_zoom_remainder) < threshold) {
+        event->accept();
+        return true;
+    }
+
+    auto direction = m_ctrl_wheel_zoom_remainder > 0.0 ? 1.0 : -1.0;
+    m_ctrl_wheel_zoom_remainder -= direction * threshold;
+
+    if (direction > 0.0)
+        m_tab->zoomIn();
+    else
+        m_tab->zoomOut();
+
+    if (debug_enabled()) {
+        qInfo().nospace()
+            << "SERVOQ_DEBUG ctrl_wheel_zoom tab_id=" << m_tab_id
+            << " direction=" << (direction > 0.0 ? "in" : "out")
+            << " delta=" << delta;
+    }
+    event->accept();
+    return true;
+}
+
+bool WebContentView::handleMiddleClickLinkFallback(QMouseEvent* event)
+{
+    if (!m_tab || event->button() != Qt::MiddleButton)
+        return false;
+    return m_tab->openHoveredLinkInNewTab();
+}
+
 // action 0 = Down, 1 = Up  (maps to MouseButtonAction::Down/Up in servo_engine.rs)
 // button 0 = Left, 1 = Middle, 2 = Right
 
@@ -1111,6 +1166,8 @@ void WebContentView::mouseReleaseEvent(QMouseEvent* event)
     else if (event->button() == Qt::RightButton)  button = 2;
     if (button >= 0)
         forwardMouseButton(1, button, event);
+    if (handleMiddleClickLinkFallback(event))
+        event->accept();
 }
 
 // mouseDoubleClickEvent — mirrors Ladybird (vendor line 591-595):
@@ -1124,6 +1181,8 @@ void WebContentView::mouseDoubleClickEvent(QMouseEvent* event)
 void WebContentView::wheelEvent(QWheelEvent* event)
 {
     if (g_servo_shutting_down().load(std::memory_order_acquire))
+        return;
+    if (handleCtrlWheelZoom(event))
         return;
     double dx = 0.0;
     double dy = 0.0;

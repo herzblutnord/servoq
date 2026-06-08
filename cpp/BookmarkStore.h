@@ -53,6 +53,9 @@ public:
     void removeFolder(QString const& id);
     void toggleBookmark(QString const& title, QString const& url);
     void moveRootItem(QString const& id, int to_index);
+    bool moveBookmarkToFolder(QString const& bookmark_id, QString const& folder_id, int to_index = -1);
+    bool moveBookmarkToRoot(QString const& bookmark_id, int root_index = -1);
+    bool moveBookmarkWithinFolder(QString const& folder_id, QString const& bookmark_id, int to_index);
 
     // Legacy-compatible flat list "title\turl" for Settings compatibility
     QStringList toFlatList() const;

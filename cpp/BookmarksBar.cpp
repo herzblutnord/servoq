@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QComboBox>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDrag>
@@ -41,6 +42,64 @@ static constexpr int BookmarkButtonIconTextSpacing  = 6;
 static constexpr int BookmarkButtonTextElisionPadding = 2;
 
 static constexpr char const* BookmarkItemProperty = "bookmark_item";
+static constexpr char const* BookmarkMimeType = "application/x-servoq-bookmark";
+
+struct BookmarkDragPayload {
+    QString type;
+    QString id;
+    QString source_folder_id;
+};
+
+static bool debug_enabled()
+{
+    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+}
+
+static void debug_bookmark_drag(QString const& detail)
+{
+    if (debug_enabled())
+        qInfo().nospace() << "SERVOQ_DEBUG " << detail;
+}
+
+static QByteArray encode_bookmark_drag_payload(BookmarkDragPayload const& payload)
+{
+    return QStringLiteral("type=%1\nid=%2\nsource_folder_id=%3")
+        .arg(payload.type, payload.id, payload.source_folder_id)
+        .toUtf8();
+}
+
+static BookmarkDragPayload parse_bookmark_drag_payload(QMimeData const* mime_data)
+{
+    BookmarkDragPayload payload;
+    if (!mime_data || !mime_data->hasFormat(BookmarkMimeType))
+        return payload;
+
+    auto data = QString::fromUtf8(mime_data->data(BookmarkMimeType));
+    if (data.contains(QLatin1Char('\n'))) {
+        for (auto const& line : data.split(QLatin1Char('\n'))) {
+            auto equals = line.indexOf(QLatin1Char('='));
+            if (equals < 0)
+                continue;
+            auto key = line.left(equals);
+            auto value = line.mid(equals + 1);
+            if (key == QStringLiteral("type"))
+                payload.type = value;
+            else if (key == QStringLiteral("id"))
+                payload.id = value;
+            else if (key == QStringLiteral("source_folder_id"))
+                payload.source_folder_id = value;
+        }
+        return payload;
+    }
+
+    // Backward-compatible parser for the previous root-only "type:id" payload.
+    auto colon = data.indexOf(QLatin1Char(':'));
+    if (colon >= 0) {
+        payload.type = data.left(colon);
+        payload.id = data.mid(colon + 1);
+    }
+    return payload;
+}
 
 static QIcon bookmark_icon_from_base64(QString const& favicon_base64_png, QPalette const& palette)
 {
@@ -260,6 +319,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
     auto add_folder_button = [this](BookmarkFolder const& folder) {
         auto* submenu = new QMenu(folder.title, this);
         submenu->setProperty("folder_id", folder.id);
+        submenu->setAcceptDrops(true);
 
         for (auto const& child : folder.items) {
             auto* child_action = submenu->addAction(
@@ -267,6 +327,7 @@ void BookmarksBar::rebuild() // [ladybird: BookmarksBar.cpp:205-273]
             child_action->setToolTip(child.url);
             child_action->setProperty("bookmark_id", child.id);
             child_action->setProperty("bookmark_type", QStringLiteral("bookmark"));
+            child_action->setProperty("folder_id", folder.id);
             connect(child_action, &QAction::triggered, this, [this, child] {
                 if (m_open_url_callback)
                     m_open_url_callback(child.url);
@@ -350,6 +411,7 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
                     auto folder_id = m_drag_source_id;
                     m_drag_source_id.clear();
                     m_drag_source_type.clear();
+                    m_drag_source_folder_id.clear();
                     if (delta < QApplication::startDragDistance())
                         button->showMenu();
                     return true;
@@ -358,6 +420,7 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
         }
         m_drag_source_id.clear();
         m_drag_source_type.clear();
+        m_drag_source_folder_id.clear();
     }
 
     if (event->type() == QEvent::MouseMove) {
@@ -367,13 +430,18 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
             if (delta >= QApplication::startDragDistance()) {
                 QString id = m_drag_source_id;
                 QString type = m_drag_source_type;
+                QString source_folder_id = m_drag_source_folder_id;
                 m_drag_source_id.clear();
+                m_drag_source_type.clear();
+                m_drag_source_folder_id.clear();
                 auto* drag = new QDrag(this);
                 auto* mime = new QMimeData();
-                mime->setData("application/x-servoq-bookmark", (type + ":" + id).toUtf8());
+                mime->setData(BookmarkMimeType, encode_bookmark_drag_payload({ type, id, source_folder_id }));
                 drag->setMimeData(mime);
                 if (auto* button = qobject_cast<QToolButton*>(object))
                     drag->setPixmap(button->grab());
+                debug_bookmark_drag(QStringLiteral("bookmark_drag_start type=%1 id=%2 source=%3")
+                    .arg(type, id, source_folder_id.isEmpty() ? QStringLiteral("root") : QStringLiteral("folder:%1").arg(source_folder_id)));
                 drag->exec(Qt::MoveAction);
                 return true;
             }
@@ -391,13 +459,24 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
                     if (bm_type == QStringLiteral("bookmark")) {
                         m_drag_source_id = action->property("bookmark_id").toString();
                         m_drag_source_type = QStringLiteral("bookmark");
+                        m_drag_source_folder_id.clear();
                     } else if (bm_type == QStringLiteral("folder")) {
                         m_drag_source_id = action->property("folder_id").toString();
                         m_drag_source_type = QStringLiteral("folder");
+                        m_drag_source_folder_id.clear();
                         m_drag_start_pos = mouse_event.position().toPoint();
                         return true;
                     }
                     m_drag_start_pos = mouse_event.position().toPoint();
+                }
+            } else if (auto* menu = qobject_cast<QMenu*>(object)) {
+                if (auto* action = menu->actionAt(mouse_event.pos())) {
+                    if (action->property("bookmark_type").toString() == QStringLiteral("bookmark")) {
+                        m_drag_source_id = action->property("bookmark_id").toString();
+                        m_drag_source_type = QStringLiteral("bookmark");
+                        m_drag_source_folder_id = action->property("folder_id").toString();
+                        m_drag_start_pos = mouse_event.position().toPoint();
+                    }
                 }
             }
         }
@@ -459,6 +538,32 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
                     showNewFolderDialog();
                 });
                 ctx.exec(mouse_event.globalPosition().toPoint());
+                return true;
+            }
+        }
+    }
+
+    if (auto* menu = qobject_cast<QMenu*>(object)) {
+        if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
+            auto* drag_event = static_cast<QDragMoveEvent*>(event);
+            auto payload = parse_bookmark_drag_payload(drag_event->mimeData());
+            if (payload.type == QStringLiteral("bookmark") && !menu->property("folder_id").toString().isEmpty()) {
+                drag_event->acceptProposedAction();
+                return true;
+            }
+        }
+        if (event->type() == QEvent::Drop) {
+            auto* drop_event = static_cast<QDropEvent*>(event);
+            auto payload = parse_bookmark_drag_payload(drop_event->mimeData());
+            auto folder_id = menu->property("folder_id").toString();
+            if (payload.type == QStringLiteral("bookmark") && !payload.id.isEmpty() && !folder_id.isEmpty()) {
+                auto moved = BookmarkStore::the()->moveBookmarkToFolder(payload.id, folder_id);
+                debug_bookmark_drag(QStringLiteral("bookmark_drop id=%1 from=%2 to=folder folder_id=%3 index=-1 moved=%4")
+                    .arg(payload.id,
+                        payload.source_folder_id.isEmpty() ? QStringLiteral("root") : QStringLiteral("folder:%1").arg(payload.source_folder_id),
+                        folder_id,
+                        moved ? QStringLiteral("true") : QStringLiteral("false")));
+                drop_event->acceptProposedAction();
                 return true;
             }
         }
@@ -563,7 +668,7 @@ void BookmarksBar::showNewFolderDialog()
 
 void BookmarksBar::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+    if (event->mimeData()->hasFormat(BookmarkMimeType))
         event->acceptProposedAction();
 }
 
@@ -575,13 +680,27 @@ void BookmarksBar::dragLeaveEvent(QDragLeaveEvent* event)
 
 void BookmarksBar::dragMoveEvent(QDragMoveEvent* event)
 {
-    if (!event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+    auto payload = parse_bookmark_drag_payload(event->mimeData());
+    if (payload.id.isEmpty())
         return;
 
-    auto data = QString::fromUtf8(event->mimeData()->data("application/x-servoq-bookmark"));
-    auto colon = data.indexOf(':');
-    if (colon < 0)
-        return;
+    auto target = actionAt(event->position().toPoint());
+    if (payload.type == QStringLiteral("bookmark")
+        && target
+        && target->property("bookmark_type").toString() == QStringLiteral("folder")) {
+        auto* widget = widgetForAction(target);
+        if (widget) {
+            auto rect = widget->geometry();
+            auto edge_margin = qMin(12, qMax(1, rect.width() / 4));
+            if (event->position().toPoint().x() > rect.left() + edge_margin
+                && event->position().toPoint().x() < rect.right() - edge_margin) {
+                hideDropIndicator();
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+
     auto x = insertionIndicatorX(event->position().toPoint());
     m_drop_indicator->setGeometry(x, 4, 2, qMax(1, height() - 8));
     m_drop_indicator->raise();
@@ -591,13 +710,10 @@ void BookmarksBar::dragMoveEvent(QDragMoveEvent* event)
 
 void BookmarksBar::dropEvent(QDropEvent* event)
 {
-    if (!event->mimeData()->hasFormat("application/x-servoq-bookmark"))
+    auto payload = parse_bookmark_drag_payload(event->mimeData());
+    if (payload.id.isEmpty())
         return;
 
-    auto data = QString::fromUtf8(event->mimeData()->data("application/x-servoq-bookmark"));
-    auto colon = data.indexOf(':');
-    if (colon < 0) return;
-    auto id = data.mid(colon + 1);
     auto drop_pos = event->position().toPoint();
     hideDropIndicator();
 
@@ -621,8 +737,45 @@ void BookmarksBar::dropEvent(QDropEvent* event)
         return root_actions.size();
     };
 
+    auto* target = actionAt(drop_pos);
+    if (payload.type == QStringLiteral("bookmark")
+        && target
+        && target->property("bookmark_type").toString() == QStringLiteral("folder")) {
+        auto* widget = widgetForAction(target);
+        bool drop_into_folder = true;
+        if (widget) {
+            auto rect = widget->geometry();
+            auto edge_margin = qMin(12, qMax(1, rect.width() / 4));
+            drop_into_folder = drop_pos.x() > rect.left() + edge_margin && drop_pos.x() < rect.right() - edge_margin;
+        }
+        if (drop_into_folder) {
+            auto folder_id = target->property("folder_id").toString();
+            auto moved = BookmarkStore::the()->moveBookmarkToFolder(payload.id, folder_id);
+            debug_bookmark_drag(QStringLiteral("bookmark_drop id=%1 from=%2 to=folder folder_id=%3 index=-1 moved=%4")
+                .arg(payload.id,
+                    payload.source_folder_id.isEmpty() ? QStringLiteral("root") : QStringLiteral("folder:%1").arg(payload.source_folder_id),
+                    folder_id,
+                    moved ? QStringLiteral("true") : QStringLiteral("false")));
+            event->acceptProposedAction();
+            return;
+        }
+    }
+
     int to_index = compute_target_index();
-    BookmarkStore::the()->moveRootItem(id, to_index);
+    if (payload.type == QStringLiteral("folder")) {
+        BookmarkStore::the()->moveRootItem(payload.id, to_index);
+    } else if (payload.type == QStringLiteral("bookmark")) {
+        auto moved = BookmarkStore::the()->moveBookmarkToRoot(payload.id, to_index);
+        debug_bookmark_drag(QStringLiteral("bookmark_drop id=%1 from=%2 to=root index=%3 moved=%4")
+            .arg(payload.id,
+                payload.source_folder_id.isEmpty() ? QStringLiteral("root") : QStringLiteral("folder:%1").arg(payload.source_folder_id),
+                QString::number(to_index),
+                moved ? QStringLiteral("true") : QStringLiteral("false")));
+    } else {
+        debug_bookmark_drag(QStringLiteral("bookmark_drop ignored reason=unknown_type type=%1 id=%2")
+            .arg(payload.type, payload.id));
+        return;
+    }
     event->acceptProposedAction();
 }
 

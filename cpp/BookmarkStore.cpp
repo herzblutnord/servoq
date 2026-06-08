@@ -359,6 +359,154 @@ void BookmarkStore::moveRootItem(QString const& id, int to_index)
     emit changed();
 }
 
+bool BookmarkStore::moveBookmarkToFolder(QString const& bookmark_id, QString const& folder_id, int to_index)
+{
+    if (bookmark_id.isEmpty() || folder_id.isEmpty())
+        return false;
+
+    BookmarkItem item;
+    bool found = false;
+    for (int i = 0; i < m_root_bookmarks.size(); ++i) {
+        if (m_root_bookmarks[i].id == bookmark_id) {
+            item = m_root_bookmarks.takeAt(i);
+            removeRootEntry(bookmark_id);
+            found = true;
+            break;
+        }
+    }
+
+    QString source_folder_id;
+    if (!found) {
+        for (auto& folder : m_folders) {
+            for (int i = 0; i < folder.items.size(); ++i) {
+                if (folder.items[i].id == bookmark_id) {
+                    item = folder.items.takeAt(i);
+                    source_folder_id = folder.id;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+                break;
+        }
+    }
+
+    if (!found)
+        return false;
+
+    for (auto& folder : m_folders) {
+        if (folder.id != folder_id)
+            continue;
+
+        item.folder_id = folder_id;
+        auto insert_index = to_index < 0 ? folder.items.size() : qBound(0, to_index, folder.items.size());
+        folder.items.insert(insert_index, item);
+        save();
+        emit changed();
+        return true;
+    }
+
+    // Restore the bookmark if the target folder disappeared during the drag.
+    item.folder_id = source_folder_id;
+    if (source_folder_id.isEmpty()) {
+        m_root_bookmarks.append(item);
+        m_root_items.append({ item.id, BookmarkType });
+    } else {
+        for (auto& folder : m_folders) {
+            if (folder.id == source_folder_id) {
+                folder.items.append(item);
+                break;
+            }
+        }
+    }
+    return false;
+}
+
+bool BookmarkStore::moveBookmarkToRoot(QString const& bookmark_id, int root_index)
+{
+    if (bookmark_id.isEmpty())
+        return false;
+
+    for (int i = 0; i < m_root_bookmarks.size(); ++i) {
+        if (m_root_bookmarks[i].id == bookmark_id) {
+            reconcileRootOrder();
+            int from_index = -1;
+            for (int j = 0; j < m_root_items.size(); ++j) {
+                if (m_root_items[j].id == bookmark_id) {
+                    from_index = j;
+                    break;
+                }
+            }
+            if (from_index < 0)
+                m_root_items.append({ bookmark_id, BookmarkType });
+            else {
+                auto to_index = root_index < 0 ? m_root_items.size() : qBound(0, root_index, m_root_items.size());
+                if (from_index != to_index)
+                    m_root_items.move(from_index, to_index < from_index ? to_index : to_index - 1);
+            }
+            save();
+            emit changed();
+            return true;
+        }
+    }
+
+    BookmarkItem item;
+    bool found = false;
+    for (auto& folder : m_folders) {
+        for (int i = 0; i < folder.items.size(); ++i) {
+            if (folder.items[i].id == bookmark_id) {
+                item = folder.items.takeAt(i);
+                found = true;
+                break;
+            }
+        }
+        if (found)
+            break;
+    }
+    if (!found)
+        return false;
+
+    item.folder_id.clear();
+    m_root_bookmarks.append(item);
+    reconcileRootOrder();
+    removeRootEntry(item.id);
+    auto to_index = root_index < 0 ? m_root_items.size() : qBound(0, root_index, m_root_items.size());
+    m_root_items.insert(to_index, { item.id, BookmarkType });
+    save();
+    emit changed();
+    return true;
+}
+
+bool BookmarkStore::moveBookmarkWithinFolder(QString const& folder_id, QString const& bookmark_id, int to_index)
+{
+    if (folder_id.isEmpty() || bookmark_id.isEmpty())
+        return false;
+
+    for (auto& folder : m_folders) {
+        if (folder.id != folder_id)
+            continue;
+
+        int from_index = -1;
+        for (int i = 0; i < folder.items.size(); ++i) {
+            if (folder.items[i].id == bookmark_id) {
+                from_index = i;
+                break;
+            }
+        }
+        if (from_index < 0)
+            return false;
+
+        auto target_index = qBound(0, to_index, folder.items.size());
+        if (from_index == target_index)
+            return true;
+        folder.items.move(from_index, target_index < from_index ? target_index : target_index - 1);
+        save();
+        emit changed();
+        return true;
+    }
+    return false;
+}
+
 QStringList BookmarkStore::toFlatList() const
 {
     QStringList list;

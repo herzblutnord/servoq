@@ -91,6 +91,8 @@ private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
     void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
     void takeFocusFromContentClick();
+    bool handleCtrlWheelZoom(QWheelEvent* event);
+    bool handleMiddleClickLinkFallback(QMouseEvent* event);
     bool startEngineIfNeeded();
     void forwardResizeToEngine();
     bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl);
@@ -120,6 +122,7 @@ private:
     bool m_wayland_present_pending { false };
     bool m_wayland_present_in_progress { false };
     bool m_wayland_dirty_after_present { false };
+    double m_ctrl_wheel_zoom_remainder { 0.0 };
 };
 
 } // namespace ServoQ

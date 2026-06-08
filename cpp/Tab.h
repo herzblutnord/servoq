@@ -59,6 +59,7 @@ public:
     void on_load_finish();
     void on_favicon_change(QIcon const& icon = {});
     void on_link_hover(QString const& url);
+    bool openHoveredLinkInNewTab();
     void on_history_changed(QStringList const& urls, int current);
 
 private:
@@ -92,6 +93,7 @@ private:
     QTimer* m_loading_animation_timer { nullptr };
     QIcon m_favicon;
     QString m_url { QStringLiteral("about:blank") };
+    QString m_hovered_link_url;
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };
     bool m_is_empty_new_tab { true };

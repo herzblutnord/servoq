@@ -46,6 +46,7 @@ private:
     bool m_is_updating_chrome_style { false };
     QString m_drag_source_id;
     QString m_drag_source_type;
+    QString m_drag_source_folder_id;
     QPoint m_drag_start_pos;
     QWidget* m_drop_indicator { nullptr };
 };

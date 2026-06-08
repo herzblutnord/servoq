@@ -24,6 +24,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -379,14 +380,30 @@ void Tab::on_history_changed(QStringList const& urls, int current)
 void Tab::on_link_hover(QString const& url)
 {
     if (url.isEmpty()) {
+        m_hovered_link_url.clear();
         setStatusText({});
         m_hover_label->hide();
         return;
     }
+    auto parsed = QUrl(url);
+    m_hovered_link_url = (parsed.isValid() && !parsed.scheme().isEmpty()) ? url : QString();
     m_hover_label->setText(url);
     setStatusText(url);
     updateHoverLabel();
     m_hover_label->show();
+}
+
+bool Tab::openHoveredLinkInNewTab()
+{
+    if (m_hovered_link_url.isEmpty()) {
+        debug_log("middle_click_link", m_controller_id, QStringLiteral("ignored reason=no_hovered_link"));
+        return false;
+    }
+    debug_log("middle_click_link", m_controller_id,
+        QStringLiteral("hovered_url=%1 action=open_new_tab").arg(m_hovered_link_url));
+    if (m_window)
+        m_window->createNewTab(m_hovered_link_url);
+    return m_window != nullptr;
 }
 
 // [ladybird: Tab.cpp:748-763] — position the hover label at the bottom-left of the
