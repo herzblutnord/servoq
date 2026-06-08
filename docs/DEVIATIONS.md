@@ -207,7 +207,10 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | `WebContentView::resizeEvent()` clears the stale Qt frame, forwards physical size + DPR to Servo, immediately spins Servo once, and requests a Qt repaint; duplicate same-size/DPR resize events are ignored | servoshell pumps Servo immediately after window events and requests redraw through `notify_new_frame_ready` |
 | `LoadStatus::Complete` forces one extra software paint/read so Qt receives a final post-load frame even when Servo does not emit another frame notification | Servo 0.2.0 `WebViewDelegate::notify_load_status_changed` behavior |
 | Software blit now reuses `WebContentView::m_frame` storage and copies Rust frame bytes directly into it, reallocating only on size/format change instead of constructing `QImage(...).copy()` every frame | Qt `QImage::bits()` software blit optimization |
-| Runtime renderer selection added: default/`SERVOQ_RENDERER=software` uses the existing software path; `SERVOQ_RENDERER=wayland-window` attempts an experimental Wayland-only native-window path and falls back to software when unavailable | ServoQ runtime selection; servoshell headed renderer parity attempt |
+| Runtime renderer selection: `SERVOQ_RENDERER` is parsed at startup. `auto` (default/unset) tries Wayland-window on Qt Wayland and falls back to software; `software` forces the software renderer; `wayland-window` explicitly requests the Wayland backend. Unknown values warn and fall back to `auto`. | ServoQ runtime selection; servoshell headed renderer parity attempt |
+| `SERVOQ_RENDERER=auto` (default): on Qt Wayland, clears `LIBGL_ALWAYS_SOFTWARE`, creates `WindowRenderingContext`, checks GL identity — if `software_gl=false` (any hardware driver: AMD/radeonsi, Intel/iris, NVIDIA proprietary, etc.) the Wayland renderer is used; if `software_gl=true` (llvmpipe, softpipe, swrast, software), warns and falls back to software. On non-Wayland Qt platforms, logs a note (with `SERVOQ_PERF=1`) and uses software. | Auto-mode hardware preference: GPU path should not silently use llvmpipe |
+| `SERVOQ_RENDERER=wayland-window`: explicit Wayland mode for testing. Uses the Wayland renderer even when software GL is detected (prints a loud warning); only falls back to software if the renderer cannot initialize at all. | Diagnostic/explicit Wayland mode — user request should not be silently overridden |
+| `SERVOQ_RENDERER=software`: forces the software renderer regardless of platform; `WindowRenderingContext` is never created. | Debug/fallback mode |
 | Wayland window renderer creates an embedded `QWindow` with `QWidget::createWindowContainer()`, obtains `wl_display*` from `QNativeInterface::QWaylandApplication::display()`, obtains `wl_surface*` from private `QNativeInterface::Private::QWaylandWindow::surface()`, and passes both pointers to Rust | Qt 6 Wayland native interface |
 | Rust constructs raw-window-handle 0.6 Wayland display/window handles and attempts `WindowRenderingContext::new(display_handle, window_handle, physical_size)` | servoshell `WindowRenderingContext::new()` path |
 | Wayland window backend bypasses the software readback path: `notify_new_frame_ready` requests an embedded-window update, and update/expose calls present through `webview.paint()` + `WindowRenderingContext::present()` without `read_to_image()` or C++ frame transfer | servoshell redraw/present model |
@@ -217,20 +220,45 @@ Changes applied during the Phase 1–4 audit that bring ServoQ's chrome into clo
 | Software renderer remains the fallback and keeps the fixed resize model: Qt logical size × DPR is sent as physical size, DPR is passed separately through `set_hidpi_scale_factor()`, and `webview.resize(PhysicalSize)` drives Servo viewport updates | Servo 0.2.0 `WebView::resize()` contract |
 | Wayland window renderer is intentionally Wayland-only. No X11/XCB/Xlib/XWayland path is implemented. If Qt is not running on Wayland, if native handles are unavailable, or if Servo's `WindowRenderingContext` creation fails, ServoQ prints a warning and keeps the software renderer. | Project platform constraint |
 
-Wayland renderer hardware-GL sanity check:
+Renderer policy summary:
+
+| `SERVOQ_RENDERER` | On Wayland + hardware GL | On Wayland + software GL | Non-Wayland |
+|---|---|---|---|
+| unset / `auto` | Wayland renderer (fast) | warn + software fallback | software |
+| `wayland-window` | Wayland renderer | Wayland renderer + loud warning | software fallback |
+| `software` | software | software | software |
+
+Hardware GL success condition is `software_gl=false`. Accepted hardware renderers include AMD/radeonsi, Intel/iris, NVIDIA proprietary, and other non-software GL renderers. Software renderers detected: llvmpipe, softpipe, swrast, software.
+
+`MESA_LOADER_DRIVER_OVERRIDE=radeonsi` must NOT be hardcoded; it was only a diagnostic command and would break Intel and NVIDIA users.
+
+Default run (auto mode on Wayland with hardware GL):
 
 ```bash
-SERVOQ_RENDERER=wayland-window cargo run --release --features servo-engine
-SERVOQ_PERF=1 SERVOQ_RENDERER=wayland-window cargo run --release --features servo-engine
+cargo run --features servo-engine
+cargo run --release --features servo-engine
+SERVOQ_PERF=1 cargo run --release --features servo-engine
 ```
 
-Expected GL line:
+Expected GL line (hardware renderer — vendor-neutral example):
 
 ```text
-SERVOQ_GL ... gl_renderer="AMD Radeon Graphics (... radeonsi ...)" software_gl=false
+SERVOQ_GL ... software_gl=false
 ```
 
-If `gl_renderer` ever regresses to `llvmpipe` / `software_gl=true`, first check for `LIBGL_ALWAYS_SOFTWARE=1` being set before `WindowRenderingContext::new()` / `eglInitialize()`. Do not start by optimizing QImage/readback or Servo paint scheduling.
+Explicit Wayland testing:
+
+```bash
+SERVOQ_RENDERER=wayland-window SERVOQ_PERF=1 cargo run --release --features servo-engine
+```
+
+Software fallback:
+
+```bash
+SERVOQ_RENDERER=software cargo run --features servo-engine
+```
+
+If `gl_renderer` ever shows `llvmpipe` / `software_gl=true` in auto mode, first check for `LIBGL_ALWAYS_SOFTWARE=1` being set before `WindowRenderingContext::new()` / `eglInitialize()`. The fix (`create_wayland_rendering_context()` clears `LIBGL_ALWAYS_SOFTWARE` before EGL init) must remain. Do not start by optimizing QImage/readback or Servo paint scheduling.
 
 Release profiling commands for unresolved Wayland `webview.paint()` slowness after hardware GL is confirmed:
 

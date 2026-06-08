@@ -115,11 +115,13 @@ rg 'tab_id=<TAB_ID>|SERVOQ_DEBUG' /tmp/servoq.log | tail -120
 
 ## Compare Embedder Setup
 
-ServoQ supports a software renderer and an experimental Wayland `WindowRenderingContext` renderer. The Servo 0.2.0 `winit_minimal` example also uses `WindowRenderingContext`, supplies an `EventLoopWaker`, and calls `servo.setup_logging()` after building `Servo`.
+ServoQ supports a software renderer and a Wayland `WindowRenderingContext` renderer. The Servo 0.2.0 `winit_minimal` example also uses `WindowRenderingContext`, supplies an `EventLoopWaker`, and calls `servo.setup_logging()` after building `Servo`.
 
 Known differences to keep in mind when comparing with standalone Servo/nightly:
 
-- `SERVOQ_RENDERER=software` still uses `SoftwareRenderingContext`; `SERVOQ_RENDERER=wayland-window` uses `WindowRenderingContext` when Qt Wayland handles are available.
+- Default (`SERVOQ_RENDERER` unset or `auto`): on Qt Wayland with hardware GL, uses `WindowRenderingContext`; falls back to `SoftwareRenderingContext` on non-Wayland or when software GL is detected.
+- `SERVOQ_RENDERER=software`: forces `SoftwareRenderingContext` regardless of platform.
+- `SERVOQ_RENDERER=wayland-window`: explicitly requests `WindowRenderingContext`; falls back to software only on full init failure (software GL produces a warning but the renderer stays active).
 - ServoQ installs a Qt `EventLoopWaker`; the 200ms timer is only a software fallback safety net and is disabled for the active Wayland renderer.
 - ServoQ now calls `servo.setup_logging()` after building Servo, matching servoshell.
 - ServoQ passes `Opts::default()`, explicit preferences, a protocol registry, and a shared `UserContentManager`, but it does not install servoshell's custom `urlinfo`, `servo`, or `resource` protocol handlers.

@@ -277,17 +277,17 @@ mod engine {
             || renderer.contains("swrast")
     }
 
-    fn log_wayland_gl_info_once(
+    // Queries GL/EGL identity from the current Wayland context.
+    // Logs the SERVOQ_GL line once (first call only); always returns (is_software_gl, gl_renderer).
+    // Returns None if make_current() fails.
+    fn detect_and_log_wayland_gl(
         context: &WindowRenderingContext,
         size: PhysicalSize<u32>,
         scale: f32,
-    ) {
-        if GL_INFO_LOGGED.swap(true, Ordering::AcqRel) {
-            return;
-        }
+    ) -> Option<(bool, String)> {
         if let Err(error) = context.make_current() {
             eprintln!("SERVOQ_GL error=make_current_failed details={error:?}");
-            return;
+            return None;
         }
 
         let gl = context.glow_gl_api();
@@ -305,13 +305,14 @@ mod engine {
             "desktop-gl"
         };
 
-        eprintln!(
-            "SERVOQ_GL wayland_backend=true context_type={context_type} surface={}x{} dpr={scale} egl_vendor={egl_vendor:?} egl_version={egl_version:?} egl_client_apis={egl_client_apis:?} gl_vendor={gl_vendor:?} gl_renderer={gl_renderer:?} gl_version={gl_version:?} glsl_version={glsl_version:?} software_gl={software_gl}",
-            size.width, size.height
-        );
-        if software_gl {
-            eprintln!("[servoq] WARNING: Wayland renderer is using software GL: {gl_renderer}");
+        if !GL_INFO_LOGGED.swap(true, Ordering::AcqRel) {
+            eprintln!(
+                "SERVOQ_GL wayland_backend=true context_type={context_type} surface={}x{} dpr={scale} egl_vendor={egl_vendor:?} egl_version={egl_version:?} egl_client_apis={egl_client_apis:?} gl_vendor={gl_vendor:?} gl_renderer={gl_renderer:?} gl_version={gl_version:?} glsl_version={glsl_version:?} software_gl={software_gl}",
+                size.width, size.height
+            );
         }
+
+        Some((software_gl, gl_renderer))
     }
 
     fn log_embedder_setup_once() {
@@ -941,6 +942,7 @@ mod engine {
         scale: f32,
         wl_display: u64,
         wl_surface: u64,
+        allow_software_gl: bool,
     ) -> bool {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return false;
@@ -960,7 +962,19 @@ mod engine {
                 return false;
             }
         };
-        log_wayland_gl_info_once(&wayland_context, size, scale);
+
+        let (software_gl, gl_renderer) =
+            detect_and_log_wayland_gl(&wayland_context, size, scale).unwrap_or((false, String::new()));
+
+        if software_gl {
+            if !allow_software_gl {
+                eprintln!(
+                    "[servoq] auto renderer: Wayland renderer selected software GL ({gl_renderer}); falling back to software"
+                );
+                return false;
+            }
+            eprintln!("[servoq] WARNING: Wayland renderer is using software GL: {gl_renderer}");
+        }
 
         ENGINE.with(|state| {
             let mut state = state.borrow_mut();
@@ -1614,6 +1628,7 @@ pub fn create_webview_wayland_window(
     _scale: f32,
     _wl_display: u64,
     _wl_surface: u64,
+    _allow_software_gl: bool,
 ) -> bool {
     #[cfg(feature = "servo-engine")]
     return engine::create_webview_wayland_window(
@@ -1624,6 +1639,7 @@ pub fn create_webview_wayland_window(
         _scale,
         _wl_display,
         _wl_surface,
+        _allow_software_gl,
     );
     #[allow(unreachable_code)]
     false

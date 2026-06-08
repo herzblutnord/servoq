@@ -89,7 +89,7 @@ private:
     void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
     void startEngineIfNeeded();
     void forwardResizeToEngine();
-    bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr);
+    bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl);
     bool waylandRendererRequested() const;
     bool waylandRendererActive() const { return m_wayland_renderer_active; }
     ServoWaylandContentWindow* waylandWindow() const { return m_wayland_window; }

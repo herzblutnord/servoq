@@ -61,6 +61,7 @@ pub mod ffi {
             scale: f32,
             wl_display: u64,
             wl_surface: u64,
+            allow_software_gl: bool,
         ) -> bool;
         fn close_webview(id: i32);
         fn shutdown_servo();

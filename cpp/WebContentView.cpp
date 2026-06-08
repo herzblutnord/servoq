@@ -67,6 +67,27 @@ static bool perf_enabled()
     return qEnvironmentVariableIsSet("SERVOQ_PERF");
 }
 
+enum class RendererMode { Auto, Software, WaylandWindow };
+
+static RendererMode parse_renderer_mode()
+{
+    auto val = qEnvironmentVariable("SERVOQ_RENDERER");
+    if (val.isEmpty() || val == QStringLiteral("auto"))
+        return RendererMode::Auto;
+    if (val == QStringLiteral("software"))
+        return RendererMode::Software;
+    if (val == QStringLiteral("wayland-window"))
+        return RendererMode::WaylandWindow;
+    qWarning().nospace() << "[servoq] unknown SERVOQ_RENDERER='" << val << "'; using auto";
+    return RendererMode::Auto;
+}
+
+static RendererMode g_renderer_mode()
+{
+    static RendererMode mode = parse_renderer_mode();
+    return mode;
+}
+
 struct QtPerfStats {
     std::chrono::steady_clock::time_point window_start { std::chrono::steady_clock::now() };
     uint64_t wake_events { 0 };
@@ -390,10 +411,11 @@ void WebContentView::setInitialUrl(QString const& url)
 
 bool WebContentView::waylandRendererRequested() const
 {
-    return qEnvironmentVariable("SERVOQ_RENDERER") == QStringLiteral("wayland-window");
+    auto mode = g_renderer_mode();
+    return mode == RendererMode::Auto || mode == RendererMode::WaylandWindow;
 }
 
-bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr)
+bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl)
 {
     if (!m_wayland_window || !m_wayland_container)
         return false;
@@ -412,6 +434,7 @@ bool WebContentView::startWaylandRendererIfPossible(int physical_width, int phys
     if (!app_interface || !app_interface->display()) {
         qWarning() << "[servoq] Wayland window renderer unavailable: wl_display unavailable; falling back to software";
         m_wayland_container->hide();
+        m_wayland_window->hide();
         return false;
     }
 
@@ -419,6 +442,7 @@ bool WebContentView::startWaylandRendererIfPossible(int physical_width, int phys
     if (!window_interface || !window_interface->surface()) {
         qWarning() << "[servoq] Wayland window renderer unavailable: wl_surface unavailable; falling back to software";
         m_wayland_container->hide();
+        m_wayland_window->hide();
         return false;
     }
 
@@ -430,9 +454,11 @@ bool WebContentView::startWaylandRendererIfPossible(int physical_width, int phys
         physical_height,
         static_cast<float>(dpr),
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(app_interface->display())),
-        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window_interface->surface())));
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window_interface->surface())),
+        allow_software_gl);
     if (!ok) {
         m_wayland_container->hide();
+        m_wayland_window->hide();
         return false;
     }
 
@@ -557,16 +583,42 @@ void WebContentView::startEngineIfNeeded()
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
 
-    if (waylandRendererRequested() && startWaylandRendererIfPossible(pw, ph, dpr)) {
-        debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
+    auto mode = g_renderer_mode();
+
+    auto use_software = [&] {
+        debug_log("create_webview", m_tab_id, QSize(pw, ph), dpr);
+        auto url_std = m_initial_url.toStdString();
+        servoq::create_webview(m_tab_id, url_std.c_str(), pw, ph, static_cast<float>(dpr));
         notifyThemeChange();
+    };
+
+    if (mode == RendererMode::WaylandWindow) {
+        // Explicit mode: attempt Wayland, allow software GL (Rust will warn), fall back to
+        // software only if the renderer cannot initialize at all.
+        if (startWaylandRendererIfPossible(pw, ph, dpr, /*allow_software_gl=*/true)) {
+            debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
+            notifyThemeChange();
+            return;
+        }
+        use_software();
         return;
     }
 
-    debug_log("create_webview", m_tab_id, QSize(pw, ph), dpr);
-    auto url_std = m_initial_url.toStdString();
-    servoq::create_webview(m_tab_id, url_std.c_str(), pw, ph, static_cast<float>(dpr));
-    notifyThemeChange();
+    if (mode == RendererMode::Auto) {
+        if (QGuiApplication::platformName() != QStringLiteral("wayland")) {
+            if (perf_enabled())
+                qInfo() << "[servoq] auto renderer: Qt is not running on Wayland; using software renderer";
+        } else if (startWaylandRendererIfPossible(pw, ph, dpr, /*allow_software_gl=*/false)) {
+            // Hardware Wayland renderer selected.
+            debug_log("create_wayland_webview", m_tab_id, QSize(pw, ph), dpr);
+            notifyThemeChange();
+            return;
+        }
+        // Wayland unavailable or software GL detected — fall through to software.
+    }
+
+    // RendererMode::Software, or auto fallback.
+    use_software();
 }
 
 void WebContentView::forwardResizeToEngine()
