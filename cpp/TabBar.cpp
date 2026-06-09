@@ -16,6 +16,7 @@
 #include "ChromeLayout.h"
 #include "Icon.h"
 #include "Tab.h"
+#include "WebContentView.h"
 
 #include <QAction>
 #include <QApplication>
@@ -40,6 +41,7 @@
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QMenu>
+#include <QPointer>
 #include <QStyle>
 #include <QToolButton>
 #include <QVariantAnimation>
@@ -536,6 +538,12 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     if (!tab)
         return;
 
+    // Capture QPointer<Tab> instead of raw index for all lambdas.
+    // During menu.exec() the nested event loop can service a Servo tick that opens
+    // new tabs (request_open_tab_for_id), shifting indices. Resolving the index
+    // from the stable QPointer at trigger-time prevents closing the wrong tab.
+    QPointer<Tab> tab_ptr = tab;
+
     QMenu menu(this);
 
     auto* reload_action = menu.addAction("Reload Tab");
@@ -546,8 +554,10 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     menu.addSeparator();
 
     auto* duplicate_action = menu.addAction("Duplicate Tab");
-    connect(duplicate_action, &QAction::triggered, browser_window, [browser_window, tab] {
-        browser_window->createNewTab(tab->url());
+    connect(duplicate_action, &QAction::triggered, browser_window, [browser_window, tab_ptr] {
+        if (!tab_ptr)
+            return;
+        browser_window->createNewTab(tab_ptr->url());
     });
 
     menu.addSeparator();
@@ -567,18 +577,30 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     menu.addSeparator();
 
     auto* close_action = menu.addAction("Close Tab");
-    connect(close_action, &QAction::triggered, browser_window, [browser_window, index] {
-        browser_window->closeTabFromContextMenu(index);
+    connect(close_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
+        if (!tab_ptr)
+            return;
+        int idx = tab_widget->indexOf(tab_ptr);
+        if (idx >= 0)
+            browser_window->closeTabFromContextMenu(idx);
     });
 
     auto* close_other_action = menu.addAction("Close Other Tabs");
-    connect(close_other_action, &QAction::triggered, browser_window, [browser_window, index] {
-        browser_window->closeOtherTabs(index);
+    connect(close_other_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
+        if (!tab_ptr)
+            return;
+        int idx = tab_widget->indexOf(tab_ptr);
+        if (idx >= 0)
+            browser_window->closeOtherTabs(idx);
     });
 
     auto* close_right_action = menu.addAction("Close Tabs to the Right");
-    connect(close_right_action, &QAction::triggered, browser_window, [browser_window, index] {
-        browser_window->closeTabsToRight(index);
+    connect(close_right_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
+        if (!tab_ptr)
+            return;
+        int idx = tab_widget->indexOf(tab_ptr);
+        if (idx >= 0)
+            browser_window->closeTabsToRight(idx);
     });
 
     close_other_action->setEnabled(tab_widget->count() > 1);
@@ -993,7 +1015,11 @@ void TabWidget::removeTab(int index)
     m_stack->removeWidget(widget);
     m_tab_bar->removeTab(index);
     tab->setToolbarContainerInTabLayout(true);
-    delete widget;
+    // Use deleteLater() instead of delete so the Tab and its children (WebContentView,
+    // toolbars, timers) remain valid for the rest of the current event-delivery chain.
+    // Synchronous delete here can free widgets while Qt's mouse-event dispatch still
+    // holds a raw pointer to one of them, causing a vtable-corruption SIGSEGV.
+    widget->deleteLater();
     updateTabLayout();
 }
 
@@ -1463,6 +1489,53 @@ void TabWidget::updateChromeStyle()
     m_vertical_tabs_separator->setStyleSheet(style_sheet);
     m_vertical_tabs_resize_handle->setStyleSheet(style_sheet);
     m_is_updating_chrome_style = false;
+}
+
+// ── Wayland activation transaction ──────────────────────────────────────────
+
+void TabWidget::updateContainerGeometry()
+{
+    if (auto* current = currentTab()) {
+        if (auto* v = current->view())
+            v->updateContainerGeometry();
+    }
+}
+
+// activateTab is the sole entry point for Wayland container ownership transfers.
+// It is always called deferred (QTimer::singleShot(0)) from
+// BrowserWindow::onCurrentChanged so the mouse-press that triggered the tab
+// switch has fully unwound before we touch the native subsurface.
+//
+// TODO: background tabs on Wayland do not start their engine until activated
+// (deferred in WebContentView::startEngineIfNeeded).  Background tabs appear
+// blank until clicked.  Fix requires either software-renderer fallback or a
+// dedicated off-screen Wayland surface per tab.
+void TabWidget::activateTab(int index)
+{
+    if (index < 0 || index >= count())
+        return;
+
+    auto* new_tab = tab(index);
+    if (!new_tab)
+        return;
+
+    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        qInfo().nospace()
+            << "SERVOQ_DEBUG activate_tab index=" << index
+            << " tab_id=" << new_tab->controllerId();
+    }
+
+    for (int i = 0; i < count(); ++i) {
+        if (auto* t = tab(i); t && t != new_tab) {
+            if (auto* v = t->view())
+                v->onBecomeInactiveTab();
+        }
+    }
+
+    updateContainerGeometry();
+
+    if (auto* v = new_tab->view())
+        v->onBecomeActiveTab();
 }
 
 }

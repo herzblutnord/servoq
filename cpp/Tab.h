@@ -35,6 +35,7 @@ public:
     QString url() const { return m_url; }
     QIcon tabIcon() const;
     int controllerId() const { return m_controller_id; }
+    WebContentView* view() const { return m_view; }
     QWidget* toolbarContainer() const { return m_toolbar_container; }
     BookmarksBar* bookmarksBar() const { return m_bookmarks_bar; }
     FindInPageWidget* findInPageWidget() const { return m_find_in_page; }

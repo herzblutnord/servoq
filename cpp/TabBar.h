@@ -119,6 +119,17 @@ public:
     TabBar* tabBar() const { return m_tab_bar; }
     TabBar* tab_bar() const { return m_tab_bar; }
 
+    // Returns the page-column QStackedWidget. WebContentView uses it to
+    // calculate container geometry via mapTo().
+    QWidget* contentViewport() const { return m_stack; }
+
+    // Central Wayland activation transaction. Always called deferred via
+    // QTimer::singleShot(0) from BrowserWindow::onCurrentChanged.
+    void activateTab(int index);
+
+    // Delegates container geometry update to the current tab's WebContentView.
+    void updateContainerGeometry();
+
     void setVerticalTabsEnabled(bool enabled);
     void set_vertical_tabs_enabled(bool enabled) { setVerticalTabsEnabled(enabled); }
     void setVerticalTabsExpanded(bool expanded);

@@ -511,7 +511,8 @@ void Tab::buildToolbar()
     connect(back_btn, &QToolButton::customContextMenuRequested, this, [this, back_btn](QPoint const& pos) {
         if (m_history_urls.isEmpty())
             return;
-        QMenu menu(back_btn);
+        // No parent: prevents double-free if Tab is deleted during menu.exec() nested event loop.
+        QMenu menu;
         int start = m_history_current - 1;
         for (int i = start; i >= 0; --i) {
             auto* act = menu.addAction(m_history_urls[i]);
@@ -531,7 +532,8 @@ void Tab::buildToolbar()
     connect(forward_btn, &QToolButton::customContextMenuRequested, this, [this, forward_btn](QPoint const& pos) {
         if (m_history_urls.isEmpty())
             return;
-        QMenu menu(forward_btn);
+        // No parent: prevents double-free if Tab is deleted during menu.exec() nested event loop.
+        QMenu menu;
         int start = m_history_current + 1;
         for (int i = start; i < m_history_urls.size(); ++i) {
             auto* act = menu.addAction(m_history_urls[i]);

@@ -50,6 +50,15 @@ public:
     void setEmptyNewTab(bool empty_new_tab);
     bool ensureEngineStarted();
 
+    // Activation transaction — called by TabWidget::activateTab (always deferred via
+    // QTimer::singleShot so the mouse event that triggered the switch has unwound).
+    // These are the ONLY paths that change g_wayland_owner or touch the container.
+    void onBecomeActiveTab();
+    void onBecomeInactiveTab();
+
+    // Public so TabWidget::updateContainerGeometry can delegate to it.
+    void updateContainerGeometry();
+
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);
     void receiveFrameBytes(uint8_t const* bytes, int width, int height);
@@ -97,10 +106,10 @@ private:
     void forwardResizeToEngine();
     bool startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl);
     bool attachSharedWaylandWindow();
-    void updateContainerGeometry();
     bool waylandRendererRequested() const;
     bool waylandRendererActive() const { return m_wayland_renderer_active; }
     ServoWaylandContentWindow* waylandWindow() const { return m_wayland_window; }
+    bool isCurrentlyActiveTab() const;
 
     Tab* m_tab { nullptr };
     int m_tab_id { 0 };

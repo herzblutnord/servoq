@@ -50,6 +50,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
+#include <QStackedWidget>
 #include <QWindow>
 #include <QtGui/qguiapplication_platform.h>
 #include <QtGui/qpa/qplatformwindow_p.h>
@@ -673,18 +674,35 @@ bool WebContentView::waylandRendererRequested() const
     return mode == RendererMode::Auto || mode == RendererMode::WaylandWindow;
 }
 
+// Returns true only when this view's Tab is the QStackedWidget's current widget.
+// Unlike isVisible(), this queries tab-controller state directly and is reliable
+// during Qt show/hide transitions that occur inside tab switches.
+bool WebContentView::isCurrentlyActiveTab() const
+{
+    if (!m_tab)
+        return false;
+    auto* stacked = qobject_cast<QStackedWidget*>(m_tab->parentWidget());
+    return stacked && stacked->currentWidget() == m_tab;
+}
+
 bool WebContentView::attachSharedWaylandWindow()
 {
     if (!waylandRendererRequested())
         return false;
     if (!g_wayland_window()) {
         g_wayland_window() = new ServoWaylandContentWindow(this);
-        // Use the Tab's QStackedWidget as a stable parent so we never need to
-        // call setParent() on the container during tab switches. Reparenting a
-        // createWindowContainer widget on Wayland reconfigures the wl_subsurface,
-        // which can leave the EGL surface in a state where eglSwapBuffers blocks
-        // indefinitely on the next tab switch — causing the UI to freeze.
-        QWidget* stable_parent = (m_tab && m_tab->parentWidget()) ? m_tab->parentWidget() : this;
+        // Parent the container to the page-column widget (parent of the
+        // QStackedWidget, grandparent of Tab) so it is never affected by the
+        // QStackedWidget hiding/showing Tab pages during tab switches.  The
+        // QStackedWidget's hide/show cycle for child pages maps/unmaps the
+        // wl_subsurface if the container is a child of m_stack, causing
+        // eglSwapBuffers to block indefinitely on the freshly-remapped surface.
+        // The page-column widget (m_page_column inside TabWidget) is stable for
+        // the lifetime of the browser window and is never hidden.
+        QWidget* stack = (m_tab && m_tab->parentWidget()) ? m_tab->parentWidget() : nullptr;
+        QWidget* stable_parent = (stack && stack->parentWidget()) ? stack->parentWidget() : (stack ? stack : this);
+        debug_log("wayland_container_created", m_tab_id,
+            QStringLiteral("stable_parent_class=%1").arg(stable_parent->metaObject()->className()));
         g_wayland_container() = QWidget::createWindowContainer(g_wayland_window(), stable_parent);
         g_wayland_container()->setFocusPolicy(Qt::StrongFocus);
         g_wayland_container()->setMouseTracking(true);
@@ -703,6 +721,18 @@ bool WebContentView::attachSharedWaylandWindow()
         return false;
 
     if (g_wayland_owner() != this) {
+        // Only the currently-active tab may claim the shared Wayland container.
+        // startEngineIfNeeded() defers engine creation for background tabs, so
+        // reaching this path from a non-active tab indicates an unexpected code
+        // path — fail loudly rather than silently corrupting the active tab.
+        if (!isCurrentlyActiveTab()) {
+            qWarning().nospace()
+                << "SERVOQ_WARN attachSharedWaylandWindow from non-active tab " << m_tab_id
+                << " current_owner=" << (g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                << " owner_generation=" << g_wayland_owner_generation();
+            return false;
+        }
+
         auto* previous_owner = g_wayland_owner();
         if (previous_owner && previous_owner != this) {
             previous_owner->m_wayland_present_pending = false;
@@ -712,8 +742,8 @@ bool WebContentView::attachSharedWaylandWindow()
         g_wayland_owner() = this;
         ++g_wayland_owner_generation();
         m_wayland_window->setOwner(this);
-        // Do NOT call setParent() — the container lives under a stable parent
-        // (the QStackedWidget) for the lifetime of the app. Just reposition it.
+        // Do NOT call setParent() — the container lives under the stable
+        // page-column widget for the app lifetime. Just reposition it.
         updateContainerGeometry();
         if (perf_enabled()) {
             qInfo().nospace()
@@ -725,7 +755,7 @@ bool WebContentView::attachSharedWaylandWindow()
                 << " owner_generation=" << g_wayland_owner_generation();
         }
         debug_log("wayland_owner_changed", m_tab_id,
-            QStringLiteral("previous=%1 owner_generation=%2")
+            QStringLiteral("previous=%1 owner_generation=%2 visible=1")
                 .arg(previous_owner ? previous_owner->m_tab_id : 0)
                 .arg(g_wayland_owner_generation()));
     }
@@ -754,6 +784,13 @@ bool WebContentView::startWaylandRendererIfPossible(int physical_width, int phys
     }
     if (!attachSharedWaylandWindow())
         return false;
+
+    // This function is only reached for the currently-active tab (background tabs
+    // are deferred in startEngineIfNeeded). Container and window ops are always safe.
+    debug_log("start_wayland_renderer", m_tab_id,
+        QStringLiteral("physical=%1x%2")
+            .arg(physical_width)
+            .arg(physical_height));
 
     updateContainerGeometry();
     m_wayland_container->show();
@@ -913,13 +950,28 @@ void WebContentView::notifyThemeChange()
 // TODO: forward to webview.set_page_zoom() once per-tab zoom is wired.
 void WebContentView::set_zoom_level(double /*zoom_level*/) {}
 
-// Deferred to showEvent so width()/height() carry real layout-assigned values.
+// Engine creation is deferred until the tab is active so that width()/height()
+// carry real layout-assigned values and background tabs never touch the shared
+// Wayland wl_surface owned by the currently-visible tab.
 bool WebContentView::startEngineIfNeeded()
 {
     if (m_tab_id == 0 || m_webview_created)
         return false;
     if (m_empty_new_tab)
         return false;
+
+    // On Wayland, a background tab must not create a WebView that targets the
+    // shared wl_surface — doing so corrupts the active tab's rendering context.
+    // Return true (not false) so Tab::navigate() skips its load_url call; the
+    // URL is already in m_initial_url and will be passed to create_webview when
+    // this tab becomes active and showEvent retries startEngineIfNeeded().
+    if (QGuiApplication::platformName() == QStringLiteral("wayland")
+        && waylandRendererRequested()
+        && !isCurrentlyActiveTab()) {
+        debug_log("engine_creation_deferred_background_wayland", m_tab_id, QStringLiteral(""));
+        return true;
+    }
+
     m_webview_created = true;
 
     // Physical pixel dimensions — matches Ladybird update_viewport_size() line 761:
@@ -1236,22 +1288,16 @@ void WebContentView::keyReleaseEvent(QKeyEvent* event)
 }
 
 // showEvent / hideEvent — mirrors Ladybird (vendor lines 774-783).
+//
+// IMPORTANT: showEvent and hideEvent must NOT touch the shared Wayland container,
+// g_wayland_owner, or m_wayland_window.  Container ownership is managed exclusively
+// by TabWidget::activateTab, which runs deferred via QTimer::singleShot(0) from
+// BrowserWindow::onCurrentChanged.  See onBecomeActiveTab / onBecomeInactiveTab.
 void WebContentView::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
     debug_log("show", m_tab_id);
     startEngineIfNeeded();
-    if (m_wayland_renderer_active && m_wayland_container) {
-        attachSharedWaylandWindow(); // transfers ownership, updates geometry without setParent
-        m_wayland_container->show();
-        m_wayland_container->raise();
-    } else if (!m_wayland_renderer_active && g_wayland_container()
-               && g_wayland_owner() == nullptr && g_wayland_container()->isVisible()) {
-        // Non-Wayland tab taking over; the container was kept visible but off-screen
-        // (to avoid unmapping the wl_surface). Now truly hide it so the software-rendered
-        // or placeholder content is visible without the Wayland overlay on top.
-        g_wayland_container()->hide();
-    }
     forwardResizeToEngine();
     if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
@@ -1264,37 +1310,70 @@ void WebContentView::hideEvent(QHideEvent* event)
     QWidget::hideEvent(event);
     debug_log("hide", m_tab_id);
     m_engine_tick_timer->stop();
-    if (m_wayland_container && g_wayland_owner() == this) {
+    // Cancel in-flight presents. g_wayland_owner and container geometry/visibility
+    // are updated by TabWidget::activateTab (deferred) — not here.
+    if (m_wayland_renderer_active) {
         m_wayland_present_pending = false;
         m_wayland_dirty_after_present = false;
         m_wayland_present_in_progress = false;
-        // Move the container off-screen instead of hiding it. Hiding a
-        // createWindowContainer widget causes Qt/Wayland to unmap the embedded
-        // wl_surface. The first eglSwapBuffers() after remapping blocks waiting
-        // for a compositor frame callback that may never arrive for a freshly-
-        // remapped surface, freezing the Qt main thread indefinitely.
-        // Keeping the surface mapped (just off-screen) avoids this race.
-        // The incoming tab's showEvent will either reposition it (Wayland tab)
-        // or truly hide it (non-Wayland tab, see showEvent above).
-        auto* parent = m_wayland_container->parentWidget();
-        int off = parent ? parent->width() : width();
-        m_wayland_container->move(-off, 0);
-        if (m_wayland_window)
-            m_wayland_window->setOwner(nullptr);
-        g_wayland_owner() = nullptr;
-        ++g_wayland_owner_generation();
-        if (perf_enabled()) {
-            qInfo().nospace()
-                << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
-                << "tab_switch_path=shared-qt-surface-offscreen previous_tab_id=" << m_tab_id
-                << " active_tab_id=0 webview_id=" << m_tab_id
-                << " owner_generation=" << g_wayland_owner_generation();
-        }
-        debug_log("wayland_owner_cleared", m_tab_id,
-            QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
     }
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::set_webview_active(m_tab_id, false);
+}
+
+// ── Activation transaction ──────────────────────────────────────────────────
+// Called by TabWidget::activateTab (always deferred via QTimer::singleShot).
+// These are the only paths that change g_wayland_owner or reposition/show the
+// shared Wayland container during normal tab switching.
+
+void WebContentView::onBecomeInactiveTab()
+{
+    debug_log("become_inactive_tab", m_tab_id,
+        QStringLiteral("was_owner=%1").arg(g_wayland_owner() == this ? 1 : 0));
+    if (m_wayland_renderer_active) {
+        m_wayland_present_pending = false;
+        m_wayland_dirty_after_present = false;
+        m_wayland_present_in_progress = false;
+    }
+}
+
+void WebContentView::onBecomeActiveTab()
+{
+    debug_log("become_active_tab", m_tab_id,
+        QStringLiteral("wayland_active=%1 webview_created=%2")
+            .arg(m_wayland_renderer_active ? 1 : 0)
+            .arg(m_webview_created ? 1 : 0));
+
+    // For background Wayland tabs that were deferred, create the WebView now
+    // that this tab is the current page and has valid geometry.
+    startEngineIfNeeded();
+    forwardResizeToEngine();
+
+    if (m_wayland_renderer_active && m_wayland_container) {
+        attachSharedWaylandWindow();  // transfers g_wayland_owner, bumps generation
+        updateContainerGeometry();
+        m_wayland_container->show();
+        m_wayland_container->raise();
+        debug_log("become_active_tab_container_shown", m_tab_id,
+            QStringLiteral("geom=%1,%2 %3x%4 gen=%5")
+                .arg(m_wayland_container->x()).arg(m_wayland_container->y())
+                .arg(m_wayland_container->width()).arg(m_wayland_container->height())
+                .arg(g_wayland_owner_generation()));
+    } else if (!m_wayland_renderer_active && g_wayland_container()) {
+        // Non-Wayland tab is now active: move the container off-screen instead of
+        // hiding it. Hiding unmaps the wl_subsurface; eglSwapBuffers on a
+        // freshly-remapped surface blocks waiting for a compositor frame callback,
+        // freezing the main thread. Moving off-screen keeps the surface mapped.
+        auto* cont = g_wayland_container();
+        auto* cont_parent = cont->parentWidget();
+        int off = cont_parent ? cont_parent->width() : 8192;
+        cont->move(-off, 0);
+        debug_log("become_active_tab_container_offscreen", m_tab_id,
+            QStringLiteral("offset=-%1").arg(off));
+    }
+
+    if (m_webview_created && !m_wayland_renderer_active)
+        m_engine_tick_timer->start();
 }
 
 // focusInEvent / focusOutEvent — mirrors Ladybird (vendor lines 646-652).
@@ -1899,7 +1978,8 @@ void request_open_tab_for_id(::std::int32_t tab_id)
     auto items_text = QString::fromUtf8(items_str.data(), static_cast<qsizetype>(items_str.size()));
     auto lines = items_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
 
-    QMenu menu(view);
+    // No parent: prevents double-free if view's Tab is deleted during menu.exec() nested event loop.
+    QMenu menu;
     QMap<QAction*, int> action_map;
     QAction* copy_link_action = nullptr;
 

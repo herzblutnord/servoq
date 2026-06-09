@@ -59,6 +59,8 @@
 #include <QWidgetAction>
 #include <QCloseEvent>
 #include <QDebug>
+#include <QPointer>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -122,7 +124,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     applySettings();
     updateMenuBarVisibility();
 
-    m_tabs->onCurrentChanged = [this](int) {
+    m_tabs->onCurrentChanged = [this](int index) {
         auto* previous_tab = m_active_tab;
         auto* next_tab = currentTab();
         if (previous_tab && previous_tab != next_tab) {
@@ -135,8 +137,30 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             tab->applyControllerState();
         }
         updateCurrentTabState();
+        // Defer the Wayland container ownership transfer to the next event-loop
+        // spin so the mouse-press that triggered this switch has fully unwound
+        // before we show/raise/reposition the native wl_subsurface.
+        QPointer<TabWidget> tabs = m_tabs;
+        QTimer::singleShot(0, this, [tabs, index] {
+            if (tabs)
+                tabs->activateTab(index);
+        });
     };
-    m_tabs->onTabCloseRequested = [this](int index) { closeTab(index); };
+    // Defer tab close to the next event-loop spin via QPointer so the close-button's
+    // mouseReleaseEvent fully unwinds before we remove anything. Capturing a QPointer
+    // rather than the raw index prevents a stale-index crash if another tab is
+    // inserted (e.g. via request_open_tab_for_id during a nested servo tick) between
+    // the moment the close button is clicked and when the deferred lambda runs.
+    m_tabs->onTabCloseRequested = [this](int index) {
+        QPointer<Tab> tab = m_tabs->tab(index);
+        QTimer::singleShot(0, this, [this, tab] {
+            if (!tab)
+                return;
+            int idx = m_tabs->indexOf(tab);
+            if (idx >= 0)
+                closeTab(idx);
+        });
+    };
     m_tabs->onNewTabRequested = [this] { createNewTab(); };
     m_tabs->setNewTabAction(m_new_tab_action);
     setCentralWidget(m_tabs);
