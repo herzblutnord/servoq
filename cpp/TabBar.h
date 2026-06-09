@@ -207,6 +207,7 @@ private:
     QBoxLayout* m_vertical_tabs_content_layout { nullptr };
     QBoxLayout* m_vertical_tab_bar_column_layout { nullptr };
     bool m_is_updating_chrome_style { false };
+    bool m_hover_expand_in_progress { false };
     bool m_vertical_tabs_enabled { false };
     bool m_vertical_tabs_expanded { true };
     bool m_vertical_tabs_expand_on_hover { false };

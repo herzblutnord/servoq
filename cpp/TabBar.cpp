@@ -487,7 +487,11 @@ void TabBar::leaveEvent(QEvent* event)
 
 void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton && tabAt(event->pos()) == -1) {
+    // Use tabIndexAt() instead of tabAt() so hit-testing is consistent with
+    // mousePressEvent in vertical mode. Qt's internal tabAt() uses QTabBar's own
+    // rect calculations which don't match our custom vertical layout; returning -1
+    // for a position that visually lands on a tab causes new-tab creation on double-click.
+    if (event->button() == Qt::LeftButton && tabIndexAt(event->pos()) == -1) {
         if (m_tab_widget && m_tab_widget->onNewTabRequested) {
             m_tab_widget->onNewTabRequested();
             return;
@@ -1459,6 +1463,7 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     if (m_vertical_tabs_hover_expanded == expanded)
         return;
     m_vertical_tabs_hover_expanded = expanded;
+    m_hover_expand_in_progress = true;
     if (expanded) {
         // The tab column must be a floating window while hover-expanded so it
         // paints above the native embedded webview surface, which always renders
@@ -1496,10 +1501,20 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     m_vertical_tab_bar_column_layout->setContentsMargins(side_margin, VerticalTabsTopMargin, side_margin, 8);
     updateChromeStyle();
     updateTabLayout();
+    // Clear the transition guard AFTER updateTabLayout() has called show()+move() on the
+    // floating window. Any Leave events that fire from here on are legitimate cursor-left
+    // events (not artifacts of hide()/setParent() reparenting) and should trigger collapse.
+    m_hover_expand_in_progress = false;
 }
 
 void TabWidget::deferUpdateVerticalTabsHoverExpanded()
 {
+    // Suppress Leave events that fire synchronously during setVerticalTabsHoverExpanded
+    // itself (from hide()/setParent() reparenting). At that moment the floating window
+    // has not been shown/positioned yet, so cursorIsOverVerticalTabs() would see stale
+    // geometry and trigger a spurious collapse → expand → collapse oscillation.
+    if (m_hover_expand_in_progress)
+        return;
     QTimer::singleShot(0, this, [this]() {
         updateVerticalTabsHoverExpanded();
     });
