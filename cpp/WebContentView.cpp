@@ -685,6 +685,23 @@ bool WebContentView::isCurrentlyActiveTab() const
     return stacked && stacked->currentWidget() == m_tab;
 }
 
+bool WebContentView::isCurrentWaylandOwner() const
+{
+    return g_wayland_owner() == this;
+}
+
+// static
+WebContentView* WebContentView::currentWaylandOwner()
+{
+    return g_wayland_owner();
+}
+
+// static
+QWidget* WebContentView::sharedWaylandContainer()
+{
+    return g_wayland_container();
+}
+
 bool WebContentView::attachSharedWaylandWindow()
 {
     if (!waylandRendererRequested())
@@ -773,6 +790,28 @@ void WebContentView::updateContainerGeometry()
     }
     QPoint origin = mapTo(parent, QPoint(0, 0));
     m_wayland_container->setGeometry(origin.x(), origin.y(), width(), height());
+
+    // Verify container does not overlap the tab bar (which lives above m_page_column).
+    // Overlap would allow the native subsurface to intercept tab-bar mouse events.
+    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        auto container_global = m_wayland_container->mapToGlobal(QPoint(0, 0));
+        QRect container_global_rect(container_global, m_wayland_container->size());
+        // Walk up to find the top-level window and check geometry sanity.
+        auto* top = window();
+        if (top) {
+            auto window_global = top->mapToGlobal(QPoint(0, 0));
+            // Container must be fully within window x-bounds.
+            if (container_global_rect.left() < window_global.x()
+                || container_global_rect.right() > window_global.x() + top->width()) {
+                qWarning().nospace()
+                    << "SERVOQ_WARN container outside window x-bounds:"
+                    << " container=" << container_global_rect
+                    << " window=(" << window_global.x() << "," << window_global.y()
+                    << " " << top->width() << "x" << top->height() << ")"
+                    << " tab_id=" << m_tab_id;
+            }
+        }
+    }
 }
 
 bool WebContentView::startWaylandRendererIfPossible(int physical_width, int physical_height, qreal dpr, bool allow_software_gl)
@@ -1339,6 +1378,22 @@ void WebContentView::onBecomeInactiveTab()
 
 void WebContentView::onBecomeActiveTab()
 {
+    // Coalescing guard: the deferred activation serial in BrowserWindow prevents
+    // most stale calls, but a second check here ensures correctness even if
+    // activateTab is called through other paths in the future.
+    if (!isCurrentlyActiveTab()) {
+        debug_log("become_active_tab_stale_dropped", m_tab_id,
+            QStringLiteral("stack_current=%1")
+                .arg(m_tab && m_tab->parentWidget()
+                    ? QString::number(
+                        qobject_cast<QStackedWidget*>(m_tab->parentWidget())
+                            ? qobject_cast<QStackedWidget*>(m_tab->parentWidget())->currentIndex()
+                            : -1)
+                    : QStringLiteral("no_parent")));
+        return;
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
     debug_log("become_active_tab", m_tab_id,
         QStringLiteral("wayland_active=%1 webview_created=%2")
             .arg(m_wayland_renderer_active ? 1 : 0)
@@ -1360,20 +1415,30 @@ void WebContentView::onBecomeActiveTab()
                 .arg(m_wayland_container->width()).arg(m_wayland_container->height())
                 .arg(g_wayland_owner_generation()));
     } else if (!m_wayland_renderer_active && g_wayland_container()) {
-        // Non-Wayland tab is now active: move the container off-screen instead of
-        // hiding it. Hiding unmaps the wl_subsurface; eglSwapBuffers on a
-        // freshly-remapped surface blocks waiting for a compositor frame callback,
-        // freezing the main thread. Moving off-screen keeps the surface mapped.
-        auto* cont = g_wayland_container();
-        auto* cont_parent = cont->parentWidget();
-        int off = cont_parent ? cont_parent->width() : 8192;
-        cont->move(-off, 0);
-        debug_log("become_active_tab_container_offscreen", m_tab_id,
-            QStringLiteral("offset=-%1").arg(off));
+        // This tab has no Wayland WebView (empty new tab, software renderer, or deferred).
+        // Hide the shared container so the previous tab's content is NOT visible anywhere
+        // on screen. Moving to negative coordinates is NOT safe: Wayland subsurfaces are
+        // not clipped by their parent surface, so a negative position can render visibly
+        // to the left of the window if the window is not at the screen's left edge.
+        //
+        // The container is shown again in onBecomeActiveTab() for the next Wayland tab via
+        // m_wayland_container->show(). The ServoWaylandContentWindow::event(UpdateRequest)
+        // guard `!g_wayland_container()->isVisible()` prevents eglSwapBuffers while hidden.
+        g_wayland_container()->hide();
+        debug_log("become_active_tab_container_hidden", m_tab_id, QStringLiteral(""));
     }
 
     if (m_webview_created && !m_wayland_renderer_active)
         m_engine_tick_timer->start();
+
+    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    debug_log("become_active_tab_done", m_tab_id,
+        QStringLiteral("elapsed_us=%1").arg(elapsed_us));
+    if (elapsed_us > 50000)
+        qWarning().nospace()
+            << "SERVOQ_WARN onBecomeActiveTab slow: tab_id=" << m_tab_id
+            << " elapsed_us=" << elapsed_us;
 }
 
 // focusInEvent / focusOutEvent — mirrors Ladybird (vendor lines 646-652).

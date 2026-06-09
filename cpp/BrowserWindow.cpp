@@ -124,7 +124,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     applySettings();
     updateMenuBarVisibility();
 
-    m_tabs->onCurrentChanged = [this](int index) {
+    m_tabs->onCurrentChanged = [this](int /*index*/) {
         auto* previous_tab = m_active_tab;
         auto* next_tab = currentTab();
         if (previous_tab && previous_tab != next_tab) {
@@ -140,10 +140,56 @@ BrowserWindow::BrowserWindow(QWidget* parent)
         // Defer the Wayland container ownership transfer to the next event-loop
         // spin so the mouse-press that triggered this switch has fully unwound
         // before we show/raise/reposition the native wl_subsurface.
+        //
+        // Coalescing: each click increments m_activation_serial. The lambda
+        // captures the serial at schedule time; if a newer click arrived before
+        // this fires, the serial won't match and we drop this stale activation.
+        // We also capture QPointer<Tab> (not raw index) so a close/reorder
+        // between schedule and execution doesn't silently activate the wrong tab.
+        QPointer<Tab> target_tab = currentTab();
         QPointer<TabWidget> tabs = m_tabs;
-        QTimer::singleShot(0, this, [tabs, index] {
-            if (tabs)
-                tabs->activateTab(index);
+        int serial = ++m_activation_serial;
+        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+            qInfo().nospace()
+                << "SERVOQ_DEBUG activation_scheduled serial=" << serial
+                << " target_tab_id=" << (target_tab ? target_tab->controllerId() : -1)
+                << " tabs_valid=" << (tabs ? 1 : 0);
+        }
+        QTimer::singleShot(0, this, [this, tabs, target_tab, serial] {
+            if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+                qInfo().nospace()
+                    << "SERVOQ_DEBUG activation_lambda_fired serial=" << serial
+                    << " current_serial=" << m_activation_serial
+                    << " tabs=" << (tabs ? 1 : 0)
+                    << " target=" << (target_tab ? target_tab->controllerId() : -1);
+            }
+            if (!tabs) {
+                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+                    qInfo() << "SERVOQ_DEBUG activation_dropped reason=tabs_destroyed serial=" << serial;
+                return;
+            }
+            if (!target_tab) {
+                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+                    qInfo() << "SERVOQ_DEBUG activation_dropped reason=tab_destroyed serial=" << serial;
+                return;
+            }
+            if (serial != m_activation_serial) {
+                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+                    qInfo().nospace()
+                        << "SERVOQ_DEBUG activation_dropped reason=stale_serial"
+                        << " serial=" << serial << " current=" << m_activation_serial;
+                return;
+            }
+            int idx = tabs->indexOf(target_tab);
+            if (idx < 0) {
+                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+                    qInfo().nospace()
+                        << "SERVOQ_DEBUG activation_dropped reason=tab_not_in_widget"
+                        << " serial=" << serial
+                        << " tab_id=" << target_tab->controllerId();
+                return;
+            }
+            tabs->activateTab(idx);
         });
     };
     // Defer tab close to the next event-loop spin via QPointer so the close-button's

@@ -84,6 +84,7 @@ private:
     QVector<QPair<QString, QString>> m_closed_tabs; // url, title stack; capped at 10
     bool m_is_updating_chrome_style { false };
     bool m_was_maximized_before_fullscreen { false };
+    int m_activation_serial { 0 };
 };
 
 }

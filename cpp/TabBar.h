@@ -130,6 +130,11 @@ public:
     // Delegates container geometry update to the current tab's WebContentView.
     void updateContainerGeometry();
 
+    // Logs a full tab/Wayland/container state snapshot. Called on every activation
+    // and from the deferred lambda to diagnose "click does nothing" conditions.
+    // Gated on SERVOQ_DEBUG environment variable.
+    void dumpPresentationState(const char* reason, int activation_serial = -1) const;
+
     void setVerticalTabsEnabled(bool enabled);
     void set_vertical_tabs_enabled(bool enabled) { setVerticalTabsEnabled(enabled); }
     void setVerticalTabsExpanded(bool expanded);

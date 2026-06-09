@@ -55,9 +55,17 @@ public:
     // These are the ONLY paths that change g_wayland_owner or touch the container.
     void onBecomeActiveTab();
     void onBecomeInactiveTab();
+    bool isCurrentWaylandOwner() const;
 
     // Public so TabWidget::updateContainerGeometry can delegate to it.
     void updateContainerGeometry();
+
+    // State accessors used by TabWidget::dumpPresentationState.
+    static WebContentView* currentWaylandOwner();
+    static QWidget* sharedWaylandContainer();
+    bool webviewCreated() const { return m_webview_created; }
+    bool waylandRendererActivePublic() const { return m_wayland_renderer_active; }
+    bool isEmptyNewTab() const { return m_empty_new_tab; }
 
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
     void receiveFrame(QImage const& frame);

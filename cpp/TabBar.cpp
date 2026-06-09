@@ -49,6 +49,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <chrono>
 
 namespace ServoQ {
 namespace {
@@ -500,6 +501,13 @@ void TabBar::mousePressEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton) {
         m_pressed_tab_index = tabIndexAt(event->pos());
         m_drag_start_position = event->pos();
+        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+            qInfo().nospace()
+                << "SERVOQ_DEBUG tab_bar_press"
+                << " tab_at=" << m_pressed_tab_index
+                << " current=" << currentIndex()
+                << " pos=(" << event->pos().x() << "," << event->pos().y() << ")";
+        }
     }
     QTabBar::mousePressEvent(event);
 }
@@ -969,6 +977,12 @@ TabWidget::TabWidget(QWidget* parent)
             m_toolbar_container->setCurrentIndex(index);
         updateVerticalTabsOverlayGeometry();
         updateVerticalTabsResizeHandle();
+        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+            qInfo().nospace()
+                << "SERVOQ_DEBUG tab_widget_current_changed index=" << index
+                << " has_callback=" << (onCurrentChanged ? 1 : 0);
+            dumpPresentationState("tab_widget_current_changed");
+        }
         if (onCurrentChanged)
             onCurrentChanged(index);
     });
@@ -1519,23 +1533,107 @@ void TabWidget::activateTab(int index)
     if (!new_tab)
         return;
 
+    auto t0 = std::chrono::steady_clock::now();
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         qInfo().nospace()
-            << "SERVOQ_DEBUG activate_tab index=" << index
+            << "SERVOQ_DEBUG activate_tab_enter index=" << index
             << " tab_id=" << new_tab->controllerId();
+        dumpPresentationState("activate_tab_enter");
     }
 
+    // Only notify the current Wayland owner — not every tab. Iterating all tabs
+    // and calling onBecomeInactiveTab() is harmless for non-owners (guarded by
+    // m_wayland_renderer_active) but produces spurious debug noise and can
+    // incorrectly clear present flags on tabs that have nothing to do with this
+    // activation.
     for (int i = 0; i < count(); ++i) {
-        if (auto* t = tab(i); t && t != new_tab) {
-            if (auto* v = t->view())
-                v->onBecomeInactiveTab();
-        }
+        auto* t = tab(i);
+        if (!t || t == new_tab)
+            continue;
+        if (auto* v = t->view(); v && v->isCurrentWaylandOwner())
+            v->onBecomeInactiveTab();
     }
 
     updateContainerGeometry();
 
     if (auto* v = new_tab->view())
         v->onBecomeActiveTab();
+
+    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        qInfo().nospace()
+            << "SERVOQ_DEBUG activate_tab_done tab_id=" << new_tab->controllerId()
+            << " elapsed_us=" << us;
+        if (us > 100000)
+            qWarning().nospace()
+                << "SERVOQ_WARN activate_tab very slow: " << us << " us";
+        dumpPresentationState("activate_tab_done");
+    }
+}
+
+void TabWidget::dumpPresentationState(const char* reason, int activation_serial) const
+{
+    if (!qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+        return;
+
+    auto* owner = WebContentView::currentWaylandOwner();
+    auto* container = WebContentView::sharedWaylandContainer();
+
+    qInfo().nospace()
+        << "SERVOQ_STATE [" << reason << "]"
+        << " serial=" << activation_serial
+        << " tab_bar_idx=" << m_tab_bar->currentIndex()
+        << " stack_idx=" << m_stack->currentIndex()
+        << " tab_count=" << m_tab_bar->count();
+
+    for (int i = 0; i < m_stack->count(); ++i) {
+        auto* t = tab(i);
+        auto* v = t ? t->view() : nullptr;
+        qInfo().nospace()
+            << "  tab[" << i << "]"
+            << " id=" << (t ? t->controllerId() : -1)
+            << " url=" << (t ? t->url().left(60) : QStringLiteral("?"))
+            << " has_view=" << (v ? 1 : 0)
+            << " webview_created=" << (v ? v->webviewCreated() : 0)
+            << " wayland_active=" << (v ? v->waylandRendererActivePublic() : 0)
+            << " empty=" << (v ? v->isEmptyNewTab() : 0)
+            << " is_owner=" << (v && v->isCurrentWaylandOwner() ? 1 : 0)
+            << " is_stack_current=" << (m_stack->currentWidget() == t ? 1 : 0);
+    }
+
+    qInfo().nospace()
+        << "  wayland_owner_ptr=" << (void*)owner
+        << " owner_tab_id=" << (owner ? owner->tabId() : 0)
+        << " container=" << (void*)container
+        << " container_visible=" << (container ? (container->isVisible() ? 1 : 0) : -1);
+
+    if (container) {
+        auto c_geom = container->geometry();
+        auto c_global = container->mapToGlobal(QPoint(0, 0));
+        QRect c_global_rect(c_global, container->size());
+        qInfo().nospace()
+            << "  container_local=(" << c_geom.x() << "," << c_geom.y()
+            << " " << c_geom.width() << "x" << c_geom.height() << ")"
+            << " container_global=(" << c_global.x() << "," << c_global.y()
+            << " " << c_global_rect.width() << "x" << c_global_rect.height() << ")";
+
+        // Check for overlap with tab bar.
+        auto tb_global = m_tab_bar->mapToGlobal(QPoint(0, 0));
+        QRect tb_global_rect(tb_global, m_tab_bar->size());
+        if (container->isVisible() && c_global_rect.intersects(tb_global_rect)) {
+            qWarning().nospace()
+                << "SERVOQ_WARN container overlaps tab bar!"
+                << " container=" << c_global_rect
+                << " tab_bar=" << tb_global_rect;
+        } else {
+            qInfo().nospace()
+                << "  tab_bar_global=(" << tb_global.x() << "," << tb_global.y()
+                << " " << tb_global_rect.width() << "x" << tb_global_rect.height() << ")"
+                << " overlap=" << (container->isVisible() && c_global_rect.intersects(tb_global_rect) ? "YES_BUG" : "no");
+        }
+    }
 }
 
 }
+
