@@ -41,7 +41,7 @@ mod engine {
     use servo::{
         DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
-        NavigationRequest, Opts, Preferences, RenderingContext, Servo, ServoBuilder,
+        NavigationRequest, Opts, PrefValue, Preferences, RenderingContext, Servo, ServoBuilder,
         SoftwareRenderingContext, Theme, UrlRequest, WebResourceLoad, WebResourceResponse, WebView,
         WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
         WindowRenderingContext,
@@ -375,12 +375,33 @@ mod engine {
     unsafe impl Send for QtEventLoopWaker {}
     unsafe impl Sync for QtEventLoopWaker {}
 
+    // Mirrors servoshell EXPERIMENTAL_PREFS — all enabled by default.
+    // The user can disable them via Settings → Experimental Web Platform Features.
+    pub(super) const EXPERIMENTAL_PREFS: &[&str] = &[
+        "dom_async_clipboard_enabled",
+        "dom_exec_command_enabled",
+        "dom_fontface_enabled",
+        "dom_indexeddb_enabled",
+        "dom_intersection_observer_enabled",
+        "dom_navigator_protocol_handlers_enabled",
+        "dom_notification_enabled",
+        "dom_offscreen_canvas_enabled",
+        "dom_permissions_enabled",
+        "dom_sanitizer_enabled",
+        "dom_storage_manager_api_enabled",
+        "dom_webgl2_enabled",
+        "dom_webgpu_enabled",
+        "layout_columns_enabled",
+        "layout_container_queries_enabled",
+        "layout_grid_enabled",
+        "layout_variable_fonts_enabled",
+    ];
+
     fn servo_preferences() -> Preferences {
         let mut preferences = Preferences::default();
         preferences.viewport_meta_enabled = true;
-        preferences.dom_indexeddb_enabled = true;
-        preferences.dom_fontface_enabled = true;
-        preferences.layout_variable_fonts_enabled = true;
+        // Experimental features are enabled at startup via set_experimental_features_enabled
+        // (called from applySettings after init_servo). Listed here for clarity only.
         preferences
     }
 
@@ -599,7 +620,8 @@ mod engine {
                 return;
             }
             if !tab_is_active(self.tab_id) {
-                debug_log("ignored_frame_hidden_webview", self.tab_id);
+                webview.set_throttled(true);
+                webview.hide();
                 return;
             }
             let Some(rendering_context) = self.rendering_context.software() else {
@@ -645,6 +667,20 @@ mod engine {
             if SHUTTING_DOWN.load(Ordering::Acquire) {
                 return;
             }
+
+            // Do this before logging. Hidden Wayland tabs can keep receiving compositor
+            // frame callbacks for a while after hide()/set_throttled(true); logging each
+            // one can itself flood the Qt event loop and make tab activation fragile.
+            if !tab_exists(self.tab_id) {
+                debug_log("ignored_frame_closed_webview", self.tab_id);
+                return;
+            }
+            if !tab_is_active(self.tab_id) {
+                webview.set_throttled(true);
+                webview.hide();
+                return;
+            }
+
             debug_log("notify_new_frame_ready", self.tab_id);
 
             // G1: first callback proves the compositor is alive; re-send stored size
@@ -1772,6 +1808,14 @@ mod engine {
         })
     }
 
+    pub fn set_experimental_features_enabled(enabled: bool) {
+        if let Some(servo) = clone_servo() {
+            for pref in EXPERIMENTAL_PREFS {
+                servo.set_preference(pref, PrefValue::Bool(enabled));
+            }
+        }
+    }
+
     // Matches Ladybird WebContentView::update_viewport_size() (vendor line 760-766):
     // physical pixel dimensions are passed pre-scaled from WebContentView::resizeEvent.
     pub fn forward_resize(id: i32, w: i32, h: i32, scale: f32) {
@@ -2079,3 +2123,14 @@ pub use engine::{
     can_go_back, can_go_forward, close_tab, current_url, go_back, go_forward, load_url, loading,
     reload, status_text, title,
 };
+
+pub fn set_experimental_features_enabled(_enabled: bool) {
+    #[cfg(feature = "servo-engine")]
+    engine::set_experimental_features_enabled(_enabled);
+}
+
+pub fn experimental_features_enabled() -> bool {
+    // The authoritative persisted value lives in Qt Settings on the C++ side.
+    // This stub satisfies the CXX bridge; the real default is set in applySettings().
+    true
+}

@@ -621,11 +621,12 @@ void BookmarksBar::showAddBookmarkDialog(QString const& folder_id,
     connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
 
-    if (dialog->exec() == QDialog::Accepted) {
+    connect(dialog, &QDialog::accepted, this, [dialog, title_edit, url_edit, folder_combo] {
         auto selected_folder = folder_combo->currentData().toString();
         BookmarkStore::the()->addBookmark(title_edit->text(), url_edit->text(), selected_folder);
-    }
-    dialog->deleteLater();
+    });
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->open();
 }
 
 void BookmarksBar::showEditBookmarkDialog(QString const& id)
@@ -651,9 +652,11 @@ void BookmarksBar::showEditBookmarkDialog(QString const& id)
     connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
 
-    if (dialog->exec() == QDialog::Accepted)
+    connect(dialog, &QDialog::accepted, this, [dialog, id, title_edit, url_edit] {
         BookmarkStore::the()->editBookmark(id, title_edit->text(), url_edit->text());
-    dialog->deleteLater();
+    });
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->open();
 }
 
 void BookmarksBar::showEditFolderDialog(QString const& id)
@@ -662,20 +665,29 @@ void BookmarksBar::showEditFolderDialog(QString const& id)
     for (auto const& f : BookmarkStore::the()->folders())
         if (f.id == id) { current_title = f.title; break; }
 
-    bool ok;
-    auto new_title = QInputDialog::getText(this, QStringLiteral("Rename Folder"),
-        QStringLiteral("Folder name:"), QLineEdit::Normal, current_title, &ok);
-    if (ok && !new_title.isEmpty())
-        BookmarkStore::the()->editFolder(id, new_title);
+    auto* dlg = new QInputDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(QStringLiteral("Rename Folder"));
+    dlg->setLabelText(QStringLiteral("Folder name:"));
+    dlg->setTextValue(current_title);
+    connect(dlg, &QInputDialog::textValueSelected, this, [this, id](QString const& new_title) {
+        if (!new_title.isEmpty())
+            BookmarkStore::the()->editFolder(id, new_title);
+    });
+    dlg->open();
 }
 
 void BookmarksBar::showNewFolderDialog()
 {
-    bool ok;
-    auto title = QInputDialog::getText(this, QStringLiteral("New Folder"),
-        QStringLiteral("Folder name:"), QLineEdit::Normal, {}, &ok);
-    if (ok && !title.isEmpty())
-        BookmarkStore::the()->addFolder(title);
+    auto* dlg = new QInputDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(QStringLiteral("New Folder"));
+    dlg->setLabelText(QStringLiteral("Folder name:"));
+    connect(dlg, &QInputDialog::textValueSelected, this, [this](QString const& title) {
+        if (!title.isEmpty())
+            BookmarkStore::the()->addFolder(title);
+    });
+    dlg->open();
 }
 
 void BookmarksBar::dragEnterEvent(QDragEnterEvent* event)

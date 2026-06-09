@@ -159,6 +159,24 @@ static int& g_wayland_owner_generation()
     return s_generation;
 }
 
+static void park_shared_wayland_container()
+{
+    auto* container = g_wayland_container();
+    if (!container)
+        return;
+    // Move off-screen instead of hiding. Hiding a createWindowContainer widget
+    // unmaps the wl_surface; the first eglSwapBuffers() after remapping blocks
+    // waiting for a compositor frame callback that may never arrive, freezing
+    // the Qt main thread indefinitely. Keeping the surface mapped (just out of
+    // the visible area) avoids this race entirely.
+    // Move instead of hide (keep wl_surface mapped to avoid eglSwapBuffers block on remap).
+    // Use a large constant offset so the container is invisible regardless of which
+    // monitor the window is on — a per-parent-width offset is not enough when a
+    // monitor to the left is wider than the browser window.
+    // 65536 px > any realistic display width or virtual desktop extent.
+    container->move(-65536, 0);
+}
+
 static QHash<int, int>& g_favicon_generations()
 {
     static QHash<int, int> s_generations;
@@ -404,7 +422,12 @@ protected:
             }
             if (!m_owner->isVisible() || (g_wayland_container() && !g_wayland_container()->isVisible())) {
                 m_owner->m_wayland_present_pending = false;
-                debug_log("wayland_present_skipped_hidden", m_owner->tabId());
+                auto* container = g_wayland_container();
+                debug_log("wayland_present_skipped_hidden", m_owner->tabId(),
+                    QStringLiteral("view_visible=%1 container_visible=%2 owner=%3 pending_cleared=1")
+                        .arg(m_owner->isVisible() ? 1 : 0)
+                        .arg(container && container->isVisible() ? 1 : 0)
+                        .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
                 maybe_log_qt_perf();
                 return true;
             }
@@ -653,8 +676,13 @@ void WebContentView::setEmptyNewTab(bool empty_new_tab)
     if (m_empty_new_tab) {
         m_frame = {};
         m_pending_frame_repaint = false;
-        if (m_wayland_container && g_wayland_owner() == this)
-            m_wayland_container->hide();
+        if (m_wayland_container && g_wayland_owner() == this) {
+            g_wayland_owner() = nullptr;
+            ++g_wayland_owner_generation();
+            if (g_wayland_window())
+                g_wayland_window()->setOwner(nullptr);
+            park_shared_wayland_container();
+        }
         m_engine_tick_timer->stop();
     }
     update();
@@ -938,8 +966,17 @@ void WebContentView::receiveRequestBlocked(QString const& url)
 
 void WebContentView::requestWaylandRepaint()
 {
-    if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire))
+    if (!m_webview_created) {
+        debug_log("wayland_present_skipped_request_no_webview", m_tab_id);
         return;
+    }
+    if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire)) {
+        debug_log("wayland_present_skipped_request_inactive_renderer", m_tab_id,
+            QStringLiteral("wayland_active=%1 window=%2")
+                .arg(m_wayland_renderer_active ? 1 : 0)
+                .arg(m_wayland_window ? 1 : 0));
+        return;
+    }
     if (!isVisible()) {
         debug_log("wayland_present_skipped_request_hidden_view", m_tab_id);
         return;
@@ -947,6 +984,16 @@ void WebContentView::requestWaylandRepaint()
     if (g_wayland_owner() != this) {
         debug_log("wayland_present_skipped_request_inactive_owner", m_tab_id,
             QStringLiteral("current_owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
+        return;
+    }
+    if (m_wayland_container && (m_wayland_container->width() <= 1 || m_wayland_container->height() <= 1)) {
+        debug_log("wayland_present_skipped_request_zero_geometry", m_tab_id,
+            QStringLiteral("geom=%1,%2 %3x%4 visible=%5")
+                .arg(m_wayland_container->x()).arg(m_wayland_container->y())
+                .arg(m_wayland_container->width()).arg(m_wayland_container->height())
+                .arg(m_wayland_container->isVisible() ? 1 : 0));
+        // Do NOT clear m_wayland_present_pending: the container will get valid
+        // geometry on the next layout pass and exposeEvent will retry.
         return;
     }
     qt_perf_stats().qwindow_present_requests++;
@@ -1065,8 +1112,6 @@ void WebContentView::forwardResizeToEngine()
     qreal dpr = devicePixelRatioF();
     int pw = qMax(1, static_cast<int>(width() * dpr));
     int ph = qMax(1, static_cast<int>(height() * dpr));
-    if (m_wayland_container && g_wayland_owner() == this)
-        updateContainerGeometry();
     QSize physical_size(pw, ph);
     if (m_last_forwarded_physical_size == physical_size && qFuzzyCompare(m_last_forwarded_dpr, dpr))
         return;
@@ -1130,6 +1175,13 @@ void WebContentView::paintEvent(QPaintEvent*)
 void WebContentView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    // Keep container in sync when the browser window is resized. Guard on
+    // ownership: inactive tabs don't own the container. Do NOT put this in
+    // forwardResizeToEngine() — that function is also called from
+    // ServoWaylandContentWindow::resizeEvent (triggered by container park/unpark),
+    // which would immediately un-park a just-parked container.
+    if (m_wayland_container && g_wayland_owner() == this)
+        updateContainerGeometry();
     forwardResizeToEngine();
 }
 
@@ -1367,13 +1419,31 @@ void WebContentView::hideEvent(QHideEvent* event)
 
 void WebContentView::onBecomeInactiveTab()
 {
+    bool was_owner = g_wayland_owner() == this;
     debug_log("become_inactive_tab", m_tab_id,
-        QStringLiteral("was_owner=%1").arg(g_wayland_owner() == this ? 1 : 0));
-    if (m_wayland_renderer_active) {
-        m_wayland_present_pending = false;
-        m_wayland_dirty_after_present = false;
-        m_wayland_present_in_progress = false;
+        QStringLiteral("was_owner=%1 wayland_active=%2")
+            .arg(was_owner ? 1 : 0)
+            .arg(m_wayland_renderer_active ? 1 : 0));
+
+    m_wayland_present_pending = false;
+    m_wayland_dirty_after_present = false;
+    m_wayland_present_in_progress = false;
+
+    if (was_owner) {
+        g_wayland_owner() = nullptr;
+        ++g_wayland_owner_generation();
+        if (m_wayland_window)
+            m_wayland_window->setOwner(nullptr);
+        // Park off-screen — NEVER hide. Hiding unmaps the wl_surface; the
+        // first eglSwapBuffers after remapping blocks on a frame callback that
+        // never arrives, freezing the Qt main thread. See park_shared_wayland_container.
+        park_shared_wayland_container();
     }
+    // m_wayland_renderer_active is intentionally NOT cleared. The Servo WebView
+    // stays ready to paint; only the container ownership transfers. Clearing
+    // it would force startWaylandRendererIfPossible (and create_webview_wayland_window)
+    // to run on every return-to-tab, which is both wasteful and causes the
+    // container to be shown fresh (triggering the remap/eglSwapBuffers race).
 }
 
 void WebContentView::onBecomeActiveTab()
@@ -1399,33 +1469,52 @@ void WebContentView::onBecomeActiveTab()
             .arg(m_wayland_renderer_active ? 1 : 0)
             .arg(m_webview_created ? 1 : 0));
 
-    // For background Wayland tabs that were deferred, create the WebView now
-    // that this tab is the current page and has valid geometry.
+    // Start engine for background-deferred Wayland tabs that haven't been
+    // created yet. After this call, m_webview_created and m_wayland_renderer_active
+    // reflect the real state.
     startEngineIfNeeded();
     forwardResizeToEngine();
 
     if (m_wayland_renderer_active && m_wayland_container) {
-        attachSharedWaylandWindow();  // transfers g_wayland_owner, bumps generation
+        // Normal case: re-attach the parked container to this tab. The container
+        // was moved off-screen by onBecomeInactiveTab but never unmapped, so
+        // updateContainerGeometry + show() repositions it without any surface remap.
+        if (!attachSharedWaylandWindow()) {
+            debug_log("become_active_tab_return_attach_failed", m_tab_id,
+                QStringLiteral("owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
+            return;
+        }
         updateContainerGeometry();
-        m_wayland_container->show();
+        m_wayland_container->show(); // no-op if already visible; surface stays mapped
         m_wayland_container->raise();
+        if (m_wayland_window) {
+            m_wayland_window->show();
+            m_wayland_window->create();
+        }
+        requestWaylandRepaint();
         debug_log("become_active_tab_container_shown", m_tab_id,
             QStringLiteral("geom=%1,%2 %3x%4 gen=%5")
                 .arg(m_wayland_container->x()).arg(m_wayland_container->y())
                 .arg(m_wayland_container->width()).arg(m_wayland_container->height())
                 .arg(g_wayland_owner_generation()));
-    } else if (!m_wayland_renderer_active && g_wayland_container()) {
-        // This tab has no Wayland WebView (empty new tab, software renderer, or deferred).
-        // Hide the shared container so the previous tab's content is NOT visible anywhere
-        // on screen. Moving to negative coordinates is NOT safe: Wayland subsurfaces are
-        // not clipped by their parent surface, so a negative position can render visibly
-        // to the left of the window if the window is not at the screen's left edge.
-        //
-        // The container is shown again in onBecomeActiveTab() for the next Wayland tab via
-        // m_wayland_container->show(). The ServoWaylandContentWindow::event(UpdateRequest)
-        // guard `!g_wayland_container()->isVisible()` prevents eglSwapBuffers while hidden.
-        g_wayland_container()->hide();
-        debug_log("become_active_tab_container_hidden", m_tab_id, QStringLiteral(""));
+    } else if (!m_webview_created && g_wayland_container()) {
+        // Empty/not-yet-started tab. Park the container so no stale content
+        // from the previous tab is visible. Park (not hide) to keep the surface
+        // mapped — see park_shared_wayland_container.
+        if (g_wayland_owner()) {
+            g_wayland_owner()->m_wayland_present_pending = false;
+            g_wayland_owner()->m_wayland_dirty_after_present = false;
+            g_wayland_owner()->m_wayland_present_in_progress = false;
+        }
+        g_wayland_owner() = nullptr;
+        ++g_wayland_owner_generation();
+        if (g_wayland_window())
+            g_wayland_window()->setOwner(nullptr);
+        park_shared_wayland_container();
+        debug_log("become_active_tab_container_parked", m_tab_id, QStringLiteral(""));
+    } else if (m_webview_created && !m_wayland_renderer_active) {
+        debug_log("become_active_tab_loaded_non_wayland", m_tab_id, QStringLiteral(""));
+        update();
     }
 
     if (m_webview_created && !m_wayland_renderer_active)

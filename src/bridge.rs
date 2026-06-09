@@ -109,6 +109,10 @@ pub mod ffi {
 
         fn reload_blocklists() -> bool;
         fn user_blocklist_path() -> String;
+
+        // Experimental web platform features toggle (mirrors servoshell EXPERIMENTAL_PREFS).
+        fn set_experimental_features_enabled(enabled: bool);
+        fn experimental_features_enabled() -> bool;
     }
 }
 
@@ -144,3 +148,4 @@ pub use crate::servo_engine::{
 pub use crate::servo_engine::{page_zoom, set_page_zoom};
 
 pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
+pub use crate::servo_engine::{experimental_features_enabled, set_experimental_features_enabled};

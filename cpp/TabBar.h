@@ -89,6 +89,7 @@ private:
     void setVerticalScrollOffset(int offset);
     void ensureTabVisible(int index);
 
+    TabWidget* m_tab_widget { nullptr };
     TabLayout m_tab_layout { TabLayout::Horizontal };
     int m_available_width { 0 };
     int m_hovered_tab_index { -1 };

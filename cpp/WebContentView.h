@@ -65,6 +65,7 @@ public:
     static QWidget* sharedWaylandContainer();
     bool webviewCreated() const { return m_webview_created; }
     bool waylandRendererActivePublic() const { return m_wayland_renderer_active; }
+    bool waylandPresentPendingPublic() const { return m_wayland_present_pending; }
     bool isEmptyNewTab() const { return m_empty_new_tab; }
 
     // Called from C++ callback (servoq::deliver_frame) to push a frame.

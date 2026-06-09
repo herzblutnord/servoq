@@ -79,6 +79,9 @@ public:
     void remove_custom_search_engine(QString const& name);
     QString search_url_for_query(QString const& query) const;
 
+    bool experimental_features_enabled() const;
+    void set_experimental_features_enabled(bool enabled);
+
     QStringList bookmarks() const;
     void set_bookmarks(QStringList const& bookmarks);
     bool has_bookmark(QString const& url) const;

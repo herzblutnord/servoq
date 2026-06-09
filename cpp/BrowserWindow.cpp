@@ -124,11 +124,12 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     applySettings();
     updateMenuBarVisibility();
 
-    m_tabs->onCurrentChanged = [this](int /*index*/) {
-        auto* previous_tab = m_active_tab;
+    m_tabs->onCurrentChanged = [this](int index) {
         auto* next_tab = currentTab();
-        if (previous_tab && previous_tab != next_tab) {
-            previous_tab->setActive(false);
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            auto* tab = m_tabs->tab(i);
+            if (tab && tab != next_tab)
+                tab->setActive(false);
         }
         m_active_tab = next_tab;
         if (auto* tab = currentTab()) {
@@ -137,58 +138,28 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             tab->applyControllerState();
         }
         updateCurrentTabState();
-        // Defer the Wayland container ownership transfer to the next event-loop
-        // spin so the mouse-press that triggered this switch has fully unwound
-        // before we show/raise/reposition the native wl_subsurface.
-        //
-        // Coalescing: each click increments m_activation_serial. The lambda
-        // captures the serial at schedule time; if a newer click arrived before
-        // this fires, the serial won't match and we drop this stale activation.
-        // We also capture QPointer<Tab> (not raw index) so a close/reorder
-        // between schedule and execution doesn't silently activate the wrong tab.
-        QPointer<Tab> target_tab = currentTab();
+        // Defer activateTab so any mouse event that triggered the tab switch
+        // fully unwinds before we show/hide/reposition the native Wayland
+        // wl_subsurface. Doing this synchronously corrupts Qt/Wayland event
+        // delivery and leaves the container in an unmapped state.
+        QPointer<Tab> target_tab = next_tab;
         QPointer<TabWidget> tabs = m_tabs;
         int serial = ++m_activation_serial;
         if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
             qInfo().nospace()
-                << "SERVOQ_DEBUG activation_scheduled serial=" << serial
-                << " target_tab_id=" << (target_tab ? target_tab->controllerId() : -1)
-                << " tabs_valid=" << (tabs ? 1 : 0);
+                << "SERVOQ_DEBUG activation_deferred serial=" << serial
+                << " index=" << index
+                << " target_tab_id=" << (next_tab ? next_tab->controllerId() : -1)
+                << " mouse_buttons=" << static_cast<int>(QApplication::mouseButtons());
         }
         QTimer::singleShot(0, this, [this, tabs, target_tab, serial] {
-            if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
-                qInfo().nospace()
-                    << "SERVOQ_DEBUG activation_lambda_fired serial=" << serial
-                    << " current_serial=" << m_activation_serial
-                    << " tabs=" << (tabs ? 1 : 0)
-                    << " target=" << (target_tab ? target_tab->controllerId() : -1);
-            }
-            if (!tabs) {
-                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
-                    qInfo() << "SERVOQ_DEBUG activation_dropped reason=tabs_destroyed serial=" << serial;
+            if (!tabs || !target_tab)
                 return;
-            }
-            if (!target_tab) {
-                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
-                    qInfo() << "SERVOQ_DEBUG activation_dropped reason=tab_destroyed serial=" << serial;
+            if (serial != m_activation_serial)
                 return;
-            }
-            if (serial != m_activation_serial) {
-                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
-                    qInfo().nospace()
-                        << "SERVOQ_DEBUG activation_dropped reason=stale_serial"
-                        << " serial=" << serial << " current=" << m_activation_serial;
-                return;
-            }
             int idx = tabs->indexOf(target_tab);
-            if (idx < 0) {
-                if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
-                    qInfo().nospace()
-                        << "SERVOQ_DEBUG activation_dropped reason=tab_not_in_widget"
-                        << " serial=" << serial
-                        << " tab_id=" << target_tab->controllerId();
+            if (idx < 0)
                 return;
-            }
             tabs->activateTab(idx);
         });
     };
@@ -327,12 +298,15 @@ void BrowserWindow::createMenus()
     auto* open_file_action = new QAction("&Open File…", this);
     open_file_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Open));
     connect(open_file_action, &QAction::triggered, this, [this] {
-        if (auto* tab = currentTab()) {
-            auto path = QFileDialog::getOpenFileName(this, QStringLiteral("Open File"), {},
-                QStringLiteral("Web files (*.html *.htm *.xhtml *.svg *.xml *.txt *.pdf);;All files (*)"));
-            if (!path.isEmpty())
+        auto* dlg = new QFileDialog(this, QStringLiteral("Open File"), {},
+            QStringLiteral("Web files (*.html *.htm *.xhtml *.svg *.xml *.txt *.pdf);;All files (*)"));
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setFileMode(QFileDialog::ExistingFile);
+        connect(dlg, &QFileDialog::fileSelected, this, [this](QString const& path) {
+            if (auto* tab = currentTab())
                 tab->navigate(QUrl::fromLocalFile(path).toString());
-        }
+        });
+        dlg->open();
     });
     file_menu->addAction(open_file_action);
     m_hamburger_menu->addAction(open_file_action);
@@ -495,6 +469,16 @@ void BrowserWindow::createMenus()
     m_hamburger_menu->addMenu(view_menu);
 
     auto* settings_menu = menuBar()->addMenu("&Settings");
+    auto* experimental_action = new QWidgetAction(this);
+    auto* experimental_checkbox = new QCheckBox("Experimental Web Platform Features", this);
+    experimental_checkbox->setChecked(Settings::the()->experimental_features_enabled());
+    connect(experimental_checkbox, &QCheckBox::toggled, this, [](bool enabled) {
+        Settings::the()->set_experimental_features_enabled(enabled);
+        servoq::set_experimental_features_enabled(enabled);
+    });
+    experimental_action->setDefaultWidget(experimental_checkbox);
+    settings_menu->addAction(experimental_action);
+
     auto* content_blocking_action = new QWidgetAction(this);
     auto* content_blocking_checkbox = new QCheckBox("Block trackers and ads", this);
     content_blocking_checkbox->setChecked(Settings::the()->content_blocking_enabled());
@@ -560,28 +544,30 @@ void BrowserWindow::createMenus()
 
     auto* add_search_engine_action = new QAction(QStringLiteral("Add Custom Search Engine…"), this);
     connect(add_search_engine_action, &QAction::triggered, this, [this, search_combo, refresh_search_combo] {
-        QDialog dialog(this);
-        dialog.setWindowTitle(QStringLiteral("Add Search Engine"));
-        auto* layout = new QFormLayout(&dialog);
-        auto* name_edit = new QLineEdit(&dialog);
-        auto* template_edit = new QLineEdit(&dialog);
+        auto* dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle(QStringLiteral("Add Search Engine"));
+        auto* layout = new QFormLayout(dialog);
+        auto* name_edit = new QLineEdit(dialog);
+        auto* template_edit = new QLineEdit(dialog);
         template_edit->setPlaceholderText(QStringLiteral("https://example.com/search?q=%s"));
         layout->addRow(QStringLiteral("Name:"), name_edit);
         layout->addRow(QStringLiteral("Query URL:"), template_edit);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
         layout->addRow(buttons);
-        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        if (dialog.exec() != QDialog::Accepted)
-            return;
-        if (!Settings::the()->add_custom_search_engine(name_edit->text(), template_edit->text())) {
-            QMessageBox::warning(this, QStringLiteral("Search Engine"),
-                QStringLiteral("Custom search engines need a unique name and a query URL containing %s."));
-            return;
-        }
-        Settings::the()->set_search_engine_name(name_edit->text().trimmed());
-        refresh_search_combo();
-        search_combo->setCurrentText(name_edit->text().trimmed());
+        connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+        connect(dialog, &QDialog::accepted, this, [this, dialog, name_edit, template_edit, search_combo, refresh_search_combo] {
+            if (!Settings::the()->add_custom_search_engine(name_edit->text(), template_edit->text())) {
+                QMessageBox::warning(this, QStringLiteral("Search Engine"),
+                    QStringLiteral("Custom search engines need a unique name and a query URL containing %s."));
+                return;
+            }
+            Settings::the()->set_search_engine_name(name_edit->text().trimmed());
+            refresh_search_combo();
+            search_combo->setCurrentText(name_edit->text().trimmed());
+        });
+        dialog->open();
     });
     settings_menu->addAction(add_search_engine_action);
 
@@ -670,7 +656,7 @@ void BrowserWindow::createNewTab(QString const& url, bool background)
     auto index = m_tabs->addTab(tab, tab->title());
     if (!background)
         m_tabs->setCurrentIndex(index);
-    debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=1").arg(index));
+    debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(background ? 0 : 1));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     if (url.trimmed().isEmpty()) {
         tab->showEmptyNewTab();
@@ -837,6 +823,8 @@ void BrowserWindow::updateMenuBarVisibility()
 
 void BrowserWindow::applySettings()
 {
+    servoq::set_experimental_features_enabled(Settings::the()->experimental_features_enabled());
+
     auto vertical_tabs_enabled = Settings::the()->vertical_tabs_enabled();
     auto vertical_tabs_expanded = Settings::the()->vertical_tabs_expanded();
     m_tabs->setVerticalTabsEnabled(vertical_tabs_enabled);

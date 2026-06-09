@@ -158,6 +158,16 @@ void Settings::set_show_bookmarks_bar(bool show_bookmarks_bar)
     m_qsettings.setValue(QStringLiteral("chrome/show_bookmarks_bar"), show_bookmarks_bar);
 }
 
+bool Settings::experimental_features_enabled() const
+{
+    return m_qsettings.value(QStringLiteral("engine/experimental_features_enabled"), QVariant(true)).toBool();
+}
+
+void Settings::set_experimental_features_enabled(bool enabled)
+{
+    m_qsettings.setValue(QStringLiteral("engine/experimental_features_enabled"), enabled);
+}
+
 bool Settings::content_blocking_enabled() const
 {
     return m_qsettings.value(QStringLiteral("content_blocking/enabled"), QVariant(true)).toBool();

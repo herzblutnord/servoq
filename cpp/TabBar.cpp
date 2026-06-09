@@ -245,6 +245,7 @@ private:
 
 TabBar::TabBar(TabWidget* parent)
     : QTabBar(parent)
+    , m_tab_widget(parent)
     , m_hover_animation(new QVariantAnimation(this))
 {
     setMouseTracking(true);
@@ -487,9 +488,8 @@ void TabBar::leaveEvent(QEvent* event)
 void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton && tabAt(event->pos()) == -1) {
-        if (auto* widget = static_cast<TabWidget*>(parentWidget())) {
-            if (widget->onNewTabRequested)
-                widget->onNewTabRequested();
+        if (m_tab_widget && m_tab_widget->onNewTabRequested) {
+            m_tab_widget->onNewTabRequested();
             return;
         }
     }
@@ -527,8 +527,26 @@ void TabBar::mouseMoveEvent(QMouseEvent* event)
 
 void TabBar::mouseReleaseEvent(QMouseEvent* event)
 {
+    int released_tab_index = tabIndexAt(event->pos());
+    int pressed_tab_index = m_pressed_tab_index;
+    if (event->button() == Qt::LeftButton && qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        qInfo().nospace()
+            << "SERVOQ_DEBUG tab_bar_release"
+            << " tab_at=" << released_tab_index
+            << " pressed=" << pressed_tab_index
+            << " current=" << currentIndex()
+            << " pos=(" << event->pos().x() << "," << event->pos().y() << ")";
+    }
     m_pressed_tab_index = -1;
     QTabBar::mouseReleaseEvent(event);
+
+    if (event->button() == Qt::LeftButton && qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        qInfo().nospace()
+            << "SERVOQ_DEBUG tab_bar_release_after_base"
+            << " tab_at=" << released_tab_index
+            << " pressed=" << pressed_tab_index
+            << " current=" << currentIndex();
+    }
 }
 
 void TabBar::contextMenuEvent(QContextMenuEvent* event)
@@ -537,7 +555,7 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     if (index < 0)
         return;
 
-    auto* tab_widget = static_cast<TabWidget*>(parentWidget());
+    auto* tab_widget = m_tab_widget;
     auto* browser_window = dynamic_cast<BrowserWindow*>(tab_widget ? tab_widget->parent() : nullptr);
     if (!browser_window)
         return;
@@ -546,67 +564,77 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     if (!tab)
         return;
 
-    // Capture QPointer<Tab> instead of raw index for all lambdas.
-    // During menu.exec() the nested event loop can service a Servo tick that opens
-    // new tabs (request_open_tab_for_id), shifting indices. Resolving the index
-    // from the stable QPointer at trigger-time prevents closing the wrong tab.
+    // All lambdas capture QPointer<Tab> so they are no-ops if the tab is
+    // deleted while the menu is open. Use popup() instead of exec() to avoid
+    // starting a blocking nested event loop: exec() causes the Wayland compositor
+    // to stop delivering pointer events to the main window surface after the
+    // popup closes, leaving the tab bar in a "locked" state where clicks are
+    // ignored until something forces a focus re-evaluation.
     QPointer<Tab> tab_ptr = tab;
+    QPointer<TabWidget> tab_widget_ptr = tab_widget;
 
-    QMenu menu(this);
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
 
-    auto* reload_action = menu.addAction("Reload Tab");
+    auto* reload_action = menu->addAction("Reload Tab");
     connect(reload_action, &QAction::triggered, tab, [tab] {
         tab->navigate(tab->url());
     });
 
-    menu.addSeparator();
+    menu->addSeparator();
 
-    auto* duplicate_action = menu.addAction("Duplicate Tab");
+    auto* duplicate_action = menu->addAction("Duplicate Tab");
     connect(duplicate_action, &QAction::triggered, browser_window, [browser_window, tab_ptr] {
         if (!tab_ptr)
             return;
         browser_window->createNewTab(tab_ptr->url());
     });
 
-    menu.addSeparator();
+    menu->addSeparator();
 
-    auto* move_start_action = menu.addAction("Move Tab to Start");
-    connect(move_start_action, &QAction::triggered, this, [this, index] {
-        if (index > 0)
-            moveTab(index, 0);
-    });
-
-    auto* move_end_action = menu.addAction("Move Tab to End");
-    connect(move_end_action, &QAction::triggered, this, [this, index] {
-        if (index < count() - 1)
-            moveTab(index, count() - 1);
-    });
-
-    menu.addSeparator();
-
-    auto* close_action = menu.addAction("Close Tab");
-    connect(close_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
-        if (!tab_ptr)
+    auto* move_start_action = menu->addAction("Move Tab to Start");
+    connect(move_start_action, &QAction::triggered, this, [this, tab_widget_ptr, tab_ptr] {
+        if (!tab_widget_ptr || !tab_ptr)
             return;
-        int idx = tab_widget->indexOf(tab_ptr);
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
+        if (idx > 0)
+            moveTab(idx, 0);
+    });
+
+    auto* move_end_action = menu->addAction("Move Tab to End");
+    connect(move_end_action, &QAction::triggered, this, [this, tab_widget_ptr, tab_ptr] {
+        if (!tab_widget_ptr || !tab_ptr)
+            return;
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
+        if (idx >= 0 && idx < count() - 1)
+            moveTab(idx, count() - 1);
+    });
+
+    menu->addSeparator();
+
+    auto* close_action = menu->addAction("Close Tab");
+    connect(close_action, &QAction::triggered, browser_window, [browser_window, tab_widget_ptr, tab_ptr] {
+        if (!tab_ptr || !tab_widget_ptr)
+            return;
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
         if (idx >= 0)
             browser_window->closeTabFromContextMenu(idx);
     });
 
-    auto* close_other_action = menu.addAction("Close Other Tabs");
-    connect(close_other_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
-        if (!tab_ptr)
+    auto* close_other_action = menu->addAction("Close Other Tabs");
+    connect(close_other_action, &QAction::triggered, browser_window, [browser_window, tab_widget_ptr, tab_ptr] {
+        if (!tab_ptr || !tab_widget_ptr)
             return;
-        int idx = tab_widget->indexOf(tab_ptr);
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
         if (idx >= 0)
             browser_window->closeOtherTabs(idx);
     });
 
-    auto* close_right_action = menu.addAction("Close Tabs to the Right");
-    connect(close_right_action, &QAction::triggered, browser_window, [browser_window, tab_widget, tab_ptr] {
-        if (!tab_ptr)
+    auto* close_right_action = menu->addAction("Close Tabs to the Right");
+    connect(close_right_action, &QAction::triggered, browser_window, [browser_window, tab_widget_ptr, tab_ptr] {
+        if (!tab_ptr || !tab_widget_ptr)
             return;
-        int idx = tab_widget->indexOf(tab_ptr);
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
         if (idx >= 0)
             browser_window->closeTabsToRight(idx);
     });
@@ -614,7 +642,7 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     close_other_action->setEnabled(tab_widget->count() > 1);
     close_right_action->setEnabled(index < tab_widget->count() - 1);
 
-    menu.exec(event->globalPos());
+    menu->popup(event->globalPos());
 }
 
 void TabBar::wheelEvent(QWheelEvent* event)
@@ -1214,6 +1242,16 @@ bool TabWidget::cursorIsOverVerticalTabs() const
         return false;
     if (m_vertical_tab_bar_column->underMouse() || m_tab_bar->underMouse() || m_new_tab_button->underMouse())
         return true;
+    // When the tab column is a floating Qt::ToolTip window (hover-expanded), the cursor
+    // is over a separate Wayland surface, so window()->underMouse() is false and the
+    // underMouse() flags above may not have been set yet (the compositor delivers the
+    // wl_pointer.enter asynchronously after show()). Check the global cursor position
+    // against the floating window's rect directly to avoid a spurious collapse that would
+    // cause rapid expand/collapse oscillation and a ~1 s click freeze on the tab bar.
+    if (m_vertical_tab_bar_column->isWindow()) {
+        auto global_rect = QRect { m_vertical_tab_bar_column->mapToGlobal(QPoint(0, 0)), m_vertical_tab_bar_column->size() };
+        return global_rect.contains(QCursor::pos());
+    }
     auto rect = QRect {
         m_vertical_tabs_content->mapToGlobal(QPoint { 0, 0 }),
         QSize { currentVerticalTabsWidth(), m_vertical_tabs_content->height() }
@@ -1426,6 +1464,10 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         // paints above the native embedded webview surface, which always renders
         // above ordinary child widgets regardless of z-order calls.
         //
+        // The tab column must be a floating window while hover-expanded so it
+        // paints above the native embedded webview surface, which always renders
+        // above ordinary child widgets regardless of z-order calls.
+        //
         // Qt::ToolTip (with a parent) maps to xdg_popup on Wayland, which lets
         // xdg_positioner enforce the exact position.  Qt::Tool maps to
         // xdg_toplevel, whose position is compositor-controlled and ignored.
@@ -1516,9 +1558,9 @@ void TabWidget::updateContainerGeometry()
 }
 
 // activateTab is the sole entry point for Wayland container ownership transfers.
-// It is always called deferred (QTimer::singleShot(0)) from
-// BrowserWindow::onCurrentChanged so the mouse-press that triggered the tab
-// switch has fully unwound before we touch the native subsurface.
+// BrowserWindow calls it from the QTabBar::currentChanged transaction so Qt's
+// stack current page, Servo active tab, and the shared native Wayland owner do
+// not drift across different mouse-event phases.
 //
 // TODO: background tabs on Wayland do not start their engine until activated
 // (deferred in WebContentView::startEngineIfNeeded).  Background tabs appear
@@ -1526,12 +1568,18 @@ void TabWidget::updateContainerGeometry()
 // dedicated off-screen Wayland surface per tab.
 void TabWidget::activateTab(int index)
 {
-    if (index < 0 || index >= count())
+    if (index < 0 || index >= count()) {
+        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+            qInfo().nospace() << "SERVOQ_DEBUG activate_tab_return_invalid_index index=" << index << " count=" << count();
         return;
+    }
 
     auto* new_tab = tab(index);
-    if (!new_tab)
+    if (!new_tab) {
+        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+            qInfo().nospace() << "SERVOQ_DEBUG activate_tab_return_null_tab index=" << index;
         return;
+    }
 
     auto t0 = std::chrono::steady_clock::now();
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
@@ -1541,20 +1589,23 @@ void TabWidget::activateTab(int index)
         dumpPresentationState("activate_tab_enter");
     }
 
-    // Only notify the current Wayland owner — not every tab. Iterating all tabs
-    // and calling onBecomeInactiveTab() is harmless for non-owners (guarded by
-    // m_wayland_renderer_active) but produces spurious debug noise and can
-    // incorrectly clear present flags on tabs that have nothing to do with this
-    // activation.
     for (int i = 0; i < count(); ++i) {
         auto* t = tab(i);
         if (!t || t == new_tab)
             continue;
+        // Only notify the actual owner. m_wayland_renderer_active is preserved
+        // across inactive state, so checking waylandRendererActivePublic() would
+        // fire for every previously-loaded tab — wasteful and incorrect.
         if (auto* v = t->view(); v && v->isCurrentWaylandOwner())
             v->onBecomeInactiveTab();
     }
 
-    updateContainerGeometry();
+    // Do NOT call updateContainerGeometry() here. onBecomeInactiveTab() parks
+    // the container off-screen; calling updateContainerGeometry() before
+    // onBecomeActiveTab() immediately un-parks it to full size, causing the
+    // previous tab's content to flash to the left of the window for one frame
+    // (ghost rendering bug). onBecomeActiveTab() calls updateContainerGeometry()
+    // internally after attaching the container to the new owner.
 
     if (auto* v = new_tab->view())
         v->onBecomeActiveTab();
@@ -1597,6 +1648,7 @@ void TabWidget::dumpPresentationState(const char* reason, int activation_serial)
             << " has_view=" << (v ? 1 : 0)
             << " webview_created=" << (v ? v->webviewCreated() : 0)
             << " wayland_active=" << (v ? v->waylandRendererActivePublic() : 0)
+            << " pending_present=" << (v ? v->waylandPresentPendingPublic() : 0)
             << " empty=" << (v ? v->isEmptyNewTab() : 0)
             << " is_owner=" << (v && v->isCurrentWaylandOwner() ? 1 : 0)
             << " is_stack_current=" << (m_stack->currentWidget() == t ? 1 : 0);
@@ -1617,6 +1669,13 @@ void TabWidget::dumpPresentationState(const char* reason, int activation_serial)
             << " " << c_geom.width() << "x" << c_geom.height() << ")"
             << " container_global=(" << c_global.x() << "," << c_global.y()
             << " " << c_global_rect.width() << "x" << c_global_rect.height() << ")";
+        if (auto* current = currentTab(); current && current->view()) {
+            auto* view = current->view();
+            auto v_global = view->mapToGlobal(QPoint(0, 0));
+            qInfo().nospace()
+                << "  viewport_global=(" << v_global.x() << "," << v_global.y()
+                << " " << view->width() << "x" << view->height() << ")";
+        }
 
         // Check for overlap with tab bar.
         auto tb_global = m_tab_bar->mapToGlobal(QPoint(0, 0));
@@ -1636,4 +1695,3 @@ void TabWidget::dumpPresentationState(const char* reason, int activation_serial)
 }
 
 }
-

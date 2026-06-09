@@ -511,11 +511,11 @@ void Tab::buildToolbar()
     connect(back_btn, &QToolButton::customContextMenuRequested, this, [this, back_btn](QPoint const& pos) {
         if (m_history_urls.isEmpty())
             return;
-        // No parent: prevents double-free if Tab is deleted during menu.exec() nested event loop.
-        QMenu menu;
+        auto* menu = new QMenu;
+        menu->setAttribute(Qt::WA_DeleteOnClose);
         int start = m_history_current - 1;
         for (int i = start; i >= 0; --i) {
-            auto* act = menu.addAction(m_history_urls[i]);
+            auto* act = menu->addAction(m_history_urls[i]);
             int steps = m_history_current - i;
             connect(act, &QAction::triggered, this, [this, steps] {
                 for (int s = 0; s < steps; ++s)
@@ -523,8 +523,10 @@ void Tab::buildToolbar()
                 applyControllerState();
             });
         }
-        if (!menu.isEmpty())
-            menu.exec(back_btn->mapToGlobal(pos));
+        if (!menu->isEmpty())
+            menu->popup(back_btn->mapToGlobal(pos));
+        else
+            delete menu;
     });
 
     auto* forward_btn = createToolbarButton(m_forward_action);
@@ -532,11 +534,11 @@ void Tab::buildToolbar()
     connect(forward_btn, &QToolButton::customContextMenuRequested, this, [this, forward_btn](QPoint const& pos) {
         if (m_history_urls.isEmpty())
             return;
-        // No parent: prevents double-free if Tab is deleted during menu.exec() nested event loop.
-        QMenu menu;
+        auto* menu = new QMenu;
+        menu->setAttribute(Qt::WA_DeleteOnClose);
         int start = m_history_current + 1;
         for (int i = start; i < m_history_urls.size(); ++i) {
-            auto* act = menu.addAction(m_history_urls[i]);
+            auto* act = menu->addAction(m_history_urls[i]);
             int steps = i - m_history_current;
             connect(act, &QAction::triggered, this, [this, steps] {
                 for (int s = 0; s < steps; ++s)
@@ -544,8 +546,10 @@ void Tab::buildToolbar()
                 applyControllerState();
             });
         }
-        if (!menu.isEmpty())
-            menu.exec(forward_btn->mapToGlobal(pos));
+        if (!menu->isEmpty())
+            menu->popup(forward_btn->mapToGlobal(pos));
+        else
+            delete menu;
     });
 
     navigation_layout->addWidget(back_btn);
