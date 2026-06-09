@@ -9,6 +9,7 @@
  */
 #pragma once
 
+#include <QPointer>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTimer>
@@ -208,6 +209,7 @@ private:
     QBoxLayout* m_vertical_tab_bar_column_layout { nullptr };
     bool m_is_updating_chrome_style { false };
     bool m_hover_expand_in_progress { false };
+    bool m_tab_column_floating_entered { false };
     bool m_vertical_tabs_enabled { false };
     bool m_vertical_tabs_expanded { true };
     bool m_vertical_tabs_expand_on_hover { false };
@@ -217,6 +219,7 @@ private:
     int m_vertical_tabs_expanded_width { browser_chrome_layout_policy().expanded_sidebar_width };
     int m_vertical_tabs_resize_start_global_x { 0 };
     int m_vertical_tabs_resize_start_width { browser_chrome_layout_policy().expanded_sidebar_width };
+    QPointer<QWidget> m_saved_focus_before_hover_expand;
 };
 
 }

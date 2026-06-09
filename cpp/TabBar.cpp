@@ -1207,9 +1207,16 @@ bool TabWidget::eventFilter(QObject* watched, QEvent* event)
 
     auto is_hover_target = watched == m_vertical_tab_bar_column || watched == m_tab_bar || watched == m_new_tab_button;
     if (is_hover_target) {
-        if (event->type() == QEvent::Enter)
+        if (event->type() == QEvent::Enter) {
+            // When the floating window receives its first Enter, the Wayland compositor
+            // has delivered wl_pointer.enter — underMouse() is now reliable. Clear the
+            // transition guard so the 250ms collapse-poll timer can resume.
+            if (watched == m_vertical_tab_bar_column && m_vertical_tab_bar_column->isWindow() && !m_tab_column_floating_entered) {
+                m_tab_column_floating_entered = true;
+                m_hover_expand_in_progress = false;
+            }
             setVerticalTabsHoverExpanded(true);
-        else if (event->type() == QEvent::Leave)
+        } else if (event->type() == QEvent::Leave)
             deferUpdateVerticalTabsHoverExpanded();
     }
     if (watched == m_vertical_tabs_content && event->type() == QEvent::Leave)
@@ -1253,8 +1260,22 @@ bool TabWidget::cursorIsOverVerticalTabs() const
     // against the floating window's rect directly to avoid a spurious collapse that would
     // cause rapid expand/collapse oscillation and a ~1 s click freeze on the tab bar.
     if (m_vertical_tab_bar_column->isWindow()) {
-        auto global_rect = QRect { m_vertical_tab_bar_column->mapToGlobal(QPoint(0, 0)), m_vertical_tab_bar_column->size() };
-        return global_rect.contains(QCursor::pos());
+        // QCursor::pos() is unreliable on Wayland when the cursor is over a separate
+        // wl_surface: it only updates when the compositor delivers wl_pointer.motion
+        // to Qt's main surface, so it lags behind the actual position. Using it here
+        // caused the 250 ms poll timer to see a stale "not over" position and collapse
+        // the panel prematurely, creating a rapid expand/collapse oscillation.
+        //
+        // Instead: trust the event-driven underMouse() flag. It is set by the Enter
+        // event that the floating window receives from the compositor once the cursor
+        // actually enters it. Before the first such Enter is confirmed (tracked by
+        // m_tab_column_floating_entered), assume the cursor is still over the panel —
+        // we just expanded for a hover and the compositor hasn't delivered Enter yet.
+        if (!m_tab_column_floating_entered)
+            return true;
+        return m_vertical_tab_bar_column->underMouse()
+            || m_tab_bar->underMouse()
+            || m_new_tab_button->underMouse();
     }
     auto rect = QRect {
         m_vertical_tabs_content->mapToGlobal(QPoint { 0, 0 }),
@@ -1465,10 +1486,17 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     m_vertical_tabs_hover_expanded = expanded;
     m_hover_expand_in_progress = true;
     if (expanded) {
-        // The tab column must be a floating window while hover-expanded so it
-        // paints above the native embedded webview surface, which always renders
-        // above ordinary child widgets regardless of z-order calls.
-        //
+        // Save keyboard focus so we can restore it when the hover panel collapses.
+        // On Wayland the floating tooltip window may disrupt compositor focus tracking;
+        // saving here lets us put it back cleanly without guessing which widget owned it.
+        m_saved_focus_before_hover_expand = QApplication::focusWidget();
+
+        // Reset the "first Enter confirmed" flag. We must not collapse based on
+        // QCursor::pos() or underMouse() until the Wayland compositor has delivered
+        // wl_pointer.enter to the new floating surface — which happens asynchronously
+        // after show(). cursorIsOverVerticalTabs() returns true while this is false.
+        m_tab_column_floating_entered = false;
+
         // The tab column must be a floating window while hover-expanded so it
         // paints above the native embedded webview surface, which always renders
         // above ordinary child widgets regardless of z-order calls.
@@ -1489,6 +1517,8 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
             }
         }
     } else {
+        m_tab_column_floating_entered = false;
+
         // setParent(parent, Qt::Widget) resets the window-type flags in one
         // call so isWindow() returns false and the overlay reverts to a normal
         // child widget positioned via setGeometry().
@@ -1501,10 +1531,27 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     m_vertical_tab_bar_column_layout->setContentsMargins(side_margin, VerticalTabsTopMargin, side_margin, 8);
     updateChromeStyle();
     updateTabLayout();
-    // Clear the transition guard AFTER updateTabLayout() has called show()+move() on the
-    // floating window. Any Leave events that fire from here on are legitimate cursor-left
-    // events (not artifacts of hide()/setParent() reparenting) and should trigger collapse.
-    m_hover_expand_in_progress = false;
+
+    if (!expanded) {
+        // Collapse path: clear the guard now that layout is stable, and restore
+        // keyboard focus to whichever widget had it before the panel appeared.
+        m_hover_expand_in_progress = false;
+        if (m_saved_focus_before_hover_expand) {
+            m_saved_focus_before_hover_expand->setFocus(Qt::OtherFocusReason);
+            m_saved_focus_before_hover_expand = nullptr;
+        }
+    } else {
+        // Expand path: keep m_hover_expand_in_progress = true until the floating
+        // window receives its first wl_pointer.enter event (handled in eventFilter).
+        // This prevents the 250ms collapse-poll timer from seeing stale QCursor::pos()
+        // data and triggering a spurious collapse before the compositor has notified us.
+        // Safety: clear after 500 ms in case the Enter event never arrives (cursor left
+        // very quickly after the window appeared, before compositor could notify us).
+        QTimer::singleShot(500, this, [this] {
+            if (m_vertical_tabs_hover_expanded)
+                m_hover_expand_in_progress = false;
+        });
+    }
 }
 
 void TabWidget::deferUpdateVerticalTabsHoverExpanded()
@@ -1523,6 +1570,11 @@ void TabWidget::deferUpdateVerticalTabsHoverExpanded()
 void TabWidget::updateVerticalTabsHoverExpanded()
 {
     if (!m_vertical_tabs_hover_expanded)
+        return;
+    // Guard: do not poll while the expand transition is in progress. The floating
+    // window has not yet received wl_pointer.enter from the compositor, so any
+    // hover check would be based on stale state and would trigger a spurious collapse.
+    if (m_hover_expand_in_progress)
         return;
     if (!cursorIsOverVerticalTabs())
         setVerticalTabsHoverExpanded(false);
