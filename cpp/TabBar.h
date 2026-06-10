@@ -137,6 +137,11 @@ public:
     // Gated on SERVOQ_DEBUG environment variable.
     void dumpPresentationState(const char* reason, int activation_serial = -1) const;
 
+    // TEMPORARY DIAGNOSTICS (SERVOQ_DIAG): one-line snapshot of all hover-expand
+    // state. Used to diagnose the post-tab-switch tab-bar freeze. Remove once
+    // root-caused.
+    QString hoverDiagState() const;
+
     void setVerticalTabsEnabled(bool enabled);
     void set_vertical_tabs_enabled(bool enabled) { setVerticalTabsEnabled(enabled); }
     void setVerticalTabsExpanded(bool expanded);

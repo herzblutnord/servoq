@@ -51,6 +51,23 @@
 #include <algorithm>
 #include <chrono>
 
+// TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — defined in WebContentView.cpp.
+bool servoq_diag_enabled();
+QString servoq_diag_describe(QObject const* o);
+void servoq_diag_log(QString const& msg);
+
+namespace {
+// Monotonic millisecond clock for the hover-expand freeze investigation, so the
+// log shows "tab switch -> first accepted click" gaps. steady_clock is allowed
+// here (this is plain C++, not a workflow script).
+qint64 servoq_diag_now_ms()
+{
+    static auto const start = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+}
+} // namespace
+
 namespace ServoQ {
 namespace {
 
@@ -502,9 +519,26 @@ void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TabBar::mousePressEvent(QMouseEvent* event)
 {
+    if (servoq_diag_enabled() && event->button() == Qt::LeftButton)
+        servoq_diag_log(QStringLiteral("TabBar::mousePressEvent DELIVERED customTabAt=%1 qtTabAt=%2 currentIndex=%3 pos=(%4,%5) | %6")
+            .arg(tabIndexAt(event->pos()))
+            .arg(QTabBar::tabAt(event->pos()))
+            .arg(currentIndex())
+            .arg(event->pos().x()).arg(event->pos().y())
+            .arg(m_tab_widget ? m_tab_widget->hoverDiagState() : QStringLiteral("<no tab_widget>")));
     if (event->button() == Qt::LeftButton) {
         m_pressed_tab_index = tabIndexAt(event->pos());
         m_drag_start_position = event->pos();
+        // Activate via our vertical-layout-aware hit test instead of relying on
+        // QTabBar::mousePressEvent's internal tabAt(). That internal hit test
+        // returns -1 for valid positions right after the hover-expand popup is
+        // reparented (stale internal tab geometry) and silently ignores the
+        // click — the proven cause of the ~1 s post-switch tab-bar freeze.
+        // Our tabIndexAt() stays correct across the reparent, so drive the
+        // activation from it. Idempotent: skipped when the tab is already current,
+        // and drag-to-reorder is unaffected (handled in mouseMoveEvent).
+        if (m_pressed_tab_index >= 0 && m_pressed_tab_index != currentIndex())
+            setCurrentIndex(m_pressed_tab_index);
         if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
             qInfo().nospace()
                 << "SERVOQ_DEBUG tab_bar_press"
@@ -533,6 +567,10 @@ void TabBar::mouseReleaseEvent(QMouseEvent* event)
 {
     int released_tab_index = tabIndexAt(event->pos());
     int pressed_tab_index = m_pressed_tab_index;
+    if (servoq_diag_enabled() && event->button() == Qt::LeftButton)
+        servoq_diag_log(QStringLiteral("TabBar::mouseReleaseEvent DELIVERED tab_at=%1 pressed=%2 current=%3 | %4")
+            .arg(released_tab_index).arg(pressed_tab_index).arg(currentIndex())
+            .arg(m_tab_widget ? m_tab_widget->hoverDiagState() : QStringLiteral("<no tab_widget>")));
     if (event->button() == Qt::LeftButton && qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         qInfo().nospace()
             << "SERVOQ_DEBUG tab_bar_release"
@@ -1206,6 +1244,19 @@ bool TabWidget::eventFilter(QObject* watched, QEvent* event)
     }
 
     auto is_hover_target = watched == m_vertical_tab_bar_column || watched == m_tab_bar || watched == m_new_tab_button;
+    if (servoq_diag_enabled() && is_hover_target) {
+        auto t = event->type();
+        if (t == QEvent::Enter || t == QEvent::Leave
+            || t == QEvent::MouseButtonPress || t == QEvent::MouseButtonRelease) {
+            char const* name = t == QEvent::Enter ? "Enter"
+                : t == QEvent::Leave ? "Leave"
+                : t == QEvent::MouseButtonPress ? "MousePress" : "MouseRelease";
+            servoq_diag_log(QStringLiteral("eventFilter %1 on %2 | %3")
+                .arg(QString::fromUtf8(name))
+                .arg(servoq_diag_describe(watched))
+                .arg(hoverDiagState()));
+        }
+    }
     if (is_hover_target) {
         if (event->type() == QEvent::Enter) {
             // When the floating window receives its first Enter, the Wayland compositor
@@ -1282,6 +1333,31 @@ bool TabWidget::cursorIsOverVerticalTabs() const
         QSize { currentVerticalTabsWidth(), m_vertical_tabs_content->height() }
     };
     return window()->underMouse() && rect.contains(QCursor::pos());
+}
+
+// TEMPORARY DIAGNOSTICS (SERVOQ_DIAG): full hover-expand state snapshot.
+QString TabWidget::hoverDiagState() const
+{
+    return QStringLiteral(
+        "t=%1ms current=%2 hover_enabled=%3 expanded=%4 hover_expanded=%5 floating(isWindow)=%6 "
+        "in_progress=%7 floating_entered=%8 collapse_timer_active=%9 cursorIsOver=%10 "
+        "underMouse[col=%11 tabbar=%12 newtab=%13] grabber=%14 cursor=(%15,%16)")
+        .arg(servoq_diag_now_ms())
+        .arg(m_tab_bar->currentIndex())
+        .arg(canExpandVerticalTabsOnHover() ? 1 : 0)
+        .arg(m_vertical_tabs_expanded ? 1 : 0)
+        .arg(m_vertical_tabs_hover_expanded ? 1 : 0)
+        .arg(m_vertical_tab_bar_column->isWindow() ? 1 : 0)
+        .arg(m_hover_expand_in_progress ? 1 : 0)
+        .arg(m_tab_column_floating_entered ? 1 : 0)
+        .arg(m_vertical_tabs_hover_collapse_timer->isActive() ? 1 : 0)
+        .arg(cursorIsOverVerticalTabs() ? 1 : 0)
+        .arg(m_vertical_tab_bar_column->underMouse() ? 1 : 0)
+        .arg(m_tab_bar->underMouse() ? 1 : 0)
+        .arg(m_new_tab_button->underMouse() ? 1 : 0)
+        .arg(servoq_diag_describe(QWidget::mouseGrabber()))
+        .arg(QCursor::pos().x())
+        .arg(QCursor::pos().y());
 }
 
 int TabWidget::verticalTabsLayoutWidth() const
@@ -1481,6 +1557,9 @@ void TabWidget::setResizeHandleProperty(char const* property, bool enabled)
 void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
 {
     expanded &= canExpandVerticalTabsOnHover();
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("setVerticalTabsHoverExpanded(req=%1) was=%2 | %3")
+            .arg(expanded ? 1 : 0).arg(m_vertical_tabs_hover_expanded ? 1 : 0).arg(hoverDiagState()));
     if (m_vertical_tabs_hover_expanded == expanded)
         return;
     m_vertical_tabs_hover_expanded = expanded;
@@ -1574,9 +1653,18 @@ void TabWidget::updateVerticalTabsHoverExpanded()
     // Guard: do not poll while the expand transition is in progress. The floating
     // window has not yet received wl_pointer.enter from the compositor, so any
     // hover check would be based on stale state and would trigger a spurious collapse.
-    if (m_hover_expand_in_progress)
+    if (m_hover_expand_in_progress) {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("updateVerticalTabsHoverExpanded POLL skipped(in_progress) | %1").arg(hoverDiagState()));
         return;
-    if (!cursorIsOverVerticalTabs())
+    }
+    bool over = cursorIsOverVerticalTabs();
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("updateVerticalTabsHoverExpanded POLL cursorIsOver=%1 -> %2 | %3")
+            .arg(over ? 1 : 0)
+            .arg(over ? QStringLiteral("keep") : QStringLiteral("COLLAPSE"))
+            .arg(hoverDiagState()));
+    if (!over)
         setVerticalTabsHoverExpanded(false);
 }
 
@@ -1649,6 +1737,9 @@ void TabWidget::activateTab(int index)
     }
 
     auto t0 = std::chrono::steady_clock::now();
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral(">>> activateTab ENTER index=%1 tab_id=%2 | %3")
+            .arg(index).arg(new_tab->controllerId()).arg(hoverDiagState()));
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         qInfo().nospace()
             << "SERVOQ_DEBUG activate_tab_enter index=" << index
@@ -1688,12 +1779,18 @@ void TabWidget::activateTab(int index)
     // m_hover_expand_in_progress (so the 250 ms collapse-poll timer cannot fire a
     // collapse check until the compositor has re-delivered wl_pointer.enter). The same
     // 500 ms safety timer that setVerticalTabsHoverExpanded already uses clears the flag.
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("activateTab after onBecomeActiveTab, before hover-guard | %1").arg(hoverDiagState()));
     if (m_vertical_tabs_hover_expanded && m_vertical_tab_bar_column->isWindow()) {
         m_tab_column_floating_entered = false;
         m_hover_expand_in_progress = true;
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("activateTab HOVER-GUARD applied (reset floating_entered, set in_progress, 500ms timer) | %1").arg(hoverDiagState()));
         QTimer::singleShot(500, this, [this] {
             if (m_vertical_tabs_hover_expanded)
                 m_hover_expand_in_progress = false;
+            if (servoq_diag_enabled())
+                servoq_diag_log(QStringLiteral("activateTab HOVER-GUARD 500ms timer fired (cleared in_progress) | %1").arg(hoverDiagState()));
         });
     }
 
