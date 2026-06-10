@@ -140,6 +140,11 @@ private:
     bool m_wayland_present_pending { false };
     bool m_wayland_present_in_progress { false };
     bool m_wayland_dirty_after_present { false };
+    // Software present-rate cap (vsync is disabled at the swap to avoid blocking
+    // the main thread, so without this a fast-loading page could present far more
+    // often than the screen refreshes and starve the Qt chrome).
+    qint64 m_last_present_request_ms { -1000 };
+    bool m_present_throttle_scheduled { false };
     double m_ctrl_wheel_zoom_remainder { 0.0 };
 };
 

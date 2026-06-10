@@ -28,7 +28,9 @@
 #include <QSystemTrayIcon>
 #include <QCursor>
 #include <QFocusEvent>
+#include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QHash>
 #include <QImage>
 #include <QImageReader>
@@ -1032,6 +1034,31 @@ void WebContentView::receiveRequestBlocked(QString const& url)
     emit request_blocked(url);
 }
 
+// Monotonic ms clock for the present-rate cap (main-thread only).
+static qint64 present_clock_ms()
+{
+    static QElapsedTimer timer = [] {
+        QElapsedTimer t;
+        t.start();
+        return t;
+    }();
+    return timer.elapsed();
+}
+
+// Cap = one frame at the display's refresh rate. Presenting faster than the
+// screen refreshes is wasted work that only steals the main thread from the Qt
+// chrome; capping at the refresh rate removes the waste without costing any
+// visible smoothness.
+static qint64 min_present_interval_ms()
+{
+    qreal hz = 60.0;
+    if (auto* screen = QGuiApplication::primaryScreen()) {
+        if (screen->refreshRate() > 1.0)
+            hz = screen->refreshRate();
+    }
+    return qMax<qint64>(1, static_cast<qint64>(1000.0 / hz));
+}
+
 void WebContentView::requestWaylandRepaint()
 {
     if (!m_webview_created) {
@@ -1077,6 +1104,28 @@ void WebContentView::requestWaylandRepaint()
         qt_perf_stats().qwindow_present_requests_coalesced++;
         maybe_log_qt_perf();
         return;
+    }
+    // Rate-cap: don't start a present more often than the display refreshes.
+    // Defer to the interval boundary instead; the retry re-runs every guard
+    // above. A single retry is scheduled (coalesced) and the frame is never
+    // dropped — only delayed by at most one refresh interval.
+    {
+        qint64 const interval = min_present_interval_ms();
+        qint64 const now = present_clock_ms();
+        qint64 const since = now - m_last_present_request_ms;
+        if (since < interval) {
+            if (!m_present_throttle_scheduled) {
+                m_present_throttle_scheduled = true;
+                QTimer::singleShot(static_cast<int>(interval - since), this, [this] {
+                    m_present_throttle_scheduled = false;
+                    requestWaylandRepaint();
+                });
+            }
+            qt_perf_stats().qwindow_present_requests_coalesced++;
+            maybe_log_qt_perf();
+            return;
+        }
+        m_last_present_request_ms = now;
     }
     m_wayland_present_pending = true;
     debug_log("wayland_present_requested", m_tab_id,
@@ -1720,6 +1769,10 @@ static QNetworkRequest favicon_request(QUrl const& url)
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("ServoQ/0.1"));
     request.setTransferTimeout(15000);
+    // Favicon fetches don't benefit from HTTP/2 multiplexing, and Qt's HTTP/2
+    // keep-alive handling is the source of the spurious "QIODevice::read
+    // (QSslSocket): device not open" warnings seen during loads. Force HTTP/1.1.
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     return request;
 }
 
@@ -1846,7 +1899,24 @@ static QString extract_html_attr(QString const& tag, QString const& attr)
 
 static QUrl favicon_url_from_html(QUrl const& page_url, QByteArray const& html)
 {
-    auto text = QString::fromUtf8(html);
+    // Favicons are declared in <head>. Converting and running a global regex over
+    // the *entire* document (which can be several MB) on the main thread caused a
+    // brief UI stall at load-finish. Bound the work to the head: cut at </head>
+    // (or <body>), and otherwise cap at 64 KB — favicon <link>s sit at the top.
+    QByteArray head = html;
+    int head_end = head.indexOf("</head>");
+    if (head_end < 0)
+        head_end = head.indexOf("</HEAD>");
+    if (head_end < 0)
+        head_end = head.indexOf("<body");
+    if (head_end < 0)
+        head_end = head.indexOf("<BODY");
+    if (head_end >= 0)
+        head.truncate(head_end);
+    else if (head.size() > 65536)
+        head.truncate(65536);
+
+    auto text = QString::fromUtf8(head);
     QRegularExpression link_re(QStringLiteral("<link\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
     auto it = link_re.globalMatch(text);
     while (it.hasNext()) {
