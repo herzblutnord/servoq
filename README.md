@@ -1,3 +1,5 @@
+<img src="docs/images/screenshot1.jpg" alt="ServoQ overview" width="800">
+
 # ServoQ
 
 Ladybird's Qt6 browser chrome, running on Servo instead of LibWeb.
