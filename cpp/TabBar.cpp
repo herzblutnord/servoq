@@ -1677,6 +1677,26 @@ void TabWidget::activateTab(int index)
     if (auto* v = new_tab->view())
         v->onBecomeActiveTab();
 
+    // In "expand on hover" mode the tab column is a floating xdg_popup. The Wayland
+    // subsurface commits in onBecomeActiveTab (park → unpark geometry changes) can
+    // trigger a spurious wl_pointer.leave on the popup, causing a collapse → re-expand
+    // cycle. The re-expanded surface must wait for wl_pointer.enter from the compositor
+    // before it can receive button events, producing a ~0.5–1 s click freeze.
+    //
+    // Prevent this by resetting m_tab_column_floating_entered (so cursorIsOverVerticalTabs
+    // conservatively assumes the cursor is still over the panel) and setting
+    // m_hover_expand_in_progress (so the 250 ms collapse-poll timer cannot fire a
+    // collapse check until the compositor has re-delivered wl_pointer.enter). The same
+    // 500 ms safety timer that setVerticalTabsHoverExpanded already uses clears the flag.
+    if (m_vertical_tabs_hover_expanded && m_vertical_tab_bar_column->isWindow()) {
+        m_tab_column_floating_entered = false;
+        m_hover_expand_in_progress = true;
+        QTimer::singleShot(500, this, [this] {
+            if (m_vertical_tabs_hover_expanded)
+                m_hover_expand_in_progress = false;
+        });
+    }
+
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - t0).count();

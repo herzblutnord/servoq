@@ -25,6 +25,7 @@
 #include "Settings.h"
 #include "Tab.h"
 #include "TabBar.h"
+#include "WebContentView.h"
 #include "servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
@@ -136,6 +137,10 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             debug_log("tab_switch", tab->controllerId(), QStringLiteral("active=1"));
             tab->setActive(true);
             tab->applyControllerState();
+            // Mirror Ladybird: set Qt focus on the new tab's view so
+            // focusInEvent fires → forward_focus(true) → Servo accepts key events.
+            if (auto* view = tab->view())
+                view->setFocus(Qt::OtherFocusReason);
         }
         updateCurrentTabState();
         // Defer activateTab so any mouse event that triggered the tab switch
