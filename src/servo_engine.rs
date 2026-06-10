@@ -39,7 +39,8 @@ mod engine {
     use servo::{Code, EventLoopWaker, Key, KeyState, Location, Modifiers, NamedKey};
     use servo::protocol_handler::ProtocolRegistry;
     use servo::{
-        DeviceIndependentPixel, DevicePixel, InputEvent, KeyboardEvent as ServoKeyboardEvent,
+        DeviceIndependentPixel, DevicePixel, EditingActionEvent, InputEvent,
+        KeyboardEvent as ServoKeyboardEvent,
         LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
         NavigationRequest, Opts, PrefValue, Preferences, RenderingContext, Servo, ServoBuilder,
         SoftwareRenderingContext, Theme, UrlRequest, WebResourceLoad, WebResourceResponse, WebView,
@@ -1697,6 +1698,7 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseMove(MouseMoveEvent::new(point));
         if let Some(wv) = clone_webview(id) {
+            diag(format!("mouse_move id={id} device=({x:.1},{y:.1})"));
             wv.notify_input_event(event);
         }
     }
@@ -1715,6 +1717,9 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseButton(MouseButtonEvent::new(action, button, point));
         if let Some(wv) = clone_webview(id) {
+            diag(format!(
+                "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1})"
+            ));
             wv.notify_input_event(event);
         }
     }
@@ -1730,6 +1735,7 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::Wheel(WheelEvent::new(delta, point));
         if let Some(wv) = clone_webview(id) {
+            diag(format!("wheel id={id} delta=({dx:.1},{dy:.1}) device=({x:.1},{y:.1})"));
             wv.notify_input_event(event);
         }
     }
@@ -1737,9 +1743,73 @@ mod engine {
     // key_char: Unicode code point from Qt event.text()[0], 0 for non-printable.
     // qt_key:   Qt::Key enum value.
     // mods:     Qt::KeyboardModifiers flags.
+    // Ctrl chord -> Servo editing action. Servo does NOT perform copy/cut/paste
+    // from a raw Ctrl+<key> keyboard event: servoshell intercepts these chords and
+    // dispatches an InputEvent::EditingAction instead (see
+    // vendor/reference-servo/ports/servoshell/desktop/headed_window.rs ~360-372).
+    // We do the same. Routed here because forward_key is only ever called from
+    // focused web content — the URL bar, find box and other Qt chrome widgets keep
+    // their native Qt clipboard handling and never reach this path. Ctrl+A is NOT
+    // turned into an editing action (Servo has no SelectAll action) — it stays a
+    // keyboard event, but with a corrected logical key (see forward_key below).
+    // True for a Control chord that is not AltGr. On Linux AltGr reports as
+    // Ctrl+Alt and is used to type characters on international layouts, so it must
+    // be excluded — a genuine Ctrl shortcut never holds Alt.
+    fn ctrl_chord_active(mods: u32) -> bool {
+        const QT_CONTROL_MODIFIER: u32 = 0x0400_0000;
+        const QT_ALT_MODIFIER: u32 = 0x0800_0000;
+        mods & QT_CONTROL_MODIFIER != 0 && mods & QT_ALT_MODIFIER == 0
+    }
+
+    fn ctrl_editing_action(qt_key: i32, mods: u32) -> Option<EditingActionEvent> {
+        const QT_KEY_C: i32 = 0x43;
+        const QT_KEY_X: i32 = 0x58;
+        const QT_KEY_V: i32 = 0x56;
+        if !ctrl_chord_active(mods) {
+            return None;
+        }
+        match qt_key {
+            QT_KEY_C => Some(EditingActionEvent::Copy),
+            QT_KEY_X => Some(EditingActionEvent::Cut),
+            QT_KEY_V => Some(EditingActionEvent::Paste),
+            _ => None,
+        }
+    }
+
     pub fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32) {
+        if let Some(action) = ctrl_editing_action(qt_key, mods) {
+            // Swallow both press and release of the clipboard chord so the raw
+            // 'c'/'x'/'v' key never additionally reaches Servo as text input.
+            if down {
+                // Log the action type only — never the clipboard contents.
+                let action_name = match action {
+                    EditingActionEvent::Copy => "copy",
+                    EditingActionEvent::Cut => "cut",
+                    EditingActionEvent::Paste => "paste",
+                };
+                diag(format!("editing_action id={id} action={action_name}"));
+                if let Some(wv) = clone_webview(id) {
+                    wv.notify_input_event(InputEvent::EditingAction(action));
+                }
+            }
+            return;
+        }
         let state = if down { KeyState::Down } else { KeyState::Up };
-        let key = qt_key_to_key(key_char, qt_key);
+        const QT_KEY_A: i32 = 0x41;
+        let key = if ctrl_chord_active(mods) && qt_key == QT_KEY_A {
+            // Ctrl+A select-all. Servo exposes no EditingActionEvent::SelectAll
+            // (the enum is only Copy/Cut/Paste), so — like servoshell — we forward
+            // a keyboard event. But under Ctrl, Qt's event.text() is the SOH
+            // control char, so qt_key_to_key() yields Key::Named(Unidentified) and
+            // Servo's TextInput select-all shortcut (keyboard-types ShortcutMatcher,
+            // which matches the *logical* key 'a' case-insensitively) never fires.
+            // Forward the corrected logical key so Servo can match it. Only the
+            // keydown triggers select_all in Servo; the keyup is harmless.
+            diag(format!("select_all id={id} down={down} via=keyboard Key::Character(\"a\")"));
+            Key::Character("a".to_string().into())
+        } else {
+            qt_key_to_key(key_char, qt_key)
+        };
         let code = qt_key_to_code(qt_key);
         let modifiers = qt_mods_to_modifiers(mods);
         let kb_event = ServoKeyboardEvent::new_without_event(
@@ -1842,7 +1912,19 @@ mod engine {
     pub fn set_experimental_features_enabled(enabled: bool) {
         if let Some(servo) = clone_servo() {
             for pref in EXPERIMENTAL_PREFS {
-                servo.set_preference(pref, PrefValue::Bool(enabled));
+                // Servo::set_preference -> Preferences::set_value PANICS on an
+                // unknown preference name. Guard every name with the generated
+                // Preferences::exists() so a pref Servo has renamed/removed in a
+                // future version is skipped with a log line instead of aborting.
+                if Preferences::exists(pref) {
+                    servo.set_preference(pref, PrefValue::Bool(enabled));
+                    diag(format!("experimental_pref applied name={pref} value={enabled}"));
+                } else {
+                    eprintln!(
+                        "SERVOQ: skipping unknown experimental preference '{pref}' \
+                         (not present in this Servo build)"
+                    );
+                }
             }
         }
     }

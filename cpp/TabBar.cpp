@@ -519,6 +519,22 @@ void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TabBar::mousePressEvent(QMouseEvent* event)
 {
+    // Middle-click closes a tab. We must NOT close on press: emitting the close
+    // here mutated the tab bar mid-interaction — the deferred close shifted the
+    // next tab under the cursor and a second close fired against the now-stale
+    // index, closing two tabs. Instead, on press we only *capture* the target by
+    // stable identity (QPointer<Tab>, survives reordering and index shifts) and
+    // swallow the event (no base-class handling). The actual close happens once,
+    // on release. (See mouseReleaseEvent.)
+    if (event->button() == Qt::MiddleButton) {
+        int index = tabIndexAt(event->pos());
+        m_middle_close_target = (index >= 0 && m_tab_widget) ? m_tab_widget->tab(index) : nullptr;
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("TabBar::middle_press index=%1 captured=%2")
+                .arg(index).arg(m_middle_close_target ? 1 : 0));
+        event->accept();
+        return;
+    }
     if (servoq_diag_enabled() && event->button() == Qt::LeftButton)
         servoq_diag_log(QStringLiteral("TabBar::mousePressEvent DELIVERED customTabAt=%1 qtTabAt=%2 currentIndex=%3 pos=(%4,%5) | %6")
             .arg(tabIndexAt(event->pos()))
@@ -565,6 +581,24 @@ void TabBar::mouseMoveEvent(QMouseEvent* event)
 
 void TabBar::mouseReleaseEvent(QMouseEvent* event)
 {
+    // Middle-click close, completed here so the bar is only mutated once the
+    // mouse interaction is over. Resolve the captured identity back to its
+    // current index and emit the same tabCloseRequested signal the close button
+    // uses (BrowserWindow defers the real close via QTimer::singleShot — no
+    // synchronous widget deletion / removeTab from this handler). The target is
+    // cleared *before* emitting so any re-entrant event cannot close twice.
+    if (event->button() == Qt::MiddleButton) {
+        QPointer<Tab> target = m_middle_close_target;
+        m_middle_close_target = nullptr;
+        int index = (target && m_tab_widget) ? m_tab_widget->indexOf(target) : -1;
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("TabBar::middle_release resolved_index=%1 stale=%2")
+                .arg(index).arg(target && index < 0 ? 1 : 0));
+        if (index >= 0)
+            emit tabCloseRequested(index);
+        event->accept();
+        return;
+    }
     int released_tab_index = tabIndexAt(event->pos());
     int pressed_tab_index = m_pressed_tab_index;
     if (servoq_diag_enabled() && event->button() == Qt::LeftButton)

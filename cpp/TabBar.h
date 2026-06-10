@@ -101,6 +101,9 @@ private:
     QVariantAnimation* m_hover_animation { nullptr };
     QPoint m_drag_start_position;
     int m_pressed_tab_index { -1 };
+    // Middle-click-to-close target. Captured by stable identity on middle press,
+    // closed exactly once on middle release (resolved back to its current index).
+    QPointer<Tab> m_middle_close_target;
 };
 
 class TabWidget final : public QWidget {
