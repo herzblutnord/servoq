@@ -58,18 +58,26 @@ mod engine {
 
     // ---- per-tab state stored in our engine registry ---------
 
+    // These gate env vars are read ONCE and cached. std::env::var_os takes a
+    // process-global lock (shared with every Servo worker thread) and scans the
+    // environment, so calling it per-event on hot paths (e.g. forward_mouse_move
+    // at ~1 kHz) caused lock contention that stalled both the UI and Servo's
+    // compositing. Cached behind a OnceLock it is a single atomic load thereafter.
     fn debug_enabled() -> bool {
-        std::env::var_os("SERVOQ_DEBUG").is_some()
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("SERVOQ_DEBUG").is_some())
     }
 
     fn perf_enabled() -> bool {
-        std::env::var_os("SERVOQ_PERF").is_some()
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("SERVOQ_PERF").is_some())
     }
 
     // TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — opt-in, low-noise tracing for the
     // text-input and second-tab-crash investigation. Remove once root-caused.
     fn diag_enabled() -> bool {
-        std::env::var_os("SERVOQ_DIAG").is_some()
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| std::env::var_os("SERVOQ_DIAG").is_some())
     }
 
     fn diag(msg: impl std::fmt::Display) {
@@ -1724,7 +1732,9 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseMove(MouseMoveEvent::new(point));
         if let Some(wv) = clone_webview(id) {
-            diag(format!("mouse_move id={id} device=({x:.1},{y:.1})"));
+            if diag_enabled() {
+                diag(format!("mouse_move id={id} device=({x:.1},{y:.1})"));
+            }
             wv.notify_input_event(event);
         }
     }
@@ -1743,9 +1753,11 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseButton(MouseButtonEvent::new(action, button, point));
         if let Some(wv) = clone_webview(id) {
-            diag(format!(
-                "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1})"
-            ));
+            if diag_enabled() {
+                diag(format!(
+                    "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1})"
+                ));
+            }
             wv.notify_input_event(event);
         }
     }
@@ -1761,7 +1773,9 @@ mod engine {
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::Wheel(WheelEvent::new(delta, point));
         if let Some(wv) = clone_webview(id) {
-            diag(format!("wheel id={id} delta=({dx:.1},{dy:.1}) device=({x:.1},{y:.1})"));
+            if diag_enabled() {
+                diag(format!("wheel id={id} delta=({dx:.1},{dy:.1}) device=({x:.1},{y:.1})"));
+            }
             wv.notify_input_event(event);
         }
     }
