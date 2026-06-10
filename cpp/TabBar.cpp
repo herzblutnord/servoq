@@ -1768,31 +1768,21 @@ void TabWidget::activateTab(int index)
     if (auto* v = new_tab->view())
         v->onBecomeActiveTab();
 
-    // In "expand on hover" mode the tab column is a floating xdg_popup. The Wayland
-    // subsurface commits in onBecomeActiveTab (park → unpark geometry changes) can
-    // trigger a spurious wl_pointer.leave on the popup, causing a collapse → re-expand
-    // cycle. The re-expanded surface must wait for wl_pointer.enter from the compositor
-    // before it can receive button events, producing a ~0.5–1 s click freeze.
+    // NOTE: no hover-expand "freeze guard" here. A previous attempt reset
+    // m_tab_column_floating_entered=false + m_hover_expand_in_progress=true (with a
+    // 500 ms timer) on every tab switch, intending to suppress a collapse during the
+    // Wayland surface churn. That was a misdiagnosis: the real tab-bar freeze was
+    // QTabBar::mousePressEvent ignoring clicks via its stale internal tabAt() (now
+    // fixed by activating from our own tabIndexAt() in TabBar::mousePressEvent).
     //
-    // Prevent this by resetting m_tab_column_floating_entered (so cursorIsOverVerticalTabs
-    // conservatively assumes the cursor is still over the panel) and setting
-    // m_hover_expand_in_progress (so the 250 ms collapse-poll timer cannot fire a
-    // collapse check until the compositor has re-delivered wl_pointer.enter). The same
-    // 500 ms safety timer that setVerticalTabsHoverExpanded already uses clears the flag.
+    // The guard also caused a real bug: with m_tab_column_floating_entered=false,
+    // cursorIsOverVerticalTabs() returns true unconditionally, so after clicking a
+    // tab the hover panel could not collapse until a fresh wl_pointer.enter re-set
+    // the flag — which never happens when the cursor leaves into the webview
+    // subsurface. Removing the guard lets the normal Leave/poll path collapse the
+    // panel as soon as the cursor leaves it.
     if (servoq_diag_enabled())
-        servoq_diag_log(QStringLiteral("activateTab after onBecomeActiveTab, before hover-guard | %1").arg(hoverDiagState()));
-    if (m_vertical_tabs_hover_expanded && m_vertical_tab_bar_column->isWindow()) {
-        m_tab_column_floating_entered = false;
-        m_hover_expand_in_progress = true;
-        if (servoq_diag_enabled())
-            servoq_diag_log(QStringLiteral("activateTab HOVER-GUARD applied (reset floating_entered, set in_progress, 500ms timer) | %1").arg(hoverDiagState()));
-        QTimer::singleShot(500, this, [this] {
-            if (m_vertical_tabs_hover_expanded)
-                m_hover_expand_in_progress = false;
-            if (servoq_diag_enabled())
-                servoq_diag_log(QStringLiteral("activateTab HOVER-GUARD 500ms timer fired (cleared in_progress) | %1").arg(hoverDiagState()));
-        });
-    }
+        servoq_diag_log(QStringLiteral("activateTab after onBecomeActiveTab (no hover-guard) | %1").arg(hoverDiagState()));
 
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(
