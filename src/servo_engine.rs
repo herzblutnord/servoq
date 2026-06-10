@@ -65,6 +65,18 @@ mod engine {
         std::env::var_os("SERVOQ_PERF").is_some()
     }
 
+    // TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — opt-in, low-noise tracing for the
+    // text-input and second-tab-crash investigation. Remove once root-caused.
+    fn diag_enabled() -> bool {
+        std::env::var_os("SERVOQ_DIAG").is_some()
+    }
+
+    fn diag(msg: impl std::fmt::Display) {
+        if diag_enabled() {
+            eprintln!("SERVOQ_DIAG(rust) {msg}");
+        }
+    }
+
     static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
     static GL_INFO_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -1250,6 +1262,10 @@ mod engine {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return false;
         }
+        diag(format!(
+            "create_webview_wayland_window id={id} {w}x{h} scale={scale} wl_surface=0x{wl_surface:x} active={}",
+            tab_is_active(id)
+        ));
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
         let size = PhysicalSize::new(w, h);
@@ -1540,8 +1556,10 @@ mod engine {
         };
         if !active {
             debug_log_detail("wayland_present_skipped_inactive_tab", id, &url);
+            diag(format!("present_wayland_webview SKIPPED inactive tab id={id} url={url}"));
             return;
         }
+        diag(format!("present_wayland_webview id={id} active={active}"));
 
         let started = Instant::now();
         debug_log_detail("wayland_present_enter", id, &url);
@@ -1734,13 +1752,25 @@ mod engine {
             false,
         );
         let event = InputEvent::Keyboard(kb_event);
-        if let Some(wv) = clone_webview(id) {
+        let wv = clone_webview(id);
+        diag(format!(
+            "forward_key id={id} down={down} key_char={key_char} qt_key={qt_key} mods={mods} webview_found={} active={}",
+            wv.is_some(),
+            tab_is_active(id)
+        ));
+        if let Some(wv) = wv {
             wv.notify_input_event(event);
         }
     }
 
     pub fn forward_focus(id: i32, focused: bool) {
-        if let Some(wv) = clone_webview(id) {
+        let wv = clone_webview(id);
+        diag(format!(
+            "forward_focus id={id} focused={focused} webview_found={} active={}",
+            wv.is_some(),
+            tab_is_active(id)
+        ));
+        if let Some(wv) = wv {
             if focused {
                 wv.focus();
             } else {
@@ -1756,6 +1786,7 @@ mod engine {
     }
 
     pub fn set_webview_active(id: i32, active: bool) {
+        diag(format!("set_webview_active id={id} active={active}"));
         ENGINE.with(|s| {
             if let Some(entry) = s.borrow_mut().as_mut().and_then(|e| e.tabs.get_mut(&id)) {
                 entry.active = active;

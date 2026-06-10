@@ -39,6 +39,9 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEvent>
+#include <QGuiApplication>
+#include <QKeyEvent>
+#include <QWindow>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -65,6 +68,11 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+
+// TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — defined in WebContentView.cpp.
+bool servoq_diag_enabled();
+QString servoq_diag_describe(QObject const* o);
+void servoq_diag_log(QString const& msg);
 
 namespace ServoQ {
 
@@ -232,6 +240,27 @@ bool BrowserWindow::eventFilter(QObject* obj, QEvent* event)
         servoq::mark_servo_wake_event_consumed();
         servoq::tick_servo();
         return true;
+    }
+    // TEMPORARY DIAGNOSTICS: app-wide tracer for the text-input investigation.
+    // qApp event filters see events for every object, so this shows exactly which
+    // QObject a key event is delivered to and what holds focus at click time.
+    if (servoq_diag_enabled()) {
+        auto t = event->type();
+        if (t == QEvent::KeyPress || t == QEvent::KeyRelease) {
+            auto* ke = static_cast<QKeyEvent*>(event);
+            servoq_diag_log(QStringLiteral("qApp::filter %1 -> receiver=%2 focusWidget=%3 focusWindow=%4 key=0x%5 text='%6'")
+                .arg(t == QEvent::KeyPress ? QStringLiteral("KeyPress") : QStringLiteral("KeyRelease"))
+                .arg(servoq_diag_describe(obj))
+                .arg(servoq_diag_describe(QApplication::focusWidget()))
+                .arg(servoq_diag_describe(QGuiApplication::focusWindow()))
+                .arg(ke->key(), 0, 16)
+                .arg(ke->text()));
+        } else if (t == QEvent::MouseButtonPress) {
+            servoq_diag_log(QStringLiteral("qApp::filter MousePress -> receiver=%1 focusWidget=%2 focusWindow=%3")
+                .arg(servoq_diag_describe(obj))
+                .arg(servoq_diag_describe(QApplication::focusWidget()))
+                .arg(servoq_diag_describe(QGuiApplication::focusWindow())));
+        }
     }
     if (event->type() == QEvent::MouseButtonPress)
         clearLocationEditFocusForMousePress(obj);
@@ -656,9 +685,14 @@ void BrowserWindow::createInitialTab()
 
 void BrowserWindow::createNewTab(QString const& url, bool background)
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral(">>> createNewTab BEGIN url='%1' background=%2 existing_tab_count=%3")
+            .arg(url).arg(background ? 1 : 0).arg(m_tabs->count()));
     auto tab_id = servoq::create_tab();
     auto* tab = new Tab(this, tab_id);
     auto index = m_tabs->addTab(tab, tab->title());
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("createNewTab added tab_id=%1 index=%2; setCurrentIndex next").arg(tab_id).arg(index));
     if (!background)
         m_tabs->setCurrentIndex(index);
     debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(background ? 0 : 1));
@@ -670,6 +704,8 @@ void BrowserWindow::createNewTab(QString const& url, bool background)
         tab->navigate(url);
     }
     updateCurrentTabState();
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("<<< createNewTab END tab_id=%1").arg(tab_id));
 }
 
 void BrowserWindow::openTabForExistingId(int tab_id)

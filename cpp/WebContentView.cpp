@@ -94,6 +94,34 @@ static bool perf_enabled()
     return qEnvironmentVariableIsSet("SERVOQ_PERF");
 }
 
+// ─── TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) ────────────────────────────────────
+// Low-noise, opt-in tracing for the text-input and second-tab-crash
+// investigation. Gated behind SERVOQ_DIAG so it never fires in normal runs.
+// Remove once both bugs are root-caused.
+bool servoq_diag_enabled()
+{
+    static int cached = -1;
+    if (cached < 0)
+        cached = qEnvironmentVariableIsSet("SERVOQ_DIAG") ? 1 : 0;
+    return cached == 1;
+}
+
+QString servoq_diag_describe(QObject const* o)
+{
+    if (!o)
+        return QStringLiteral("<null>");
+    auto name = o->objectName();
+    return QStringLiteral("%1{%2}")
+        .arg(QString::fromUtf8(o->metaObject()->className()))
+        .arg(name.isEmpty() ? QStringLiteral("-") : name);
+}
+
+void servoq_diag_log(QString const& msg)
+{
+    if (servoq_diag_enabled())
+        qInfo().noquote().nospace() << "SERVOQ_DIAG " << msg;
+}
+
 enum class RendererMode { Auto, Software, WaylandWindow };
 
 static RendererMode parse_renderer_mode()
@@ -434,6 +462,11 @@ protected:
             if (m_owner->waylandRendererActive() && m_owner->takeWaylandPresentPending()) {
                 qt_perf_stats().qwindow_presents++;
                 auto owner_generation = g_wayland_owner_generation();
+                if (servoq_diag_enabled())
+                    servoq_diag_log(QStringLiteral("present ENTER tab_id=%1 owner_tab=%2 gen=%3 (present is only reached for current owner)")
+                        .arg(m_owner->tabId())
+                        .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                        .arg(owner_generation));
                 m_owner->m_wayland_present_in_progress = true;
                 debug_log("wayland_present_enter", m_owner->tabId(),
                     QStringLiteral("owner_generation=%1").arg(owner_generation));
@@ -486,6 +519,11 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override
     {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("SWCW::mousePressEvent owner_tab=%1 focusWidget=%2 focusWindow=%3")
+                .arg(m_owner ? m_owner->tabId() : 0)
+                .arg(servoq_diag_describe(QApplication::focusWidget()))
+                .arg(servoq_diag_describe(QGuiApplication::focusWindow())));
         if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire)) {
             m_owner->takeFocusFromContentClick();
             m_owner->forwardWindowMouseButton(0, qtMouseButtonToServo(event->button()), event);
@@ -537,6 +575,11 @@ protected:
 
     void keyPressEvent(QKeyEvent* event) override
     {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("SWCW::keyPressEvent owner_tab=%1 key=0x%2 text='%3'")
+                .arg(m_owner ? m_owner->tabId() : 0)
+                .arg(event->key(), 0, 16)
+                .arg(event->text()));
         if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
             return;
         auto text = event->text();
@@ -548,6 +591,10 @@ protected:
 
     void keyReleaseEvent(QKeyEvent* event) override
     {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("SWCW::keyReleaseEvent owner_tab=%1 key=0x%2")
+                .arg(m_owner ? m_owner->tabId() : 0)
+                .arg(event->key(), 0, 16));
         if (!m_owner || g_servo_shutting_down().load(std::memory_order_acquire))
             return;
         auto text = event->text();
@@ -559,12 +606,16 @@ protected:
 
     void focusInEvent(QFocusEvent*) override
     {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("SWCW::focusInEvent owner_tab=%1").arg(m_owner ? m_owner->tabId() : 0));
         if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
             servoq::forward_focus(m_owner->tabId(), true);
     }
 
     void focusOutEvent(QFocusEvent*) override
     {
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("SWCW::focusOutEvent owner_tab=%1").arg(m_owner ? m_owner->tabId() : 0));
         if (m_owner && !g_servo_shutting_down().load(std::memory_order_acquire))
             servoq::forward_focus(m_owner->tabId(), false);
     }
@@ -619,6 +670,13 @@ WebContentView::WebContentView(QWidget* parent)
 
 WebContentView::~WebContentView()
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("~WebContentView tab_id=%1 is_owner=%2 wayland_active=%3 mouse_buttons=%4 present_in_progress=%5")
+            .arg(m_tab_id)
+            .arg(g_wayland_owner() == this ? 1 : 0)
+            .arg(m_wayland_renderer_active ? 1 : 0)
+            .arg(static_cast<int>(QApplication::mouseButtons()))
+            .arg(m_wayland_present_in_progress ? 1 : 0));
     m_engine_tick_timer->stop();
     if (g_wayland_owner() == this) {
         g_wayland_owner() = nullptr;
@@ -775,8 +833,18 @@ bool WebContentView::attachSharedWaylandWindow()
                 << "SERVOQ_WARN attachSharedWaylandWindow from non-active tab " << m_tab_id
                 << " current_owner=" << (g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
                 << " owner_generation=" << g_wayland_owner_generation();
+            if (servoq_diag_enabled())
+                servoq_diag_log(QStringLiteral("attachSharedWaylandWindow REJECTED non-active tab_id=%1 owner_tab=%2 gen=%3")
+                    .arg(m_tab_id)
+                    .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                    .arg(g_wayland_owner_generation()));
             return false;
         }
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("attachSharedWaylandWindow CLAIM tab_id=%1 prev_owner=%2 gen=%3")
+                .arg(m_tab_id)
+                .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                .arg(g_wayland_owner_generation()));
 
         auto* previous_owner = g_wayland_owner();
         if (previous_owner && previous_owner != this) {
@@ -1041,6 +1109,13 @@ void WebContentView::set_zoom_level(double /*zoom_level*/) {}
 // Wayland wl_surface owned by the currently-visible tab.
 bool WebContentView::startEngineIfNeeded()
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("startEngineIfNeeded tab_id=%1 webview_created=%2 empty=%3 isActiveTab=%4 owner_tab=%5")
+            .arg(m_tab_id)
+            .arg(m_webview_created ? 1 : 0)
+            .arg(m_empty_new_tab ? 1 : 0)
+            .arg(isCurrentlyActiveTab() ? 1 : 0)
+            .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
     if (m_tab_id == 0 || m_webview_created)
         return false;
     if (m_empty_new_tab)
@@ -1055,6 +1130,8 @@ bool WebContentView::startEngineIfNeeded()
         && waylandRendererRequested()
         && !isCurrentlyActiveTab()) {
         debug_log("engine_creation_deferred_background_wayland", m_tab_id, QStringLiteral(""));
+        if (servoq_diag_enabled())
+            servoq_diag_log(QStringLiteral("startEngineIfNeeded DEFER background wayland tab_id=%1").arg(m_tab_id));
         return true;
     }
 
@@ -1227,15 +1304,33 @@ void WebContentView::forwardWindowMouseButton(int action, int button, QMouseEven
 
 void WebContentView::takeFocusFromContentClick()
 {
+    bool diag = servoq_diag_enabled();
+    if (diag)
+        servoq_diag_log(QStringLiteral("takeFocusFromContentClick ENTER tab_id=%1 is_owner=%2 focusBefore=%3")
+            .arg(m_tab_id)
+            .arg(g_wayland_owner() == this ? 1 : 0)
+            .arg(servoq_diag_describe(QApplication::focusWidget())));
     if (auto* focus_widget = QApplication::focusWidget()) {
         if (focus_widget != this && focus_widget != m_wayland_container)
             focus_widget->clearFocus();
     }
+    // Keep Qt keyboard focus on the WebContentView widget. Do NOT move it to
+    // m_wayland_container: the QWindowContainer wrapping the native Wayland
+    // subsurface is a keyboard dead-end here — on Wayland the embedded QWindow
+    // cannot be activated, so the container neither handles key events nor
+    // forwards focus to it. Focusing it caused every page keystroke to land on
+    // the container, go unhandled, bubble up to QMainWindow, and be dropped
+    // (proven via SERVOQ_DIAG: forward_key fired 0 times for page input).
+    // With focus on the widget, keys flow through a single path:
+    // WebContentView::event() -> keyPressEvent() -> servoq::forward_key().
     setFocus(Qt::MouseFocusReason);
-    if (m_wayland_container && g_wayland_owner() == this)
-        m_wayland_container->setFocus(Qt::MouseFocusReason);
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::forward_focus(m_tab_id, true);
+    if (diag)
+        servoq_diag_log(QStringLiteral("takeFocusFromContentClick EXIT  tab_id=%1 focusAfter=%2 (container=%3) forward_focus(true) sent")
+            .arg(m_tab_id)
+            .arg(servoq_diag_describe(QApplication::focusWidget()))
+            .arg(servoq_diag_describe(m_wayland_container)));
 }
 
 bool WebContentView::handleCtrlWheelZoom(QWheelEvent* event)
@@ -1358,6 +1453,13 @@ void WebContentView::wheelEvent(QWheelEvent* event)
 // Key events — mirrors Ladybird keyPressEvent / keyReleaseEvent (vendor 458-477).
 void WebContentView::keyPressEvent(QKeyEvent* event)
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("WCV::keyPressEvent tab_id=%1 key=0x%2 text='%3' is_owner=%4 focusWidget=%5")
+            .arg(m_tab_id)
+            .arg(event->key(), 0, 16)
+            .arg(event->text())
+            .arg(g_wayland_owner() == this ? 1 : 0)
+            .arg(servoq_diag_describe(QApplication::focusWidget())));
     if (g_servo_shutting_down().load(std::memory_order_acquire))
         return;
     auto text = event->text();
@@ -1369,6 +1471,9 @@ void WebContentView::keyPressEvent(QKeyEvent* event)
 
 void WebContentView::keyReleaseEvent(QKeyEvent* event)
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("WCV::keyReleaseEvent tab_id=%1 key=0x%2")
+            .arg(m_tab_id).arg(event->key(), 0, 16));
     if (g_servo_shutting_down().load(std::memory_order_acquire))
         return;
     auto text = event->text();
@@ -1420,6 +1525,9 @@ void WebContentView::hideEvent(QHideEvent* event)
 void WebContentView::onBecomeInactiveTab()
 {
     bool was_owner = g_wayland_owner() == this;
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("onBecomeInactiveTab tab_id=%1 was_owner=%2 gen=%3 wayland_active=%4")
+            .arg(m_tab_id).arg(was_owner ? 1 : 0).arg(g_wayland_owner_generation()).arg(m_wayland_renderer_active ? 1 : 0));
     debug_log("become_inactive_tab", m_tab_id,
         QStringLiteral("was_owner=%1 wayland_active=%2")
             .arg(was_owner ? 1 : 0)
@@ -1468,6 +1576,10 @@ void WebContentView::onBecomeActiveTab()
         QStringLiteral("wayland_active=%1 webview_created=%2")
             .arg(m_wayland_renderer_active ? 1 : 0)
             .arg(m_webview_created ? 1 : 0));
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("onBecomeActiveTab tab_id=%1 wayland_active=%2 webview_created=%3 owner_tab=%4 gen=%5")
+            .arg(m_tab_id).arg(m_wayland_renderer_active ? 1 : 0).arg(m_webview_created ? 1 : 0)
+            .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0).arg(g_wayland_owner_generation()));
 
     // Start engine for background-deferred Wayland tabs that haven't been
     // created yet. After this call, m_webview_created and m_wayland_renderer_active
@@ -1533,6 +1645,9 @@ void WebContentView::onBecomeActiveTab()
 // focusInEvent / focusOutEvent — mirrors Ladybird (vendor lines 646-652).
 void WebContentView::focusInEvent(QFocusEvent* event)
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("WCV::focusInEvent tab_id=%1 reason=%2 -> forward_focus(true)")
+            .arg(m_tab_id).arg(static_cast<int>(event->reason())));
     QWidget::focusInEvent(event);
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::forward_focus(m_tab_id, true);
@@ -1540,6 +1655,9 @@ void WebContentView::focusInEvent(QFocusEvent* event)
 
 void WebContentView::focusOutEvent(QFocusEvent* event)
 {
+    if (servoq_diag_enabled())
+        servoq_diag_log(QStringLiteral("WCV::focusOutEvent tab_id=%1 reason=%2 -> forward_focus(false)")
+            .arg(m_tab_id).arg(static_cast<int>(event->reason())));
     QWidget::focusOutEvent(event);
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::forward_focus(m_tab_id, false);
@@ -1550,6 +1668,10 @@ void WebContentView::focusOutEvent(QFocusEvent* event)
 // mirrors Ladybird WebContentView::event() (vendor 964-1009).
 bool WebContentView::event(QEvent* ev)
 {
+    if (servoq_diag_enabled() && (ev->type() == QEvent::KeyPress || ev->type() == QEvent::KeyRelease))
+        servoq_diag_log(QStringLiteral("WCV::event intercept type=%1 tab_id=%2")
+            .arg(ev->type() == QEvent::KeyPress ? QStringLiteral("KeyPress") : QStringLiteral("KeyRelease"))
+            .arg(m_tab_id));
     if (g_servo_shutting_down().load(std::memory_order_acquire))
         return QWidget::event(ev);
     if (ev->type() == QEvent::KeyPress) {
