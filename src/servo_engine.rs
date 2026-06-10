@@ -949,7 +949,11 @@ mod engine {
         fn notify_cursor_changed(&self, _webview: WebView, cursor: Cursor) {
             if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
             if !tab_exists(self.tab_id) { return; }
-            debug_log_detail("notify_cursor_changed", self.tab_id, format!("{cursor:?}"));
+            // Cursor changes fire frequently while moving over a page; keep the
+            // Debug-format of the cursor off the hot path unless logging is on.
+            if debug_enabled() {
+                debug_log_detail("notify_cursor_changed", self.tab_id, format!("{cursor:?}"));
+            }
             crate::bridge::ffi::notify_cursor_changed(self.tab_id, cursor_to_servoq_code(&cursor));
         }
 
@@ -1589,7 +1593,9 @@ mod engine {
             diag(format!("present_wayland_webview SKIPPED inactive tab id={id} url={url}"));
             return;
         }
-        diag(format!("present_wayland_webview id={id} active={active}"));
+        if diag_enabled() {
+            diag(format!("present_wayland_webview id={id} active={active}"));
+        }
 
         let started = Instant::now();
         debug_log_detail("wayland_present_enter", id, &url);

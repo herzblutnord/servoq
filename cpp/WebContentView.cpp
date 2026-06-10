@@ -86,14 +86,21 @@ static std::atomic_bool& g_servo_shutting_down()
     return s_shutting_down;
 }
 
+// Cached: qEnvironmentVariableIsSet takes a process-global env lock. perf_enabled()
+// is reached from maybe_log_qt_perf() on the wake path (~25k/sec on Servo's
+// threads) and debug_enabled() from per-frame/per-present logging, so reading the
+// env every call contended that lock with the main thread. C++11 guarantees the
+// function-local static is initialised once, thread-safely; afterwards it's a load.
 static bool debug_enabled()
 {
-    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    return v;
 }
 
 static bool perf_enabled()
 {
-    return qEnvironmentVariableIsSet("SERVOQ_PERF");
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_PERF");
+    return v;
 }
 
 // ─── TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) ────────────────────────────────────

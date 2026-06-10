@@ -67,7 +67,8 @@ struct BookmarkDragPayload {
 
 static bool debug_enabled()
 {
-    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    return v;
 }
 
 static void debug_bookmark_drag(QString const& detail)

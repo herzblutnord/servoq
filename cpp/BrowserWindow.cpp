@@ -81,7 +81,8 @@ namespace {
 
 bool debug_enabled()
 {
-    return qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    return v;
 }
 
 void debug_log(char const* event, int tab_id, QString const& detail)
