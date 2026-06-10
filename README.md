@@ -29,20 +29,18 @@ make sense.
 
 * Downloads UI
 * Search suggestions from search engines
-* Nested bookmark folders
 * Automatic filter-list updates
 * Per-site zoom settings
 * DevTools
+* and much more...
 
 ### Features currently blocked by Servo
 
 * Find in page, including match count
-* Stop loading the current page
 * Printing pages
 * Tab audio indicator
 * Accessing selected page text from the browser UI
 * Cosmetic content blocking
-
 
 ## A note on how this was built
 
@@ -57,7 +55,7 @@ not contribute back to either upstream.
 
 ## Building
 
-**Dependencies** (Arch Linux package names):
+**Dependencies** :
 
 ```
 rust cargo base-devel gcc qt6-base qt6-svg qt6-networkauth qt6-wayland pkg-config qt6-tools clang
