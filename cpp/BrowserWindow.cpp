@@ -64,6 +64,7 @@
 #include <QCloseEvent>
 #include <QDebug>
 #include <QPointer>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -87,6 +88,62 @@ void debug_log(char const* event, int tab_id, QString const& detail)
 {
     if (debug_enabled())
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+// Rate-limited wake-driven Servo ticking.
+//
+// During a page load Servo's background threads can wake the Qt loop ~25k times a
+// second. Because the wake-pending flag was cleared *before* each tick, every wake
+// posted a fresh event and span the event loop again — and since
+// servo.spin_event_loop() drains ALL pending work in a single call, the 2nd..Nth
+// spins of a burst are near-no-ops that still burned ~50% of a core (measured via
+// SERVOQ_PERF: ticks≈25k/s, tick_ms≈500/s) and starved Qt's own paint/input.
+//
+// Here we tick at most once per kServoTickIntervalMs. If a wake arrives sooner we
+// leave the wake-pending flag SET — so further background wakes coalesce instead of
+// posting new events — and schedule exactly one catch-up tick at the interval
+// boundary. Because spin drains everything, this is correctness-preserving: no wake
+// is ever dropped, it is at most delayed by kServoTickIntervalMs (well under one
+// frame). All state is touched only on the Qt main thread (eventFilter + the
+// singleShot callback). servoq::tick_servo() is itself a no-op once shutdown has
+// started, so the catch-up timer needs no extra guard.
+constexpr qint64 kServoTickIntervalMs = 4;
+
+qint64 servo_tick_clock_ms()
+{
+    static QElapsedTimer timer = [] {
+        QElapsedTimer t;
+        t.start();
+        return t;
+    }();
+    return timer.elapsed();
+}
+
+qint64 g_last_servo_tick_ms = -1000;
+bool g_servo_catchup_scheduled = false;
+
+void rate_limited_tick_servo()
+{
+    qint64 const now = servo_tick_clock_ms();
+    qint64 const since = now - g_last_servo_tick_ms;
+    if (since >= kServoTickIntervalMs) {
+        g_last_servo_tick_ms = now;
+        servoq::mark_servo_wake_event_consumed();
+        servoq::tick_servo();
+        return;
+    }
+    // Too soon — do NOT consume the wake (leave it pending so background wakes
+    // coalesce and stop posting), and ensure a single catch-up tick fires at the
+    // interval boundary.
+    if (!g_servo_catchup_scheduled) {
+        g_servo_catchup_scheduled = true;
+        QTimer::singleShot(static_cast<int>(kServoTickIntervalMs - since), qApp, [] {
+            g_servo_catchup_scheduled = false;
+            g_last_servo_tick_ms = servo_tick_clock_ms();
+            servoq::mark_servo_wake_event_consumed();
+            servoq::tick_servo();
+        });
+    }
 }
 
 bool is_child_or_self(QObject const* candidate, QObject const* ancestor)
@@ -237,8 +294,7 @@ bool BrowserWindow::eventFilter(QObject* obj, QEvent* event)
 {
     static constexpr QEvent::Type ServoWakeType = QEvent::Type(QEvent::User + 1);
     if (obj == qApp && event->type() == ServoWakeType) {
-        servoq::mark_servo_wake_event_consumed();
-        servoq::tick_servo();
+        rate_limited_tick_servo();
         return true;
     }
     // TEMPORARY DIAGNOSTICS: app-wide tracer for the text-input investigation.

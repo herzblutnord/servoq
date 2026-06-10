@@ -87,6 +87,27 @@ mod engine {
     extern "C" {
         fn eglGetCurrentDisplay() -> EGLDisplay;
         fn eglQueryString(display: EGLDisplay, name: i32) -> *const c_char;
+        // EGLBoolean eglSwapInterval(EGLDisplay, EGLint)
+        fn eglSwapInterval(display: EGLDisplay, interval: i32) -> u32;
+    }
+
+    // Disable vsync-blocking on the buffer swap for the currently-current EGL
+    // context. surfman's present_bound_surface() calls eglSwapBuffers(), which
+    // with the default swap interval (1) BLOCKS the Qt main thread until the
+    // Wayland compositor returns a wl_surface.frame callback. Right after the
+    // shared subsurface is re-attached on a tab switch that callback is withheld
+    // for seconds, freezing the entire UI (measured up to ~13 s/swap via
+    // SERVOQ_PERF wl_swap_ms). Servo's RefreshDriver and our own present
+    // coalescing already pace frames, so interval=0 (swap returns immediately) is
+    // both safe and what we want. Must be called while the context is current
+    // (i.e. after RenderingContext::make_current()).
+    fn disable_swap_vsync_for_current_context() {
+        unsafe {
+            let display = eglGetCurrentDisplay();
+            if !display.is_null() {
+                eglSwapInterval(display, 0);
+            }
+        }
     }
 
     const EGL_VENDOR: i32 = 0x3053;
@@ -1569,6 +1590,11 @@ mod engine {
             eprintln!("[servoq] Wayland window renderer present failed: make_current: {error:?}");
             return;
         }
+        // The shared surface can be recreated on tab re-attach (set_window), which
+        // resets the swap interval, so re-assert interval=0 each present while the
+        // context is current. Cheap EGL call; prevents eglSwapBuffers from blocking
+        // the main thread on a withheld frame callback.
+        disable_swap_vsync_for_current_context();
         let make_current_time = make_current_started.elapsed();
         let paint_started = Instant::now();
         webview.paint();
