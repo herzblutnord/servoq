@@ -36,10 +36,11 @@ make sense.
 
 ### Features currently blocked by Servo
 
+* Selecting Text on Websites
+* Scroll Bars
 * Find in page, including match count
 * Printing pages
 * Tab audio indicator
-* Accessing selected page text from the browser UI
 * Cosmetic content blocking
 
 ## A note on how this was built
