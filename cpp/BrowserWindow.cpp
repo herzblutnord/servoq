@@ -18,6 +18,7 @@
 #include "BrowserWindow.h"
 #include "BookmarksBar.h"
 #include "HistoryStore.h"
+#include "NewTabTrace.h"
 #include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
@@ -63,6 +64,7 @@
 #include <QWidgetAction>
 #include <QCloseEvent>
 #include <QDebug>
+#include <memory>
 #include <QPointer>
 #include <QElapsedTimer>
 #include <QTimer>
@@ -180,6 +182,26 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     // QtEventLoopWaker wake event (QEvent::User+1) posted from Servo's threads.
     qApp->installEventFilter(this);
 
+    // Main-thread jank detector (SERVOQ_PERF or SERVOQ_NEWTAB_TRACE): a 50 ms
+    // heartbeat whose gap reveals event-loop stalls that the per-second PERF
+    // flush cannot show (a blocked thread prints nothing until it unblocks).
+    // newtab_last_phase() names the section that was running when it stalled.
+    if (qEnvironmentVariableIsSet("SERVOQ_PERF") || newtab_trace_enabled()) {
+        auto* heartbeat = new QTimer(this);
+        heartbeat->setInterval(50);
+        heartbeat->setTimerType(Qt::PreciseTimer);
+        auto last_beat_ms = std::make_shared<qint64>(newtab_trace_clock_ms());
+        connect(heartbeat, &QTimer::timeout, this, [last_beat_ms] {
+            qint64 const now = newtab_trace_clock_ms();
+            qint64 const gap = now - *last_beat_ms;
+            *last_beat_ms = now;
+            if (gap > 200)
+                qWarning().nospace() << "SERVOQ_JANK main_thread_gap_ms=" << gap
+                                     << " last_phase=" << newtab_last_phase();
+        });
+        heartbeat->start();
+    }
+
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
     setMinimumSize(900, 640);
@@ -192,21 +214,33 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     updateMenuBarVisibility();
 
     m_tabs->onCurrentChanged = [this](int index) {
+        NewTabTraceScope trace_scope("currentChanged");
         auto* next_tab = currentTab();
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            auto* tab = m_tabs->tab(i);
-            if (tab && tab != next_tab)
-                tab->setActive(false);
+        {
+            NewTabTraceScope scope("deactivate_other_tabs");
+            for (int i = 0; i < m_tabs->count(); ++i) {
+                auto* tab = m_tabs->tab(i);
+                if (tab && tab != next_tab)
+                    tab->setActive(false);
+            }
         }
         m_active_tab = next_tab;
         if (auto* tab = currentTab()) {
             debug_log("tab_switch", tab->controllerId(), QStringLiteral("active=1"));
-            tab->setActive(true);
-            tab->applyControllerState();
+            {
+                NewTabTraceScope scope("setActive_true", tab->controllerId());
+                tab->setActive(true);
+            }
+            {
+                NewTabTraceScope scope("applyControllerState", tab->controllerId());
+                tab->applyControllerState();
+            }
             // Mirror Ladybird: set Qt focus on the new tab's view so
             // focusInEvent fires → forward_focus(true) → Servo accepts key events.
-            if (auto* view = tab->view())
+            if (auto* view = tab->view()) {
+                NewTabTraceScope scope("view_setFocus", tab->controllerId());
                 view->setFocus(Qt::OtherFocusReason);
+            }
         }
         updateCurrentTabState();
         // Defer activateTab so any mouse event that triggered the tab switch
@@ -231,6 +265,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             int idx = tabs->indexOf(target_tab);
             if (idx < 0)
                 return;
+            NewTabTraceScope scope("deferred_activateTab", target_tab->controllerId());
             tabs->activateTab(idx);
         });
     };
@@ -249,7 +284,10 @@ BrowserWindow::BrowserWindow(QWidget* parent)
                 closeTab(idx);
         });
     };
-    m_tabs->onNewTabRequested = [this] { createNewTab(); };
+    m_tabs->onNewTabRequested = [this] {
+        newtab_trace_point("new_tab_button_clicked");
+        createNewTab();
+    };
     m_tabs->setNewTabAction(m_new_tab_action);
     setCentralWidget(m_tabs);
 
@@ -742,25 +780,41 @@ void BrowserWindow::createInitialTab()
 
 void BrowserWindow::createNewTab(QString const& url, bool background)
 {
+    NewTabTraceScope trace_scope("createNewTab");
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral(">>> createNewTab BEGIN url='%1' background=%2 existing_tab_count=%3")
             .arg(url).arg(background ? 1 : 0).arg(m_tabs->count()));
     auto tab_id = servoq::create_tab();
-    auto* tab = new Tab(this, tab_id);
-    auto index = m_tabs->addTab(tab, tab->title());
+    Tab* tab = nullptr;
+    {
+        NewTabTraceScope scope("Tab_construction", tab_id);
+        tab = new Tab(this, tab_id);
+    }
+    int index = -1;
+    {
+        NewTabTraceScope scope("addTab", tab_id);
+        index = m_tabs->addTab(tab, tab->title());
+    }
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("createNewTab added tab_id=%1 index=%2; setCurrentIndex next").arg(tab_id).arg(index));
-    if (!background)
+    if (!background) {
+        NewTabTraceScope scope("setCurrentIndex", tab_id);
         m_tabs->setCurrentIndex(index);
+    }
     debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(background ? 0 : 1));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     if (url.trimmed().isEmpty()) {
+        NewTabTraceScope scope("showEmptyNewTab", tab_id);
         tab->showEmptyNewTab();
         tab->focusLocationEditor();
     } else {
+        NewTabTraceScope scope("navigate", tab_id);
         tab->navigate(url);
     }
-    updateCurrentTabState();
+    {
+        NewTabTraceScope scope("updateCurrentTabState", tab_id);
+        updateCurrentTabState();
+    }
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("<<< createNewTab END tab_id=%1").arg(tab_id));
 }

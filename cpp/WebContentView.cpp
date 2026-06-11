@@ -16,6 +16,7 @@
 #include "BrowserWindow.h"
 #include "BookmarkStore.h"
 #include "ChromeStyle.h"
+#include "NewTabTrace.h"
 #include "WebContentView.h"
 #include "Settings.h"
 #include "Tab.h"
@@ -164,12 +165,51 @@ struct QtPerfStats {
     uint64_t software_frames { 0 };
     uint64_t software_paints { 0 };
     uint64_t draw_image_calls { 0 };
+    // Present-request sources (counted at requestWaylandRepaint entry).
+    uint64_t present_req_frame_ready { 0 };
+    uint64_t present_req_expose { 0 };
+    uint64_t present_req_resize { 0 };
+    uint64_t present_req_activation { 0 };
+    uint64_t present_req_retry { 0 };
+    // Why requests did not start a present.
+    uint64_t present_skipped_in_progress { 0 };
+    uint64_t present_skipped_pending { 0 };
+    uint64_t present_skipped_rate_capped { 0 };
+    // Main-thread time spent inside present (make_current+paint+swap) and how
+    // many presents exceeded one refresh interval — the freeze signature.
+    uint64_t present_busy_ms { 0 };
+    uint64_t slow_presents { 0 };
 };
 
 static QtPerfStats& qt_perf_stats()
 {
     static QtPerfStats stats;
     return stats;
+}
+
+// Monotonic ms clock for the present duty-cycle cap (main-thread only).
+static qint64 present_clock_ms()
+{
+    static QElapsedTimer timer = [] {
+        QElapsedTimer t;
+        t.start();
+        return t;
+    }();
+    return timer.elapsed();
+}
+
+// Cap = one frame at the display's refresh rate. Presenting faster than the
+// screen refreshes is wasted work that only steals the main thread from the Qt
+// chrome; capping at the refresh rate removes the waste without costing any
+// visible smoothness.
+static qint64 min_present_interval_ms()
+{
+    qreal hz = 60.0;
+    if (auto* screen = QGuiApplication::primaryScreen()) {
+        if (screen->refreshRate() > 1.0)
+            hz = screen->refreshRate();
+    }
+    return qMax<qint64>(1, static_cast<qint64>(1000.0 / hz));
 }
 
 static ServoQ::ServoWaylandContentWindow*& g_wayland_window()
@@ -243,6 +283,16 @@ static void maybe_log_qt_perf()
         << " qwindow_presents=" << stats.qwindow_presents
         << " qwindow_present_requests=" << stats.qwindow_present_requests
         << " qwindow_present_requests_coalesced=" << stats.qwindow_present_requests_coalesced
+        << " present_req[frame_ready=" << stats.present_req_frame_ready
+        << " expose=" << stats.present_req_expose
+        << " resize=" << stats.present_req_resize
+        << " activation=" << stats.present_req_activation
+        << " retry=" << stats.present_req_retry << "]"
+        << " present_skipped[in_progress=" << stats.present_skipped_in_progress
+        << " pending=" << stats.present_skipped_pending
+        << " rate_capped=" << stats.present_skipped_rate_capped << "]"
+        << " present_busy_ms=" << stats.present_busy_ms
+        << " slow_presents=" << stats.slow_presents
         << " software_frames=" << stats.software_frames
         << " software_paints=" << stats.software_paints
         << " draw_image_calls=" << stats.draw_image_calls;
@@ -460,11 +510,12 @@ protected:
             if (!m_owner->isVisible() || (g_wayland_container() && !g_wayland_container()->isVisible())) {
                 m_owner->m_wayland_present_pending = false;
                 auto* container = g_wayland_container();
-                debug_log("wayland_present_skipped_hidden", m_owner->tabId(),
-                    QStringLiteral("view_visible=%1 container_visible=%2 owner=%3 pending_cleared=1")
-                        .arg(m_owner->isVisible() ? 1 : 0)
-                        .arg(container && container->isVisible() ? 1 : 0)
-                        .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
+                if (debug_enabled())
+                    debug_log("wayland_present_skipped_hidden", m_owner->tabId(),
+                        QStringLiteral("view_visible=%1 container_visible=%2 owner=%3 pending_cleared=1")
+                            .arg(m_owner->isVisible() ? 1 : 0)
+                            .arg(container && container->isVisible() ? 1 : 0)
+                            .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
                 maybe_log_qt_perf();
                 return true;
             }
@@ -477,15 +528,32 @@ protected:
                         .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
                         .arg(owner_generation));
                 m_owner->m_wayland_present_in_progress = true;
-                debug_log("wayland_present_enter", m_owner->tabId(),
-                    QStringLiteral("owner_generation=%1").arg(owner_generation));
-                servoq::present_wayland_webview(m_owner->tabId());
+                // Per-present path: don't build the detail QStrings unless on.
+                if (debug_enabled())
+                    debug_log("wayland_present_enter", m_owner->tabId(),
+                        QStringLiteral("owner_generation=%1").arg(owner_generation));
+                qint64 const present_started_ms = present_clock_ms();
+                {
+                    // Names the present in SERVOQ_JANK if a swap blocks >200ms —
+                    // per-second PERF counters can't show a stall in progress.
+                    NewTabTraceScope scope("wayland_present", m_owner->tabId());
+                    servoq::present_wayland_webview(m_owner->tabId());
+                }
+                qint64 const present_finished_ms = present_clock_ms();
                 m_owner->m_wayland_present_in_progress = false;
-                debug_log("wayland_present_leave", m_owner->tabId(),
-                    QStringLiteral("owner_generation=%1 current_owner=%2 current_generation=%3")
-                        .arg(owner_generation)
-                        .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
-                        .arg(g_wayland_owner_generation()));
+                // Feed the duty-cycle cap (admission is measured from completion).
+                m_owner->m_last_present_duration_ms = present_finished_ms - present_started_ms;
+                m_owner->m_last_present_request_ms = present_finished_ms;
+                qt_perf_stats().present_busy_ms +=
+                    static_cast<uint64_t>(present_finished_ms - present_started_ms);
+                if (present_finished_ms - present_started_ms > min_present_interval_ms())
+                    qt_perf_stats().slow_presents++;
+                if (debug_enabled())
+                    debug_log("wayland_present_leave", m_owner->tabId(),
+                        QStringLiteral("owner_generation=%1 current_owner=%2 current_generation=%3")
+                            .arg(owner_generation)
+                            .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0)
+                            .arg(g_wayland_owner_generation()));
                 if (g_wayland_owner() != m_owner || owner_generation != g_wayland_owner_generation()) {
                     m_owner->m_wayland_dirty_after_present = false;
                     maybe_log_qt_perf();
@@ -493,7 +561,7 @@ protected:
                 }
                 if (m_owner->m_wayland_dirty_after_present) {
                     m_owner->m_wayland_dirty_after_present = false;
-                    m_owner->requestWaylandRepaint();
+                    m_owner->requestWaylandRepaint(WebContentView::PresentRequestReason::Retry);
                 }
                 maybe_log_qt_perf();
             }
@@ -506,7 +574,7 @@ protected:
     {
         qt_perf_stats().qwindow_exposes++;
         if (isExposed() && m_owner && m_owner->waylandRendererActive() && !g_servo_shutting_down().load(std::memory_order_acquire))
-            m_owner->requestWaylandRepaint();
+            m_owner->requestWaylandRepaint(WebContentView::PresentRequestReason::Expose);
         maybe_log_qt_perf();
     }
 
@@ -860,7 +928,13 @@ bool WebContentView::attachSharedWaylandWindow()
             previous_owner->m_wayland_present_pending = false;
             previous_owner->m_wayland_dirty_after_present = false;
             previous_owner->m_wayland_present_in_progress = false;
+            previous_owner->m_last_present_duration_ms = 0;
+            previous_owner->m_last_present_request_ms = -1000;
         }
+        // Clean slate for the claiming view: the activation present must not be
+        // capped by congestion measured under the previous owner/attachment.
+        m_last_present_duration_ms = 0;
+        m_last_present_request_ms = -1000;
         g_wayland_owner() = this;
         ++g_wayland_owner_generation();
         m_wayland_window->setOwner(this);
@@ -1041,42 +1115,29 @@ void WebContentView::receiveRequestBlocked(QString const& url)
     emit request_blocked(url);
 }
 
-// Monotonic ms clock for the present-rate cap (main-thread only).
-static qint64 present_clock_ms()
+void WebContentView::requestWaylandRepaint(PresentRequestReason reason)
 {
-    static QElapsedTimer timer = [] {
-        QElapsedTimer t;
-        t.start();
-        return t;
-    }();
-    return timer.elapsed();
-}
-
-// Cap = one frame at the display's refresh rate. Presenting faster than the
-// screen refreshes is wasted work that only steals the main thread from the Qt
-// chrome; capping at the refresh rate removes the waste without costing any
-// visible smoothness.
-static qint64 min_present_interval_ms()
-{
-    qreal hz = 60.0;
-    if (auto* screen = QGuiApplication::primaryScreen()) {
-        if (screen->refreshRate() > 1.0)
-            hz = screen->refreshRate();
+    {
+        auto& stats = qt_perf_stats();
+        switch (reason) {
+        case PresentRequestReason::FrameReady: stats.present_req_frame_ready++; break;
+        case PresentRequestReason::Expose: stats.present_req_expose++; break;
+        case PresentRequestReason::Resize: stats.present_req_resize++; break;
+        case PresentRequestReason::Activation: stats.present_req_activation++; break;
+        case PresentRequestReason::Retry: stats.present_req_retry++; break;
+        case PresentRequestReason::Shutdown: break;
+        }
     }
-    return qMax<qint64>(1, static_cast<qint64>(1000.0 / hz));
-}
-
-void WebContentView::requestWaylandRepaint()
-{
     if (!m_webview_created) {
         debug_log("wayland_present_skipped_request_no_webview", m_tab_id);
         return;
     }
     if (!m_wayland_renderer_active || !m_wayland_window || g_servo_shutting_down().load(std::memory_order_acquire)) {
-        debug_log("wayland_present_skipped_request_inactive_renderer", m_tab_id,
-            QStringLiteral("wayland_active=%1 window=%2")
-                .arg(m_wayland_renderer_active ? 1 : 0)
-                .arg(m_wayland_window ? 1 : 0));
+        if (debug_enabled())
+            debug_log("wayland_present_skipped_request_inactive_renderer", m_tab_id,
+                QStringLiteral("wayland_active=%1 window=%2")
+                    .arg(m_wayland_renderer_active ? 1 : 0)
+                    .arg(m_wayland_window ? 1 : 0));
         return;
     }
     if (!isVisible()) {
@@ -1084,16 +1145,18 @@ void WebContentView::requestWaylandRepaint()
         return;
     }
     if (g_wayland_owner() != this) {
-        debug_log("wayland_present_skipped_request_inactive_owner", m_tab_id,
-            QStringLiteral("current_owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
+        if (debug_enabled())
+            debug_log("wayland_present_skipped_request_inactive_owner", m_tab_id,
+                QStringLiteral("current_owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
         return;
     }
     if (m_wayland_container && (m_wayland_container->width() <= 1 || m_wayland_container->height() <= 1)) {
-        debug_log("wayland_present_skipped_request_zero_geometry", m_tab_id,
-            QStringLiteral("geom=%1,%2 %3x%4 visible=%5")
-                .arg(m_wayland_container->x()).arg(m_wayland_container->y())
-                .arg(m_wayland_container->width()).arg(m_wayland_container->height())
-                .arg(m_wayland_container->isVisible() ? 1 : 0));
+        if (debug_enabled())
+            debug_log("wayland_present_skipped_request_zero_geometry", m_tab_id,
+                QStringLiteral("geom=%1,%2 %3x%4 visible=%5")
+                    .arg(m_wayland_container->x()).arg(m_wayland_container->y())
+                    .arg(m_wayland_container->width()).arg(m_wayland_container->height())
+                    .arg(m_wayland_container->isVisible() ? 1 : 0));
         // Do NOT clear m_wayland_present_pending: the container will get valid
         // geometry on the next layout pass and exposeEvent will retry.
         return;
@@ -1103,40 +1166,55 @@ void WebContentView::requestWaylandRepaint()
         m_wayland_dirty_after_present = true;
         debug_log("wayland_present_deferred_in_progress", m_tab_id);
         qt_perf_stats().qwindow_present_requests_coalesced++;
+        qt_perf_stats().present_skipped_in_progress++;
         maybe_log_qt_perf();
         return;
     }
     if (m_wayland_present_pending) {
         debug_log("wayland_present_coalesced_pending", m_tab_id);
         qt_perf_stats().qwindow_present_requests_coalesced++;
+        qt_perf_stats().present_skipped_pending++;
         maybe_log_qt_perf();
         return;
     }
-    // Rate-cap: don't start a present more often than the display refreshes.
-    // Defer to the interval boundary instead; the retry re-runs every guard
-    // above. A single retry is scheduled (coalesced) and the frame is never
-    // dropped — only delayed by at most one refresh interval.
-    {
-        qint64 const interval = min_present_interval_ms();
+    // Duty-cycle cap for ordinary repeated frame traffic (FrameReady/Retry)
+    // only. Stamped at present COMPLETION; a slow (compositor-blocked) present
+    // stretches the required idle gap to its own duration so blocking swaps
+    // can't saturate the main thread (the post-tab-switch freeze). Deferred
+    // requests are never dropped — one coalesced, owner-generation-bound retry
+    // re-runs every guard above. Activation/Expose/Resize bypass the cap:
+    // they are the first visible paint of a new owner/geometry and must not
+    // queue behind frame throttling. See docs/DEVIATIONS.md.
+    if (reason == PresentRequestReason::FrameReady || reason == PresentRequestReason::Retry) {
+        constexpr qint64 kMaxAdaptivePresentIntervalMs = 250;
+        qint64 const interval = qMax(min_present_interval_ms(),
+            qMin(m_last_present_duration_ms, kMaxAdaptivePresentIntervalMs));
         qint64 const now = present_clock_ms();
         qint64 const since = now - m_last_present_request_ms;
         if (since < interval) {
             if (!m_present_throttle_scheduled) {
                 m_present_throttle_scheduled = true;
-                QTimer::singleShot(static_cast<int>(interval - since), this, [this] {
+                int const scheduled_generation = g_wayland_owner_generation();
+                QTimer::singleShot(static_cast<int>(interval - since), this, [this, scheduled_generation] {
                     m_present_throttle_scheduled = false;
-                    requestWaylandRepaint();
+                    // Stale retry from before a tab switch: drop it. The new
+                    // owner's activation issues its own (uncapped) request.
+                    if (scheduled_generation != g_wayland_owner_generation())
+                        return;
+                    requestWaylandRepaint(PresentRequestReason::Retry);
                 });
             }
             qt_perf_stats().qwindow_present_requests_coalesced++;
+            qt_perf_stats().present_skipped_rate_capped++;
             maybe_log_qt_perf();
             return;
         }
         m_last_present_request_ms = now;
     }
     m_wayland_present_pending = true;
-    debug_log("wayland_present_requested", m_tab_id,
-        QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
+    if (debug_enabled())
+        debug_log("wayland_present_requested", m_tab_id,
+            QStringLiteral("owner_generation=%1").arg(g_wayland_owner_generation()));
     m_wayland_window->requestServoPresent();
     maybe_log_qt_perf();
 }
@@ -1259,7 +1337,7 @@ void WebContentView::forwardResizeToEngine()
     servoq::forward_resize(m_tab_id, pw, ph, static_cast<float>(dpr));
     servoq::tick_servo();
     if (m_wayland_renderer_active)
-        requestWaylandRepaint();
+        requestWaylandRepaint(PresentRequestReason::Resize);
     else
         update();
 }
@@ -1580,6 +1658,7 @@ void WebContentView::hideEvent(QHideEvent* event)
 
 void WebContentView::onBecomeInactiveTab()
 {
+    NewTabTraceScope trace_scope("WCV_onBecomeInactiveTab", m_tab_id);
     bool was_owner = g_wayland_owner() == this;
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("onBecomeInactiveTab tab_id=%1 was_owner=%2 gen=%3 wayland_active=%4")
@@ -1592,6 +1671,10 @@ void WebContentView::onBecomeInactiveTab()
     m_wayland_present_pending = false;
     m_wayland_dirty_after_present = false;
     m_wayland_present_in_progress = false;
+    // Forget this stint's present congestion, or the duty-cycle cap delays the
+    // tab's FIRST paint when it is re-activated.
+    m_last_present_duration_ms = 0;
+    m_last_present_request_ms = -1000;
 
     if (was_owner) {
         g_wayland_owner() = nullptr;
@@ -1637,29 +1720,56 @@ void WebContentView::onBecomeActiveTab()
             .arg(m_tab_id).arg(m_wayland_renderer_active ? 1 : 0).arg(m_webview_created ? 1 : 0)
             .arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0).arg(g_wayland_owner_generation()));
 
+    NewTabTraceScope trace_scope("WCV_onBecomeActiveTab", m_tab_id);
+
     // Start engine for background-deferred Wayland tabs that haven't been
     // created yet. After this call, m_webview_created and m_wayland_renderer_active
     // reflect the real state.
-    startEngineIfNeeded();
-    forwardResizeToEngine();
+    {
+        NewTabTraceScope scope("startEngineIfNeeded", m_tab_id);
+        startEngineIfNeeded();
+    }
+    {
+        NewTabTraceScope scope("forwardResizeToEngine", m_tab_id);
+        forwardResizeToEngine();
+    }
 
     if (m_wayland_renderer_active && m_wayland_container) {
         // Normal case: re-attach the parked container to this tab. The container
         // was moved off-screen by onBecomeInactiveTab but never unmapped, so
         // updateContainerGeometry + show() repositions it without any surface remap.
-        if (!attachSharedWaylandWindow()) {
-            debug_log("become_active_tab_return_attach_failed", m_tab_id,
-                QStringLiteral("owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
-            return;
+        {
+            NewTabTraceScope scope("attachSharedWaylandWindow", m_tab_id);
+            if (!attachSharedWaylandWindow()) {
+                debug_log("become_active_tab_return_attach_failed", m_tab_id,
+                    QStringLiteral("owner=%1").arg(g_wayland_owner() ? g_wayland_owner()->tabId() : 0));
+                return;
+            }
         }
-        updateContainerGeometry();
-        m_wayland_container->show(); // no-op if already visible; surface stays mapped
-        m_wayland_container->raise();
-        if (m_wayland_window) {
-            m_wayland_window->show();
-            m_wayland_window->create();
+        {
+            NewTabTraceScope scope("container_show_raise", m_tab_id);
+            updateContainerGeometry();
+            m_wayland_container->show(); // no-op if already visible; surface stays mapped
+            m_wayland_container->raise();
+            if (m_wayland_window) {
+                m_wayland_window->show();
+                m_wayland_window->create();
+            }
         }
-        requestWaylandRepaint();
+        // Subsurface position/stacking is PARENT surface state on Wayland: the
+        // compositor only applies it (and resumes latching/releasing Servo's
+        // buffers) once the toplevel commits. The toplevel repaint MUST be
+        // queued before the first present — a present racing ahead of the
+        // commit can block on a buffer release only that commit unlocks.
+        {
+            NewTabTraceScope scope("toplevel_update", m_tab_id);
+            if (auto* toplevel = m_wayland_container->window())
+                toplevel->update();
+        }
+        {
+            NewTabTraceScope scope("requestWaylandRepaint_activation", m_tab_id);
+            requestWaylandRepaint(PresentRequestReason::Activation);
+        }
         debug_log("become_active_tab_container_shown", m_tab_id,
             QStringLiteral("geom=%1,%2 %3x%4 gen=%5")
                 .arg(m_wayland_container->x()).arg(m_wayland_container->y())
@@ -2025,7 +2135,7 @@ void begin_servo_shutdown()
     g_servo_wake_pending().store(false, std::memory_order_release);
     for (auto* view : g_view_registry()) {
         if (view)
-            view->requestWaylandRepaint();
+            view->requestWaylandRepaint(ServoQ::WebContentView::PresentRequestReason::Shutdown);
     }
     servoq::shutdown_servo();
 }
@@ -2176,7 +2286,7 @@ void request_wayland_window_repaint(::std::int32_t tab_id)
         return;
     auto* view = find_view(tab_id);
     if (view)
-        view->requestWaylandRepaint();
+        view->requestWaylandRepaint(ServoQ::WebContentView::PresentRequestReason::FrameReady);
 }
 
 // Called from Rust's QtEventLoopWaker::wake() from Servo background threads.

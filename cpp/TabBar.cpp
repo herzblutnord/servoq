@@ -14,6 +14,7 @@
 #include "BrowserWindow.h"
 #include "ChromeStyle.h"
 #include "ChromeLayout.h"
+#include "NewTabTrace.h"
 #include "Icon.h"
 #include "Tab.h"
 #include "WebContentView.h"
@@ -1788,8 +1789,10 @@ void TabWidget::activateTab(int index)
         // Only notify the actual owner. m_wayland_renderer_active is preserved
         // across inactive state, so checking waylandRendererActivePublic() would
         // fire for every previously-loaded tab — wasteful and incorrect.
-        if (auto* v = t->view(); v && v->isCurrentWaylandOwner())
+        if (auto* v = t->view(); v && v->isCurrentWaylandOwner()) {
+            NewTabTraceScope scope("onBecomeInactiveTab_old_owner", t->controllerId());
             v->onBecomeInactiveTab();
+        }
     }
 
     // Do NOT call updateContainerGeometry() here. onBecomeInactiveTab() parks

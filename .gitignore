@@ -1,5 +1,6 @@
-docs/DEVIATIONS.md
 target/
+# Local perf/diagnostic capture files (SERVOQ_PERF/SERVOQ_DIAG runs)
+*.log
 build/
 .idea/
 *.kdev4
@@ -17,3 +18,4 @@ Thumbs.db
 /target-servo/
 /memory/
 /bottles/
+/docs/DEVIATIONS.md

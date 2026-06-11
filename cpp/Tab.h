@@ -62,8 +62,12 @@ public:
     void zoomOut();
     void resetZoom();
 
-    void on_url_change(QString const& url);
-    void on_title_change(QString const& title);
+    // record_visit=false syncs the chrome (location edit, tab title) without
+    // logging a history visit — used when re-reading existing controller state
+    // (tab switch, back/forward), where the real visit is already recorded by
+    // Servo's notify_url_changed/notify_title_changed callbacks.
+    void on_url_change(QString const& url, bool record_visit = true);
+    void on_title_change(QString const& title, bool record_visit = true);
     void on_load_start(QString const& url);
     void on_load_finish();
     void on_favicon_change(QIcon const& icon = {});

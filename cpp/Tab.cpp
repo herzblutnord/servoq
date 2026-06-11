@@ -13,6 +13,7 @@
  *   UI/Qt/BrowserWindow.cpp
  */
 #include "Tab.h"
+#include "NewTabTrace.h"
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
 #include "HistoryStore.h"
@@ -173,6 +174,7 @@ void Tab::setHamburgerButtonVisible(bool visible)
 
 void Tab::setActive(bool active)
 {
+    NewTabTraceScope scope(active ? "ffi_set_webview_active_true" : "ffi_set_webview_active_false", m_controller_id);
     servoq::set_webview_active(m_controller_id, active);
 }
 
@@ -335,8 +337,11 @@ void Tab::applyControllerState()
 
     auto url = QString::fromStdString(std::string(servoq::current_url(m_controller_id)));
     auto title = QString::fromStdString(std::string(servoq::title(m_controller_id)));
-    on_url_change(url);
-    on_title_change(title);
+    // No history visit here: this re-reads state the controller already has
+    // (runs on every tab switch and back/forward click). Recording wrote the
+    // history store to disk twice per tab switch and filled it with duplicates.
+    on_url_change(url, /* record_visit */ false);
+    on_title_change(title, /* record_visit */ false);
     set_loading(servoq::loading(m_controller_id));
     auto status = QString::fromStdString(std::string(servoq::status_text(m_controller_id)));
     setStatusText(status);
@@ -347,20 +352,22 @@ void Tab::applyControllerState()
     refreshBookmarkIcon();
 }
 
-void Tab::on_url_change(QString const& url)
+void Tab::on_url_change(QString const& url, bool record_visit)
 {
     m_url = url.isEmpty() ? QStringLiteral("about:blank") : url;
     m_location_edit->setUrl(m_url);
     m_view->setUrl(m_url); // keeps placeholder label in sync
-    HistoryStore::the()->recordVisit(m_url, m_title);
+    if (record_visit)
+        HistoryStore::the()->recordVisit(m_url, m_title);
 }
 
-void Tab::on_title_change(QString const& title)
+void Tab::on_title_change(QString const& title, bool record_visit)
 {
     m_title = title.isEmpty() ? QStringLiteral("New Tab") : title;
     update_tab_title();
     // Update title of most-recent history entry for current URL
-    HistoryStore::the()->recordVisit(m_url, m_title);
+    if (record_visit)
+        HistoryStore::the()->recordVisit(m_url, m_title);
 }
 
 void Tab::on_load_start(QString const& url)

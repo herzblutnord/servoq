@@ -688,7 +688,9 @@ mod engine {
             let rect: Box2D<i32, DevicePixel> =
                 Box2D::new(Point2D::origin(), Point2D::new(w as i32, h as i32));
             if let Some(image) = rendering_context.read_to_image(rect) {
-                debug_log_detail("deliver_frame", self.tab_id, format!("{w}x{h}"));
+                if debug_enabled() {
+                    debug_log_detail("deliver_frame", self.tab_id, format!("{w}x{h}"));
+                }
                 let bytes = (w as u64) * (h as u64) * 4;
                 crate::bridge::ffi::deliver_frame(
                     self.tab_id,
@@ -818,7 +820,9 @@ mod engine {
                 log_ignored_closed_callback("notify_load_status_changed", self.tab_id);
                 return;
             }
-            debug_log_detail("load_status", self.tab_id, format!("{status:?}"));
+            if debug_enabled() {
+                debug_log_detail("load_status", self.tab_id, format!("{status:?}"));
+            }
             let is_loading = !matches!(status, LoadStatus::Complete);
             let url_for_start = if matches!(status, LoadStatus::Started) {
                 Some(ENGINE.with(|s| {
@@ -918,7 +922,7 @@ mod engine {
                 let w = favicon.width as i32;
                 let h = favicon.height as i32;
                 let raw = favicon.data();
-                if std::env::var_os("SERVOQ_DEBUG").is_some() {
+                if debug_enabled() {
                     eprintln!("[servoq favicon] tab_id={} format={:?} size={}x{} bytes={}", self.tab_id, favicon.format, w, h, raw.len());
                 }
                 let rgba8: Vec<u8> = match favicon.format {
@@ -972,6 +976,12 @@ mod engine {
         }
 
         fn show_console_message(&self, _webview: WebView, level: ConsoleLogLevel, message: String) {
+            // Page console output is opt-in: pages can console.log in rAF/scroll
+            // loops, and an unconditional synchronous stderr write per message
+            // stalls the main thread on such sites.
+            if !debug_enabled() {
+                return;
+            }
             let level_str = match level {
                 ConsoleLogLevel::Log => "LOG",
                 ConsoleLogLevel::Debug => "DEBUG",
@@ -1296,10 +1306,12 @@ mod engine {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return false;
         }
-        diag(format!(
-            "create_webview_wayland_window id={id} {w}x{h} scale={scale} wl_surface=0x{wl_surface:x} active={}",
-            tab_is_active(id)
-        ));
+        if diag_enabled() {
+            diag(format!(
+                "create_webview_wayland_window id={id} {w}x{h} scale={scale} wl_surface=0x{wl_surface:x} active={}",
+                tab_is_active(id)
+            ));
+        }
         let w = (w.max(1)) as u32;
         let h = (h.max(1)) as u32;
         let size = PhysicalSize::new(w, h);
@@ -1590,7 +1602,9 @@ mod engine {
         };
         if !active {
             debug_log_detail("wayland_present_skipped_inactive_tab", id, &url);
-            diag(format!("present_wayland_webview SKIPPED inactive tab id={id} url={url}"));
+            if diag_enabled() {
+                diag(format!("present_wayland_webview SKIPPED inactive tab id={id} url={url}"));
+            }
             return;
         }
         if diag_enabled() {
@@ -1624,7 +1638,9 @@ mod engine {
             size,
             &url,
         );
-        debug_log_detail("wayland_present_leave", id, format!("url={url} swap_ms={:.2}", swap_time.as_secs_f64() * 1000.0));
+        if debug_enabled() {
+            debug_log_detail("wayland_present_leave", id, format!("url={url} swap_ms={:.2}", swap_time.as_secs_f64() * 1000.0));
+        }
     }
 
     pub fn load_url(id: i32, url_str: &str) {
@@ -1869,11 +1885,15 @@ mod engine {
         );
         let event = InputEvent::Keyboard(kb_event);
         let wv = clone_webview(id);
-        diag(format!(
-            "forward_key id={id} down={down} key_char={key_char} qt_key={qt_key} mods={mods} webview_found={} active={}",
-            wv.is_some(),
-            tab_is_active(id)
-        ));
+        // Runs per keypress in web content: do not build the payload (or probe
+        // tab_is_active) unless diagnostics are on.
+        if diag_enabled() {
+            diag(format!(
+                "forward_key id={id} down={down} key_char={key_char} qt_key={qt_key} mods={mods} webview_found={} active={}",
+                wv.is_some(),
+                tab_is_active(id)
+            ));
+        }
         if let Some(wv) = wv {
             wv.notify_input_event(event);
         }
@@ -1881,11 +1901,13 @@ mod engine {
 
     pub fn forward_focus(id: i32, focused: bool) {
         let wv = clone_webview(id);
-        diag(format!(
-            "forward_focus id={id} focused={focused} webview_found={} active={}",
-            wv.is_some(),
-            tab_is_active(id)
-        ));
+        if diag_enabled() {
+            diag(format!(
+                "forward_focus id={id} focused={focused} webview_found={} active={}",
+                wv.is_some(),
+                tab_is_active(id)
+            ));
+        }
         if let Some(wv) = wv {
             if focused {
                 wv.focus();
@@ -1902,7 +1924,9 @@ mod engine {
     }
 
     pub fn set_webview_active(id: i32, active: bool) {
-        diag(format!("set_webview_active id={id} active={active}"));
+        if diag_enabled() {
+            diag(format!("set_webview_active id={id} active={active}"));
+        }
         ENGINE.with(|s| {
             if let Some(entry) = s.borrow_mut().as_mut().and_then(|e| e.tabs.get_mut(&id)) {
                 entry.active = active;

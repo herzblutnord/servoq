@@ -7,6 +7,7 @@
  */
 #include "HistoryStore.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -32,9 +33,29 @@ HistoryStore* HistoryStore::the()
     return s_instance;
 }
 
+static void fill_search_fields(HistoryStore::Entry& e)
+{
+    e.url_lower = e.url.toLower();
+    e.title_lower = e.title.toLower();
+    e.host_lower = QUrl(e.url).host().toLower();
+}
+
 HistoryStore::HistoryStore()
 {
     load();
+
+    m_save_timer = new QTimer(this);
+    m_save_timer->setSingleShot(true);
+    m_save_timer->setInterval(1000);
+    connect(m_save_timer, &QTimer::timeout, this, [this] { save(); });
+    if (auto* app = QCoreApplication::instance()) {
+        connect(app, &QCoreApplication::aboutToQuit, this, [this] {
+            if (m_save_timer->isActive()) {
+                m_save_timer->stop();
+                save();
+            }
+        });
+    }
 }
 
 QString HistoryStore::storePath()
@@ -62,8 +83,10 @@ void HistoryStore::load()
         e.title = obj[QStringLiteral("title")].toString();
         e.visited_at = QDateTime::fromSecsSinceEpoch(
             static_cast<qint64>(obj[QStringLiteral("ts")].toDouble()));
-        if (!e.url.isEmpty())
+        if (!e.url.isEmpty()) {
+            fill_search_fields(e);
             m_entries.append(std::move(e));
+        }
     }
 }
 
@@ -88,6 +111,15 @@ void HistoryStore::save()
     }
 }
 
+// Coalesce disk writes: visits arrive on every URL/title change (SPAs mutate
+// these constantly) and save() serializes all entries and syncs the file to
+// disk on the UI thread. One pending write per second is plenty.
+void HistoryStore::scheduleSave()
+{
+    if (m_save_timer && !m_save_timer->isActive())
+        m_save_timer->start();
+}
+
 QList<HistoryStore::AutocompleteSuggestion> HistoryStore::autocompleteSuggestions(QString const& query, int limit) const
 {
     struct Candidate {
@@ -106,9 +138,9 @@ QList<HistoryStore::AutocompleteSuggestion> HistoryStore::autocompleteSuggestion
             continue;
         seen_urls.insert(entry.url);
 
-        auto url_lower = entry.url.toLower();
-        auto title_lower = entry.title.toLower();
-        auto host_lower = QUrl(entry.url).host().toLower();
+        auto const& url_lower = entry.url_lower;
+        auto const& title_lower = entry.title_lower;
+        auto const& host_lower = entry.host_lower;
 
         int score = 100;
         if (host_lower.startsWith(needle))
@@ -149,10 +181,12 @@ void HistoryStore::recordVisit(QString const& url, QString const& title)
 
     // Update title on existing most-recent entry for the same URL
     if (!m_entries.isEmpty() && m_entries.first().url == url) {
-        if (!title.isEmpty())
+        if (!title.isEmpty()) {
             m_entries.first().title = title;
+            m_entries.first().title_lower = title.toLower();
+        }
         m_entries.first().visited_at = QDateTime::currentDateTime();
-        save();
+        scheduleSave();
         emit changed();
         return;
     }
@@ -161,18 +195,23 @@ void HistoryStore::recordVisit(QString const& url, QString const& title)
     e.url = url;
     e.title = title;
     e.visited_at = QDateTime::currentDateTime();
+    fill_search_fields(e);
     m_entries.prepend(std::move(e));
 
     if (m_entries.size() > MaxHistoryEntries)
         m_entries.resize(MaxHistoryEntries);
 
-    save();
+    scheduleSave();
     emit changed();
 }
 
 void HistoryStore::clearHistory()
 {
     m_entries.clear();
+    // Deliberately synchronous: clearing history is a privacy action and rare;
+    // it must reach disk immediately, not sit behind the debounce timer.
+    if (m_save_timer)
+        m_save_timer->stop();
     save();
     emit changed();
 }

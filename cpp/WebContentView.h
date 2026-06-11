@@ -72,7 +72,17 @@ public:
     void receiveFrame(QImage const& frame);
     void receiveFrameBytes(uint8_t const* bytes, int width, int height);
     bool hasPendingFrameRepaint() const { return m_pending_frame_repaint; }
-    void requestWaylandRepaint();
+    // Why a present was requested — tracked per-second under SERVOQ_PERF so an
+    // over-scheduling source is identifiable without per-present logging.
+    enum class PresentRequestReason {
+        FrameReady,  // Servo notify_new_frame_ready (a genuinely new frame)
+        Expose,      // QWindow expose — re-present the existing frame
+        Resize,      // viewport resize
+        Activation,  // tab became active / container re-attached
+        Retry,       // deferred retry of an earlier capped/deferred request
+        Shutdown,
+    };
+    void requestWaylandRepaint(PresentRequestReason reason = PresentRequestReason::FrameReady);
     bool takeWaylandPresentPending();
 
     // Called when Servo panics. Renders inline crash message.
@@ -140,10 +150,13 @@ private:
     bool m_wayland_present_pending { false };
     bool m_wayland_present_in_progress { false };
     bool m_wayland_dirty_after_present { false };
-    // Software present-rate cap (vsync is disabled at the swap to avoid blocking
-    // the main thread, so without this a fast-loading page could present far more
-    // often than the screen refreshes and starve the Qt chrome).
+    // Present duty-cycle cap (vsync is disabled at the swap, so presents are
+    // self-paced). Stamped at present COMPLETION; a slow (compositor-blocked)
+    // present stretches the admission gap to its own duration, bounding presents
+    // to ~50% of main-thread time. Reset on owner handoff. See
+    // docs/DEVIATIONS.md "Qt/Wayland shared Servo surface activation".
     qint64 m_last_present_request_ms { -1000 };
+    qint64 m_last_present_duration_ms { 0 };
     bool m_present_throttle_scheduled { false };
     double m_ctrl_wheel_zoom_remainder { 0.0 };
 };

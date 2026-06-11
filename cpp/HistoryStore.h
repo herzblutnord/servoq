@@ -11,6 +11,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
 namespace ServoQ {
 
@@ -23,6 +24,12 @@ public:
         QString url;
         QString title;
         QDateTime visited_at;
+        // Precomputed at insert/load time: autocompleteSuggestions() scans every
+        // entry per keystroke, and parsing a QUrl + lowering three strings for
+        // up to 1000 entries on each keypress cost milliseconds on the UI thread.
+        QString url_lower;
+        QString title_lower;
+        QString host_lower;
     };
 
     struct AutocompleteSuggestion {
@@ -42,9 +49,14 @@ private:
     HistoryStore();
     void load();
     void save();
+    void scheduleSave();
     static QString storePath();
 
     QList<Entry> m_entries; // most recent first, capped at 1000
+    // Persisting rewrites the whole store and QSaveFile::commit() syncs to disk;
+    // doing that synchronously on every URL/title change stalled the UI thread.
+    // Writes are coalesced behind this timer and flushed on quit.
+    QTimer* m_save_timer { nullptr };
 };
 
 }
