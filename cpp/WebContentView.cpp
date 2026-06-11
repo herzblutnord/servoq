@@ -247,20 +247,11 @@ static void park_shared_wayland_container()
     // the Qt main thread indefinitely. Keeping the surface mapped (just out of
     // the visible area) avoids this race entirely.
     // Move instead of hide (keep wl_surface mapped to avoid eglSwapBuffers block on remap).
-    // The offset must clear every realistic monitor to the left (a per-parent-width
-    // offset is not enough when that monitor is wider than the browser window) but
-    // must NOT be compositor-hostile: parking at -65536 put the window's surface-tree
-    // extents so far off every output that compositors stopped presenting the whole
-    // window's updates (screen frozen while the event loop ran fine) until something
-    // forced a scene re-evaluation — e.g. mapping the hover panel popup, which is why
-    // hovering the tab bar "unfroze" the browser. -16384 still clears any real
-    // monitor (8K is 7680 px) while staying in sane coordinate range.
+    // The offset must clear every realistic monitor to the left — a per-parent-width
+    // offset is not enough when that monitor is wider than the browser window.
+    // -16384 clears any real monitor (8K is 7680 px). Do NOT add container->lower()
+    // here: WAYLAND_DEBUG proved QtWayland emits no wl_subsurface.place_below for it.
     container->move(-16384, 0);
-    // Defense in depth: while parked, stack the subsurface below the toplevel
-    // content (QtWayland maps child-window lowering to wl_subsurface.place_below),
-    // so stale webview pixels are covered even mid-transition. The attach path
-    // re-raises (container->raise() in onBecomeActiveTab).
-    container->lower();
     // The subsurface position set by move() is PARENT surface state: the
     // compositor applies it only on the next toplevel commit. Queue a toplevel
     // repaint so the park takes effect now — otherwise the old tab's webview
@@ -959,6 +950,19 @@ bool WebContentView::attachSharedWaylandWindow()
         // Do NOT call setParent() — the container lives under the stable
         // page-column widget for the app lifetime. Just reposition it.
         updateContainerGeometry();
+        // The container move above becomes wl_subsurface.set_position — PARENT
+        // surface state that the compositor only applies on the next toplevel
+        // commit. This claim path is also reached from startEngineIfNeeded()
+        // when a (formerly empty) tab navigates, where nothing else repaints
+        // the chrome: without forcing a commit here, Servo presents at full
+        // rate into a subsurface still parked off-screen and the page does not
+        // appear for seconds (proven via WAYLAND_DEBUG: set_position with no
+        // parent wl_surface.commit until an incidental chrome repaint).
+        if (m_wayland_container) {
+            if (auto* toplevel = m_wayland_container->window())
+                toplevel->update();
+        }
+        ServoQ::newtab_trace_point("attach_claim_toplevel_update_queued", m_tab_id);
         if (perf_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
