@@ -252,6 +252,15 @@ static void park_shared_wayland_container()
     // monitor to the left is wider than the browser window.
     // 65536 px > any realistic display width or virtual desktop extent.
     container->move(-65536, 0);
+    // The subsurface position set by move() is PARENT surface state: the
+    // compositor applies it only on the next toplevel commit. Queue a toplevel
+    // repaint so the park takes effect now — otherwise the old tab's webview
+    // pixels stay visible over the new (e.g. empty) tab page until some
+    // incidental chrome repaint commits, which looks like a seconds-long
+    // freeze. (The attach path forces the same commit in onBecomeActiveTab.)
+    if (auto* toplevel = container->window())
+        toplevel->update();
+    ServoQ::newtab_trace_point("park_shared_wayland_container_toplevel_update_queued");
 }
 
 static QHash<int, int>& g_favicon_generations()

@@ -1597,6 +1597,7 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
             .arg(expanded ? 1 : 0).arg(m_vertical_tabs_hover_expanded ? 1 : 0).arg(hoverDiagState()));
     if (m_vertical_tabs_hover_expanded == expanded)
         return;
+    NewTabTraceScope trace_scope(expanded ? "hover_expand" : "hover_collapse");
     m_vertical_tabs_hover_expanded = expanded;
     m_hover_expand_in_progress = true;
     if (expanded) {
@@ -1654,6 +1655,13 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
             m_saved_focus_before_hover_expand->setFocus(Qt::OtherFocusReason);
             m_saved_focus_before_hover_expand = nullptr;
         }
+        // Queue a toplevel repaint so the collapse reaches the compositor in
+        // one commit, including any pending shared-subsurface state (e.g. a
+        // park from an empty-tab activation that happened while the floating
+        // panel was open).
+        if (auto* toplevel = window())
+            toplevel->update();
+        newtab_trace_point("hover_collapse_toplevel_update_queued");
     } else {
         // Expand path: keep m_hover_expand_in_progress = true until the floating
         // window receives its first wl_pointer.enter event (handled in eventFilter).
