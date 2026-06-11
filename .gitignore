@@ -13,9 +13,13 @@ Thumbs.db
 /vendor/reference-kdab-servo-webview/
 /vendor/reference-ladybird/
 /vendor/reference-servo/
+/vendor/reference-beaver/
+/vendor/reference-qt6-docs/
+/vendor/*
 
 /.claude/
 /target-servo/
 /memory/
 /bottles/
 /docs/DEVIATIONS.md
+/docs/servoq_bucket1_bucket2_feature_table.md

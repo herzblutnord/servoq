@@ -57,6 +57,8 @@
 #include <QWindow>
 #include <QtGui/qguiapplication_platform.h>
 #include <QtGui/qpa/qplatformwindow_p.h>
+#include <wayland-client-core.h>
+#include <wayland-client-protocol.h>
 #include <QClipboard>
 
 #include <atomic>
@@ -236,6 +238,53 @@ static int& g_wayland_owner_generation()
     return s_generation;
 }
 
+// Commit the TOPLEVEL wl_surface directly, bypassing Qt's repaint pipeline.
+//
+// Why this exists (WAYLAND_DEBUG-proven): every container move becomes
+// wl_subsurface.set_position — PARENT surface state the compositor applies
+// only on the next toplevel wl_surface.commit. Qt 6 gates widget repaints on
+// the toplevel's wl_surface.frame callback, and the compositor starves that
+// callback while the desync Servo subsurface commits at 60 fps (traces show
+// the callback 'done' arriving 0.5 s late, then not at all for seconds). So a
+// queued QWidget::update() never reaches the wire exactly when the commit is
+// needed — the browser looks frozen until an incidental event (mapping the
+// hover panel's popup, the page load finishing) lets the compositor catch up.
+//
+// A bare commit is safe to issue from here: Qt stages and commits its own
+// toplevel state atomically within a flush on this same thread, so there is
+// never half-staged Qt state for our commit to latch. It applies pending
+// subsurface positions immediately and gives the compositor a present point
+// at which to fire Qt's pending frame callback, un-stalling chrome repaints.
+//
+// SERVOQ_NO_DIRECT_WL_COMMIT=1 disables this for diagnosis.
+static bool direct_wl_commit_disabled()
+{
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_NO_DIRECT_WL_COMMIT");
+    return v;
+}
+
+static void commit_toplevel_wl_surface(QWidget* widget_in_window, char const* trace_marker)
+{
+    if (direct_wl_commit_disabled() || !widget_in_window)
+        return;
+    auto* toplevel = widget_in_window->window();
+    if (!toplevel)
+        return;
+    auto* handle = toplevel->windowHandle();
+    if (!handle)
+        return;
+    auto* wayland_window = handle->nativeInterface<QNativeInterface::Private::QWaylandWindow>();
+    if (!wayland_window)
+        return;
+    auto* surface = wayland_window->surface();
+    if (!surface)
+        return;
+    wl_surface_commit(surface);
+    if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>(); app && app->display())
+        wl_display_flush(app->display());
+    ServoQ::newtab_trace_point(trace_marker);
+}
+
 static void park_shared_wayland_container()
 {
     auto* container = g_wayland_container();
@@ -261,6 +310,9 @@ static void park_shared_wayland_container()
     if (auto* toplevel = container->window())
         toplevel->update();
     ServoQ::newtab_trace_point("park_shared_wayland_container_toplevel_update_queued");
+    // The queued update above is NOT sufficient on its own: Qt's repaint can be
+    // stalled on a starved frame callback (see commit_toplevel_wl_surface).
+    commit_toplevel_wl_surface(container, "park_toplevel_wl_surface_committed");
 }
 
 static QHash<int, int>& g_favicon_generations()
@@ -550,6 +602,14 @@ protected:
                 }
                 qint64 const present_finished_ms = present_clock_ms();
                 m_owner->m_wayland_present_in_progress = false;
+                // Anti-starvation: while the subsurface commits at frame rate,
+                // the compositor can withhold the TOPLEVEL's frame callback,
+                // which stalls all Qt widget repaints (chrome frozen during
+                // page load). Committing the parent after each present applies
+                // any pending subsurface state and gives the compositor a
+                // present point to fire Qt's pending callback. One wire
+                // message per present; no-op when disabled or non-Wayland.
+                commit_toplevel_wl_surface(g_wayland_container(), "present_toplevel_wl_surface_committed");
                 // Feed the duty-cycle cap (admission is measured from completion).
                 m_owner->m_last_present_duration_ms = present_finished_ms - present_started_ms;
                 m_owner->m_last_present_request_ms = present_finished_ms;
@@ -721,6 +781,40 @@ private:
     WebContentView* m_owner { nullptr };
     int m_present_generation_requested { 0 };
 };
+
+// Unmap the shared Servo subsurface while an EMPTY tab is active.
+//
+// A mapped-but-parked (off-screen) subsurface makes the compositor throttle
+// the toplevel's wl_surface.frame callbacks, which Qt 6 widget repaints are
+// gated on — chrome hover animations freeze in ~0.5 s steps even though the
+// main thread is completely idle (no JANK, zero presents in SERVOQ_PERF).
+// Loaded tabs don't show this because every present pulses the compositor.
+//
+// Empty tabs need no Servo rendering at all, so detach the buffer:
+// attach(NULL) + commit unmaps the subsurface at the protocol level while the
+// wl_surface object and all Qt/Servo state stay intact. This is NOT the same
+// as container->hide(), which makes QtWayland destroy the wl_surface and
+// triggers the historical remap freeze. The next activation present's
+// eglSwapBuffers attaches a real buffer again and remaps the subsurface.
+static void unmap_shared_servo_subsurface(char const* trace_marker)
+{
+    if (direct_wl_commit_disabled())
+        return;
+    auto* window = g_wayland_window();
+    if (!window)
+        return;
+    auto* wayland_window = window->nativeInterface<QNativeInterface::Private::QWaylandWindow>();
+    if (!wayland_window)
+        return;
+    auto* surface = wayland_window->surface();
+    if (!surface)
+        return;
+    wl_surface_attach(surface, nullptr, 0, 0);
+    wl_surface_commit(surface);
+    if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>(); app && app->display())
+        wl_display_flush(app->display());
+    newtab_trace_point(trace_marker);
+}
 
 WebContentView::WebContentView(QWidget* parent)
     : QWidget(parent)
@@ -963,6 +1057,7 @@ bool WebContentView::attachSharedWaylandWindow()
                 toplevel->update();
         }
         ServoQ::newtab_trace_point("attach_claim_toplevel_update_queued", m_tab_id);
+        commit_toplevel_wl_surface(m_wayland_container, "attach_claim_toplevel_wl_surface_committed");
         if (perf_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_PERF wayland_surface_count=1 window_rendering_context_instances=1 "
@@ -1811,6 +1906,11 @@ void WebContentView::onBecomeActiveTab()
         if (g_wayland_window())
             g_wayland_window()->setOwner(nullptr);
         park_shared_wayland_container();
+        // While the empty tab is active nothing presents, so nothing pulses
+        // the compositor: a mapped parked subsurface then degrades toplevel
+        // frame-callback delivery and freezes chrome animations. Unmap it —
+        // empty tabs need no Servo surface at all (see helper for details).
+        unmap_shared_servo_subsurface("empty_tab_servo_subsurface_unmapped");
         debug_log("become_active_tab_container_parked", m_tab_id, QStringLiteral(""));
     } else if (m_webview_created && !m_wayland_renderer_active) {
         debug_log("become_active_tab_loaded_non_wayland", m_tab_id, QStringLiteral(""));

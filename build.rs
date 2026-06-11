@@ -130,6 +130,11 @@ fn main() {
 
     build.compile("servoq-qt-widgets");
 
+    // commit_toplevel_wl_surface (WebContentView.cpp) calls wl_surface_commit /
+    // wl_display_flush directly; make sure libwayland-client is linked even if
+    // no other dependency pulls it in.
+    println!("cargo:rustc-link-lib=wayland-client");
+
     // On Linux, statically linked HarfBuzz symbols are exported by default from
     // the executable.  libfreetype.so.6 imports hb_* symbols and the dynamic
     // linker would resolve them to our bundled HarfBuzz 8.4.0 instead of the
