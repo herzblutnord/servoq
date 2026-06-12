@@ -875,6 +875,18 @@ void BrowserWindow::closeTab(int index)
     updateCurrentTabState();
 }
 
+void BrowserWindow::closeTabForController(int controller_id)
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        auto* tab = m_tabs->tab(i);
+        if (tab && tab->controllerId() == controller_id) {
+            closeTab(i);
+            return;
+        }
+    }
+    debug_log("close_requested_unknown_controller", controller_id, {});
+}
+
 void BrowserWindow::setHorizontalTabs()
 {
     m_tabs->setVerticalTabsEnabled(false);

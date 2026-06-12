@@ -118,6 +118,7 @@ fn main() {
         "cpp/FindInPageWidget.cpp",
         "cpp/WebContentPlaceholder.cpp",
         "cpp/WebContentView.cpp",
+        "cpp/WebDialogs.cpp",
         "cpp/ChromeStyle.cpp",
         "cpp/Icon.cpp",
         "cpp/Settings.cpp",

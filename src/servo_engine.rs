@@ -26,6 +26,7 @@ mod engine {
     use std::ffi::{c_char, c_void, CStr};
     use std::ptr::NonNull;
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::rc::Rc;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -49,6 +50,7 @@ mod engine {
     };
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
+    use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
     use servo::UserContentManager;
     use raw_window_handle::{
         DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
@@ -882,6 +884,19 @@ mod engine {
             crate::bridge::ffi::notify_webview_crashed(self.tab_id, &reason);
         }
 
+        // window.close() from script: Servo asks the embedder to close this webview.
+        fn notify_closed(&self, _webview: WebView) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("notify_closed", self.tab_id);
+                return;
+            }
+            debug_log_detail("notify_closed", self.tab_id, "window.close()");
+            crate::bridge::ffi::notify_webview_close_requested(self.tab_id);
+        }
+
         fn request_navigation(&self, _webview: WebView, navigation_request: NavigationRequest) {
             if SHUTTING_DOWN.load(Ordering::Acquire) {
                 navigation_request.deny();
@@ -1066,7 +1081,119 @@ mod engine {
                         menu.dismiss();
                     }
                 }
-                _ => {}
+                // Simple dialogs are synchronous in spec terms (script is blocked),
+                // so a modal Qt dialog matches; the SPINNING guard makes the nested
+                // Qt event loop safe, as with the context menu above.
+                EmbedderControl::SimpleDialog(dialog) => match dialog {
+                    SimpleDialog::Alert(alert) => {
+                        crate::bridge::ffi::show_alert_dialog_sync(self.tab_id, alert.message());
+                        alert.confirm();
+                    }
+                    SimpleDialog::Confirm(confirm) => {
+                        if crate::bridge::ffi::show_confirm_dialog_sync(self.tab_id, confirm.message()) {
+                            confirm.confirm();
+                        } else {
+                            confirm.dismiss();
+                        }
+                    }
+                    SimpleDialog::Prompt(mut prompt) => {
+                        let result = crate::bridge::ffi::show_prompt_dialog_sync(
+                            self.tab_id, prompt.message(), prompt.current_value());
+                        if result.accepted {
+                            prompt.set_current_value(&result.value);
+                            prompt.confirm();
+                        } else {
+                            prompt.dismiss();
+                        }
+                    }
+                },
+                EmbedderControl::SelectElement(mut select) => {
+                    // Labels are user content; tabs/newlines would break the
+                    // line protocol, so flatten them to spaces.
+                    let escape = |s: &str| s.replace(['\t', '\n'], " ");
+                    let selected = select.selected_options();
+                    let mut items = String::new();
+                    let push_option =
+                        |items: &mut String, option: &servo::SelectElementOption, in_group: bool| {
+                            items.push_str(&format!(
+                                "opt\t{}\t{}\t{}\t{}\t{}\n",
+                                option.id,
+                                escape(&option.label),
+                                option.is_disabled as u8,
+                                selected.contains(&option.id) as u8,
+                                in_group as u8
+                            ));
+                        };
+                    for entry in select.options() {
+                        match entry {
+                            SelectElementOptionOrOptgroup::Option(option) => {
+                                push_option(&mut items, option, false);
+                            }
+                            SelectElementOptionOrOptgroup::Optgroup { label, options } => {
+                                items.push_str(&format!("group\t{}\n", escape(label)));
+                                for option in options {
+                                    push_option(&mut items, option, true);
+                                }
+                            }
+                        }
+                    }
+                    let position = select.position();
+                    let chosen = crate::bridge::ffi::show_select_dropdown_sync(
+                        self.tab_id,
+                        &items,
+                        position.min.x,
+                        position.max.y,
+                        position.width(),
+                    );
+                    if chosen >= 0 {
+                        // selected_options carries option ids, mirroring
+                        // servoshell desktop/dialog.rs.
+                        select.select(vec![chosen as usize]);
+                        select.submit();
+                    }
+                    // Dismissed: dropping resubmits the unchanged selection.
+                }
+                EmbedderControl::ColorPicker(mut picker) => {
+                    let current = picker.current_color().unwrap_or(RgbColor {
+                        red: 0,
+                        green: 0,
+                        blue: 0,
+                    });
+                    let result = crate::bridge::ffi::show_color_picker_sync(
+                        self.tab_id, current.red, current.green, current.blue);
+                    if result >= 0 {
+                        picker.select(Some(RgbColor {
+                            red: ((result >> 16) & 0xff) as u8,
+                            green: ((result >> 8) & 0xff) as u8,
+                            blue: (result & 0xff) as u8,
+                        }));
+                        picker.submit();
+                    }
+                    // Cancelled: dropping resubmits the unchanged color.
+                }
+                EmbedderControl::FilePicker(mut picker) => {
+                    let filters: String = picker
+                        .filter_patterns()
+                        .iter()
+                        .map(|pattern| pattern.0.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let result = crate::bridge::ffi::show_file_picker_sync(
+                        self.tab_id, &filters, picker.allow_select_multiple());
+                    if result.is_empty() {
+                        picker.dismiss();
+                    } else {
+                        let paths: Vec<PathBuf> = result
+                            .split('\n')
+                            .filter(|s| !s.is_empty())
+                            .map(PathBuf::from)
+                            .collect();
+                        picker.select(&paths);
+                        picker.submit();
+                    }
+                }
+                // IME integration is out of scope for now (see WebContentView.h).
+                EmbedderControl::InputMethod(_) => {}
             }
         }
 

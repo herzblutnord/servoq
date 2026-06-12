@@ -44,6 +44,8 @@ public:
     void closeTabFromContextMenu(int index);
     void closeOtherTabs(int keep_index);
     void closeTabsToRight(int from_index);
+    // window.close() from web content (servoq::notify_webview_close_requested).
+    void closeTabForController(int controller_id);
 
 protected:
     bool event(QEvent* event) override;

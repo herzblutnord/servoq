@@ -10,8 +10,28 @@
 #include "rust/cxx.h"
 
 #include <cstdint>
+#include <type_traits>
+
+#ifndef CXX_DEFAULT_VALUE
+#define CXX_DEFAULT_VALUE(value) = value
+#endif
 
 namespace servoq {
+
+// Mirror of the CXX shared struct from src/bridge.rs. The generated
+// bridge.rs.h includes this header first (so it cannot be included from
+// here), but CXX guards every struct definition with this exact macro, so
+// defining it here with the same guard and layout is the supported pattern —
+// whichever copy is parsed first wins.
+#ifndef CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
+#define CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
+struct PromptDialogResult final {
+  bool accepted CXX_DEFAULT_VALUE(false);
+  ::rust::String value;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
 
 // Push a complete RGBA frame (device pixels) to the WebContentView identified by tab_id.
 // Called from notify_new_frame_ready after webview.paint() + read_to_image().
@@ -60,6 +80,25 @@ void request_open_tab_for_id(::std::int32_t tab_id);
 
 // Web Notification API: show a desktop notification via QSystemTrayIcon.
 void show_notification(::std::int32_t tab_id, ::rust::Str title, ::rust::Str body);
+
+// Embedder controls (web form controls & script dialogs), implemented in
+// WebDialogs.cpp. Synchronous like show_context_menu_sync: each call opens a
+// modal Qt dialog/menu on the main thread and returns the user's choice.
+// PromptDialogResult is the CXX shared struct defined in src/bridge.rs.
+void show_alert_dialog_sync(::std::int32_t tab_id, ::rust::Str message);
+bool show_confirm_dialog_sync(::std::int32_t tab_id, ::rust::Str message);
+PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str message, ::rust::Str default_value);
+// items: lines "opt\t<id>\t<label>\t<disabled 0/1>\t<selected 0/1>\t<in_group 0/1>"
+// or "group\t<label>"; x/y = element bottom-left, width = element width (device px).
+// Returns the chosen option id (>=0) or -1 for dismissed.
+::std::int32_t show_select_dropdown_sync(::std::int32_t tab_id, ::rust::Str items, ::std::int32_t x, ::std::int32_t y, ::std::int32_t width);
+// Returns packed 0xRRGGBB (>=0) or -1 for cancelled.
+::std::int32_t show_color_picker_sync(::std::int32_t tab_id, ::std::uint8_t red, ::std::uint8_t green, ::std::uint8_t blue);
+// filters: newline-separated extensions without dot. Returns newline-separated
+// selected paths; empty = cancelled.
+::rust::String show_file_picker_sync(::std::int32_t tab_id, ::rust::Str filters, bool allow_multiple);
+// window.close() from web content: close the owning tab (deferred via QTimer).
+void notify_webview_close_requested(::std::int32_t tab_id);
 
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.

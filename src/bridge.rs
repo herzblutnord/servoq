@@ -10,6 +10,12 @@
 //   UI/Qt/BrowserWindow.cpp
 #[cxx::bridge(namespace = "servoq")]
 pub mod ffi {
+    // Result of a JS prompt() dialog: accepted=false means Cancel (JS gets null).
+    pub struct PromptDialogResult {
+        pub accepted: bool,
+        pub value: String,
+    }
+
     unsafe extern "C++" {
         include!("servoq/cpp/qt_app.h");
         fn run_qt_application() -> i32;
@@ -44,6 +50,29 @@ pub mod ffi {
         fn show_context_menu_sync(tab_id: i32, items: &str, link_url: &str) -> i32;
         // Web Notification API desktop notification.
         fn show_notification(tab_id: i32, title: &str, body: &str);
+        // Simple JS dialogs (synchronous + modal, like show_context_menu_sync):
+        // alert() / confirm() / prompt().
+        fn show_alert_dialog_sync(tab_id: i32, message: &str);
+        fn show_confirm_dialog_sync(tab_id: i32, message: &str) -> bool;
+        fn show_prompt_dialog_sync(
+            tab_id: i32,
+            message: &str,
+            default_value: &str,
+        ) -> PromptDialogResult;
+        // <select> dropdown: newline-separated lines, either
+        // "opt\t<id>\t<label>\t<disabled 0/1>\t<selected 0/1>\t<in_group 0/1>"
+        // or "group\t<label>". x/y anchor the menu at the element's bottom-left
+        // corner and width is the element width, all in device pixels.
+        // Returns the chosen option id (>=0) or -1 for dismissed.
+        fn show_select_dropdown_sync(tab_id: i32, items: &str, x: i32, y: i32, width: i32) -> i32;
+        // <input type=color>: returns packed 0xRRGGBB (>=0) or -1 for cancelled.
+        fn show_color_picker_sync(tab_id: i32, red: u8, green: u8, blue: u8) -> i32;
+        // <input type=file>: filters = newline-separated extensions without dot
+        // (Servo FilterPattern). Returns newline-separated selected paths;
+        // empty string = cancelled.
+        fn show_file_picker_sync(tab_id: i32, filters: &str, allow_multiple: bool) -> String;
+        // window.close() from web content: close the tab owning this webview.
+        fn notify_webview_close_requested(tab_id: i32);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
