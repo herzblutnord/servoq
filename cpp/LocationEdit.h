@@ -15,6 +15,7 @@ class QAction;
 class QCompleter;
 class QEvent;
 class QFocusEvent;
+class QModelIndex;
 class QGraphicsDropShadowEffect;
 class QKeyEvent;
 class QMouseEvent;
@@ -52,6 +53,7 @@ private:
     void animateFocusGlow(int target_alpha);
     void updateFocusGlow(int alpha);
     void updateHistorySuggestions(QString const& query);
+    bool activateHistorySuggestion(QModelIndex const& index);
 
     QCompleter* m_history_completer { nullptr };
     QStandardItemModel* m_history_completion_model { nullptr };

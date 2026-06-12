@@ -136,12 +136,7 @@ LocationEdit::LocationEdit(QWidget* parent)
     }
     connect(this, &QLineEdit::textEdited, this, &LocationEdit::updateHistorySuggestions);
     connect(m_history_completer, qOverload<QModelIndex const&>(&QCompleter::activated), this, [this](QModelIndex const& index) {
-        auto url = index.data(Qt::UserRole).toString();
-        if (url.isEmpty())
-            return;
-        setText(url);
-        m_history_completer->popup()->hide();
-        emit returnPressed();
+        activateHistorySuggestion(index);
     });
 
     // Zoom indicator pill
@@ -253,6 +248,17 @@ void LocationEdit::focusOutEvent(QFocusEvent* event)
 
 void LocationEdit::keyPressEvent(QKeyEvent* event)
 {
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && m_history_completer
+        && m_history_completer->popup()
+        && m_history_completer->popup()->isVisible()) {
+        auto index = m_history_completer->popup()->currentIndex();
+        if (index.isValid() && activateHistorySuggestion(index)) {
+            event->accept();
+            return;
+        }
+    }
+
     if (event->key() == Qt::Key_Escape) {
         if (m_history_completer && m_history_completer->popup() && m_history_completer->popup()->isVisible()) {
             m_history_completer->popup()->hide();
@@ -264,6 +270,19 @@ void LocationEdit::keyPressEvent(QKeyEvent* event)
         return;
     }
     QLineEdit::keyPressEvent(event);
+}
+
+bool LocationEdit::activateHistorySuggestion(QModelIndex const& index)
+{
+    auto url = index.data(Qt::UserRole).toString();
+    if (url.isEmpty())
+        return false;
+
+    setText(url);
+    if (m_history_completer && m_history_completer->popup())
+        m_history_completer->popup()->hide();
+    emit returnPressed();
+    return true;
 }
 
 void LocationEdit::mouseReleaseEvent(QMouseEvent* event)
