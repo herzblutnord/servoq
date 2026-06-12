@@ -6,10 +6,12 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QGuiApplication>
 #include <QImageReader>
 #include <QDebug>
 #include <QResource>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QWindow>
 
@@ -71,6 +73,15 @@ static void apply_window_icon_to_qwindow(QMainWindow& window, QIcon const& icon)
 }
 
 namespace servoq {
+
+::rust::String servo_profile_data_dir()
+{
+    auto const dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty())
+        return {};
+    QDir().mkpath(dir);
+    return ::rust::String(dir.toUtf8().constData());
+}
 
 int run_qt_application()
 {

@@ -19,6 +19,7 @@ pub mod ffi {
     unsafe extern "C++" {
         include!("servoq/cpp/qt_app.h");
         fn run_qt_application() -> i32;
+        fn servo_profile_data_dir() -> String;
 
         // Frame and delegate notifications: Rust -> C++ (safe per CXX's unsafe extern "C++" contract)
         include!("servoq/cpp/servo_callbacks.h");

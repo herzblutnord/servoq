@@ -24,6 +24,7 @@ grouped by related work. Status was determined by auditing the codebase
 | Configurable homepage / new-tab URL | ✅ | settings menu, Home toolbar button, configurable blank/home/custom new tabs |
 | Bookmark storage + bookmarks bar | ✅ | JSON store (Chromium-style), folders, bar with menus; icons from favicons.db |
 | Persistent history database | ✅ | SQLite urls/visits + favicons.db (see docs/STORAGE.md); URL-bar autocomplete + History menu |
+| Persistent cookies / website preferences | ✅ | Servo profile storage is wired to `AppDataLocation/servo-profile`; Servo owns cookie semantics and persists its public cookie jar, HSTS, auth cache, and web storage |
 | Vertical / horizontal tabs | ✅ | incl. collapse + hover-expand modes |
 | Tab close / middle-click close / reorder | ✅ | hardened against the mid-interaction-close bug |
 | Browser-chrome keyboard shortcuts | ✅ | Ctrl+L/T/W/Shift+T, Ctrl+Tab/PgUp/PgDn, Ctrl+1-9, zoom, find |
@@ -101,7 +102,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 4.2 | Bookmark manager + import/export | ✗ | add/edit/remove/search + Netscape-HTML import/export |
 | 4.3 | Settings page | ◐ | consolidate menu settings into a page |
 | 4.4 | Internal pages scheme (`servoq://`) + debug page | ✗ | shell-state debug page; console-message panel |
-| 4.5 | Site data / cookies clearing | ✗ | `SiteDataManager` UI |
+| 4.5 | Site data / cookies clearing UI | ✗ | Persistent cookies are implemented; still needs UI around `SiteDataManager` listing/clearing |
 | 4.6 | HTTP cache clearing | ✗ | `NetworkManager::clear_cache` |
 | 4.7 | External PDF handoff | ✗ | MIME/extension detect via `load_web_resource`, open externally |
 | 4.8 | Qt chrome accessibility pass | ✗ | accessible names, tab order, focus rings |

@@ -449,15 +449,48 @@ mod engine {
         preferences
     }
 
+    fn servo_profile_dir() -> Option<PathBuf> {
+        let app_data_dir = crate::bridge::ffi::servo_profile_data_dir();
+        if app_data_dir.is_empty() {
+            eprintln!(
+                "ServoQ storage: Qt AppDataLocation is empty; Servo cookies will not persist"
+            );
+            return None;
+        }
+
+        let mut path = PathBuf::from(app_data_dir);
+        path.push("servo-profile");
+        if let Err(error) = std::fs::create_dir_all(&path) {
+            eprintln!(
+                "ServoQ storage: cannot create Servo profile directory {}: {error}; Servo cookies will not persist",
+                path.display()
+            );
+            return None;
+        }
+        Some(path)
+    }
+
+    fn servo_opts() -> Opts {
+        let mut opts = Opts::default();
+        opts.config_dir = servo_profile_dir();
+        opts.temporary_storage = false;
+        opts
+    }
+
     fn build_servo() -> Servo {
         log_embedder_setup_once();
+        let opts = servo_opts();
         let servo = ServoBuilder::default()
-            .opts(Opts::default())
+            .opts(opts)
             .preferences(servo_preferences())
             .protocol_registry(ProtocolRegistry::default())
             .event_loop_waker(Box::new(QtEventLoopWaker))
             .build();
         servo.setup_logging();
+        // Servo 0.2 persists its network cookie jar when config_dir is set.
+        // Clean session-only cookies at startup as well so a previous crash or
+        // forced kill cannot turn them into restart-persistent cookies.
+        servo.site_data_manager().clear_session_cookies();
         servo
     }
 
@@ -1636,6 +1669,9 @@ mod engine {
         }
         debug_log("shutdown_servo", 0);
         ENGINE.with(|s| {
+            if let Some(engine) = s.borrow().as_ref() {
+                engine.servo.site_data_manager().clear_session_cookies();
+            }
             // Drop WebViews, Servo, and WindowRenderingContext deterministically.
             // In Wayland mode this must happen while Qt still owns a valid QWindow
             // and wl_surface; otherwise Surfman/EGL can destroy a surface whose

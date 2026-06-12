@@ -10,6 +10,7 @@ QSettings INI (`~/.config/ServoQ/ServoQ.ini`).
 |---|---|---|---|
 | Browsing history | `history.db` | SQLite (`urls` + `visits`) | Chromium `History`, Firefox `places.sqlite` |
 | Favicons | `favicons.db` | SQLite (PNG blobs keyed by host) | Chromium `Favicons` |
+| Cookies, HSTS, HTTP auth cache | `servo-profile/cookie_jar.json`, `servo-profile/hsts_list.json`, `servo-profile/auth_cache.json` | Servo persistent profile files | Browser profile network state |
 | Bookmarks | `bookmarks.json` | JSON tree | Chromium `Bookmarks` |
 | Session (open tabs, active tab, pinned flags, recently closed) | `session.json` | JSON | Firefox `sessionstore.jsonlz4` (uncompressed; it is tiny) |
 | Settings, window geometry, search engines | QSettings INI | INI | — |
@@ -61,6 +62,21 @@ restored session tabs, the bookmarks bar, history/recently-closed menus, and
 URL-bar autocomplete. Mapping is per host (not per page URL) because ServoQ
 re-probes on every load; the cache only feeds chrome UI. Legacy base64 icons
 embedded in `bookmarks.json` are imported on first load.
+
+## Servo profile network state
+
+ServoQ passes a stable Servo profile directory to `ServoBuilder`
+(`AppDataLocation/servo-profile`) with non-temporary storage enabled. Servo's
+network stack owns cookie parsing and matching for `Set-Cookie`,
+`document.cookie`, Domain, Path, Expires/Max-Age, Secure, HttpOnly, and SameSite.
+That keeps cookie behavior in the engine instead of duplicating it in Qt.
+
+Servo 0.2 persists its cookie jar as `cookie_jar.json` rather than the
+Firefox/Chromium SQLite cookie schemas. ServoQ treats that as Servo's profile
+store for now and keeps it under the same browser profile root as the SQLite
+stores above. Session cookies are cleared at startup and again before Servo
+shutdown so cookies without `Expires`/`Max-Age` do not become restart-persistent
+just because the public cookie jar is now saved on disk.
 
 ## session.json
 
