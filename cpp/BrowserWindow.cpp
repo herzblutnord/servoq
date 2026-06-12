@@ -340,6 +340,11 @@ Tab* BrowserWindow::currentTab() const
     return m_tabs->currentTab();
 }
 
+int BrowserWindow::tabCount() const
+{
+    return m_tabs ? m_tabs->count() : 0;
+}
+
 void BrowserWindow::tabStateChanged(Tab* tab)
 {
     auto index = m_tabs->indexOf(tab);

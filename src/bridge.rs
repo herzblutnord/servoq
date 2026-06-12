@@ -24,6 +24,20 @@ pub mod ffi {
         pub password: String,
     }
 
+    // Screen and window-frame geometry for window.screen.* APIs, all in
+    // device pixels. valid=false when the view has no screen yet.
+    pub struct ScreenGeometryResult {
+        pub valid: bool,
+        pub screen_width: i32,
+        pub screen_height: i32,
+        pub available_width: i32,
+        pub available_height: i32,
+        pub window_x: i32,
+        pub window_y: i32,
+        pub window_width: i32,
+        pub window_height: i32,
+    }
+
     unsafe extern "C++" {
         include!("servoq/cpp/qt_app.h");
         fn run_qt_application() -> i32;
@@ -98,6 +112,12 @@ pub mod ffi {
         // Consults the per-origin PermissionStore first; prompts only when no
         // decision is stored. Returns the allow/deny answer.
         fn request_permission_sync(tab_id: i32, origin: &str, feature: &str) -> bool;
+        // window.screen.* backing data (device pixels).
+        fn get_screen_geometry(tab_id: i32) -> ScreenGeometryResult;
+        // window.moveTo / window.resizeTo: coordinates/size in device pixels;
+        // C++ applies the single-tab popup policy and defers the change.
+        fn request_window_move_to(tab_id: i32, x: i32, y: i32);
+        fn request_window_resize_to(tab_id: i32, width: i32, height: i32);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.

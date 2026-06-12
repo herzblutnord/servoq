@@ -37,6 +37,8 @@ public:
 
     QMenu* hamburgerMenu() const { return m_hamburger_menu; }
     Tab* currentTab() const;
+    // Used by the window.moveTo/resizeTo popup policy (servo_callbacks).
+    int tabCount() const;
     void tabStateChanged(Tab* tab);
     bool showMenuBar() const;
     void toggleVerticalTabsExpanded();

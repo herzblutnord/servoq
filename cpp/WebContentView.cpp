@@ -2370,6 +2370,90 @@ void request_open_tab_for_id(::std::int32_t tab_id)
     return action_map[selected];
 }
 
+// window.screen.* backing data, all in device pixels. Servo converts to CSS
+// pixels with the webview's pixel scaling. On Wayland the compositor does not
+// expose global window positions, so window_x/window_y are whatever Qt
+// reports (typically 0,0) — the same limitation every Wayland browser has.
+ScreenGeometryResult get_screen_geometry(::std::int32_t tab_id)
+{
+    ScreenGeometryResult result;
+    result.valid = false;
+    if (servo_shutdown_started())
+        return result;
+    auto* view = find_view(tab_id);
+    if (!view || !view->window())
+        return result;
+    auto* screen = view->screen();
+    if (!screen)
+        return result;
+
+    auto dpr = view->devicePixelRatioF();
+    auto screen_size = screen->geometry().size();
+    auto available_size = screen->availableGeometry().size();
+    auto frame = view->window()->frameGeometry();
+
+    result.valid = true;
+    result.screen_width = qRound(screen_size.width() * dpr);
+    result.screen_height = qRound(screen_size.height() * dpr);
+    result.available_width = qRound(available_size.width() * dpr);
+    result.available_height = qRound(available_size.height() * dpr);
+    result.window_x = qRound(frame.x() * dpr);
+    result.window_y = qRound(frame.y() * dpr);
+    result.window_width = qRound(frame.width() * dpr);
+    result.window_height = qRound(frame.height() * dpr);
+    return result;
+}
+
+namespace {
+
+// window.moveTo/resizeTo policy: like Firefox and Chrome, page content may
+// only move/resize a popup-style window — one with a single tab. The main
+// browser window with multiple tabs never honors these requests.
+ServoQ::BrowserWindow* window_controllable_by_page(::std::int32_t tab_id)
+{
+    auto* view = find_view(tab_id);
+    if (!view)
+        return nullptr;
+    auto* browser = dynamic_cast<ServoQ::BrowserWindow*>(view->window());
+    if (!browser || browser->tabCount() != 1)
+        return nullptr;
+    return browser;
+}
+
+} // namespace
+
+void request_window_move_to(::std::int32_t tab_id, ::std::int32_t x, ::std::int32_t y)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* browser = window_controllable_by_page(tab_id);
+    if (!browser)
+        return;
+    auto dpr = browser->devicePixelRatioF();
+    QPoint target(qRound(x / dpr), qRound(y / dpr));
+    // Deferred: this is called from inside a Servo delegate callback.
+    QTimer::singleShot(0, browser, [browser, target] { browser->move(target); });
+}
+
+void request_window_resize_to(::std::int32_t tab_id, ::std::int32_t width, ::std::int32_t height)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* browser = window_controllable_by_page(tab_id);
+    if (!browser)
+        return;
+    auto dpr = browser->devicePixelRatioF();
+    // Servo requests the OUTER size (with decorations); Qt resizes the client
+    // area, so subtract the frame overhead. Clamp to the available screen as
+    // the delegate contract suggests, and to a sane minimum.
+    QSize outer(qRound(width / dpr), qRound(height / dpr));
+    QSize frame_overhead = browser->frameGeometry().size() - browser->geometry().size();
+    QSize inner = (outer - frame_overhead).expandedTo(QSize(200, 100));
+    if (auto* screen = browser->screen())
+        inner = inner.boundedTo(screen->availableGeometry().size());
+    QTimer::singleShot(0, browser, [browser, inner] { browser->resize(inner); });
+}
+
 // QClipboard-backed system clipboard for Servo's ClipboardDelegate. Reads and
 // writes go through Qt so the whole process shares one clipboard connection
 // (Servo's default arboard delegate would open a second Wayland data channel).

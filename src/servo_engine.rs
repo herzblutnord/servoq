@@ -50,6 +50,7 @@ mod engine {
     };
     use servo::{AuthenticationRequest, PermissionFeature, PermissionRequest};
     use servo::{ClipboardDelegate, StringRequest};
+    use servo::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, ScreenGeometry};
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
     use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
@@ -1429,6 +1430,45 @@ mod engine {
                 // IME integration is out of scope for now (see WebContentView.h).
                 EmbedderControl::InputMethod(_) => {}
             }
+        }
+
+        // Backs window.screen.* / window.screenX/outerWidth/…: real screen and
+        // window-frame geometry from Qt, in device pixels. Returning None
+        // would make pages see a screen the size of the webview.
+        fn screen_geometry(&self, _webview: WebView) -> Option<ScreenGeometry> {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return None;
+            }
+            let g = crate::bridge::ffi::get_screen_geometry(self.tab_id);
+            if !g.valid {
+                return None;
+            }
+            Some(ScreenGeometry {
+                size: DeviceIntSize::new(g.screen_width, g.screen_height),
+                available_size: DeviceIntSize::new(g.available_width, g.available_height),
+                window_rect: DeviceIntRect::from_origin_and_size(
+                    DeviceIntPoint::new(g.window_x, g.window_y),
+                    DeviceIntSize::new(g.window_width, g.window_height),
+                ),
+            })
+        }
+
+        // window.moveTo / window.resizeTo from page content. C++ applies the
+        // popup-window policy (only honored for a single-tab window, like
+        // Firefox/Chrome) and defers the actual move/resize off the delegate
+        // callback.
+        fn request_move_to(&self, _webview: WebView, point: DeviceIntPoint) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) || !tab_exists(self.tab_id) {
+                return;
+            }
+            crate::bridge::ffi::request_window_move_to(self.tab_id, point.x, point.y);
+        }
+
+        fn request_resize_to(&self, _webview: WebView, size: DeviceIntSize) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) || !tab_exists(self.tab_id) {
+                return;
+            }
+            crate::bridge::ffi::request_window_resize_to(self.tab_id, size.width, size.height);
         }
 
         // Permissions API / permission-gated features (notifications,

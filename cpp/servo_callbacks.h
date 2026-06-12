@@ -44,6 +44,23 @@ struct AuthDialogResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_servoq$AuthDialogResult
 
+#ifndef CXXBRIDGE1_STRUCT_servoq$ScreenGeometryResult
+#define CXXBRIDGE1_STRUCT_servoq$ScreenGeometryResult
+struct ScreenGeometryResult final {
+  bool valid CXX_DEFAULT_VALUE(false);
+  ::std::int32_t screen_width CXX_DEFAULT_VALUE(0);
+  ::std::int32_t screen_height CXX_DEFAULT_VALUE(0);
+  ::std::int32_t available_width CXX_DEFAULT_VALUE(0);
+  ::std::int32_t available_height CXX_DEFAULT_VALUE(0);
+  ::std::int32_t window_x CXX_DEFAULT_VALUE(0);
+  ::std::int32_t window_y CXX_DEFAULT_VALUE(0);
+  ::std::int32_t window_width CXX_DEFAULT_VALUE(0);
+  ::std::int32_t window_height CXX_DEFAULT_VALUE(0);
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_servoq$ScreenGeometryResult
+
 // Push a complete RGBA frame (device pixels) to the WebContentView identified by tab_id.
 // Called from notify_new_frame_ready after webview.paint() + read_to_image().
 void deliver_frame(::std::int32_t tab_id,
@@ -127,6 +144,15 @@ AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::
 // per-origin decision first; otherwise shows a modal Allow/Block prompt.
 // Allow/Block persist; dismissing denies once without persisting.
 bool request_permission_sync(::std::int32_t tab_id, ::rust::Str origin, ::rust::Str feature);
+
+// window.screen.* backing data in device pixels (WebContentView.cpp).
+ScreenGeometryResult get_screen_geometry(::std::int32_t tab_id);
+
+// window.moveTo / window.resizeTo from page content (device pixels).
+// Honored only for single-tab windows (the Firefox/Chrome popup policy) and
+// applied deferred via QTimer so the delegate callback unwinds first.
+void request_window_move_to(::std::int32_t tab_id, ::std::int32_t x, ::std::int32_t y);
+void request_window_resize_to(::std::int32_t tab_id, ::std::int32_t width, ::std::int32_t height);
 
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
