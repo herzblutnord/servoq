@@ -517,7 +517,7 @@ void BrowserWindow::createMenus()
     add_bookmark_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
     connect(add_bookmark_action, &QAction::triggered, this, [this] {
         if (auto* tab = currentTab(); tab && tab->bookmarksBar())
-            tab->bookmarksBar()->showAddBookmarkDialog(tab->title(), tab->url());
+            tab->bookmarksBar()->showAddBookmarkDialog(tab->title(), tab->url(), tab->faviconBase64Png());
     });
     file_menu->addAction(add_bookmark_action);
     m_hamburger_menu->addAction(add_bookmark_action);

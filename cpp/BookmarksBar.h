@@ -33,7 +33,7 @@ public:
     void setOpenUrlInNewTabCallback(std::function<void(QString const&)> cb)  { m_open_url_in_new_tab_callback = std::move(cb); }
 
     // Called by BrowserWindow on Ctrl+D
-    void showAddBookmarkDialog(QString const& title = {}, QString const& url = {});
+    void showAddBookmarkDialog(QString const& title = {}, QString const& url = {}, QString const& favicon_base64_png = {});
 
 protected:
     bool event(QEvent* event) override;
@@ -44,7 +44,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    void showAddBookmarkDialog(QString const& folder_id, QString const& prefill_title, QString const& prefill_url);
+    void showAddBookmarkDialog(QString const& folder_id, QString const& prefill_title, QString const& prefill_url, QString const& favicon_base64_png);
     void showEditBookmarkDialog(QString const& id);
     void showEditFolderDialog(QString const& id);
     void showNewFolderDialog();

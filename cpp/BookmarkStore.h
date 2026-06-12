@@ -51,14 +51,14 @@ public:
     BookmarkItem const* findRootBookmark(QString const& id) const;
     BookmarkFolder const* findFolder(QString const& id) const;
 
-    void addBookmark(QString const& title, QString const& url, QString const& folder_id = {});
+    void addBookmark(QString const& title, QString const& url, QString const& folder_id = {}, QString const& favicon_base64_png = {});
     void addFolder(QString const& title);
     void editBookmark(QString const& id, QString const& title, QString const& url);
     bool updateFavicon(QString const& url, QString const& favicon_base64_png);
     void editFolder(QString const& id, QString const& title);
     void removeBookmark(QString const& id);
     void removeFolder(QString const& id);
-    void toggleBookmark(QString const& title, QString const& url);
+    void toggleBookmark(QString const& title, QString const& url, QString const& favicon_base64_png = {});
     void moveRootItem(QString const& id, int to_index);
     bool moveBookmarkToFolder(QString const& bookmark_id, QString const& folder_id, int to_index = -1);
     bool moveBookmarkToRoot(QString const& bookmark_id, int root_index = -1);

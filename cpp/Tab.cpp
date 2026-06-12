@@ -31,6 +31,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QBoxLayout>
+#include <QBuffer>
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -205,6 +206,7 @@ void Tab::showEmptyNewTab()
     m_url = QStringLiteral("about:blank");
     m_title = QStringLiteral("New Tab");
     m_favicon = {};
+    m_has_page_favicon = false;
     m_view->setInitialUrl(m_url);
     m_view->setEmptyNewTab(true);
     m_location_edit->setUrl(m_url);
@@ -220,6 +222,7 @@ void Tab::restoreSessionUrl(QString const& url)
     m_url = normalized_url;
     m_title = normalized_url;
     m_favicon = {};
+    m_has_page_favicon = false;
     m_view->setEmptyNewTab(false);
     m_view->setInitialUrl(normalized_url);
     m_location_edit->setUrl(m_url);
@@ -233,6 +236,7 @@ void Tab::attachExistingWebView(QString const& initial_url)
     auto normalized_url = initial_url.trimmed().isEmpty() ? QStringLiteral("about:blank") : initial_url.trimmed();
     m_is_empty_new_tab = false;
     m_url = normalized_url;
+    m_has_page_favicon = false;
     m_view->setEmptyNewTab(false);
     m_view->setInitialUrl(normalized_url);
     m_location_edit->setUrl(m_url);
@@ -362,6 +366,25 @@ QIcon Tab::siteIcon() const
     return m_favicon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : m_favicon;
 }
 
+QString Tab::faviconBase64Png() const
+{
+    if (!m_has_page_favicon || m_favicon.isNull())
+        return {};
+
+    auto pixmap = m_favicon.pixmap(QSize(64, 64));
+    if (pixmap.isNull())
+        return {};
+
+    QByteArray png_bytes;
+    QBuffer buffer(&png_bytes);
+    if (!buffer.open(QIODevice::WriteOnly))
+        return {};
+    if (!pixmap.toImage().save(&buffer, "PNG"))
+        return {};
+
+    return QString::fromLatin1(png_bytes.toBase64());
+}
+
 void Tab::applyControllerState()
 {
     if (m_is_empty_new_tab) {
@@ -431,6 +454,7 @@ void Tab::on_load_finish()
 
 void Tab::on_favicon_change(QIcon const& icon)
 {
+    m_has_page_favicon = !icon.isNull();
     m_favicon = icon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : icon;
     if (m_window)
         m_window->tabStateChanged(this);
@@ -559,7 +583,7 @@ void Tab::buildToolbar()
     });
     connect(m_bookmark_action, &QAction::triggered, this, [this] {
         servoq::toggle_bookmark(m_controller_id);
-        BookmarkStore::the()->toggleBookmark(m_title, m_url);
+        BookmarkStore::the()->toggleBookmark(m_title, m_url, faviconBase64Png());
         refreshBookmarkIcon();
         applyControllerState();
     });

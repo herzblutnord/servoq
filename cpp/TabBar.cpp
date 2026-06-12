@@ -388,7 +388,10 @@ void TabBar::paintEvent(QPaintEvent*)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    auto text_color = ChromeStyle::chrome_text(palette());
+    auto text_color = ChromeStyle::mix(
+        ChromeStyle::chrome_text(palette()),
+        ChromeStyle::chrome_active_tab_surface_top(palette()),
+        ChromeStyle::is_dark(palette()) ? 0.16 : 0.08);
     auto muted_text = ChromeStyle::chrome_muted_text(palette());
     auto is_vertical = m_tab_layout != TabLayout::Horizontal;
     auto is_collapsed = m_tab_layout == TabLayout::VerticalCollapsed;
@@ -880,7 +883,10 @@ void TabBar::updateTabButtonGeometry()
         if (!button)
             return;
         prepare_button(button);
-        auto should_be_visible = position != QTabBar::RightSide || index == currentIndex() || index == m_hovered_tab_index;
+        auto* tab = m_tab_widget ? m_tab_widget->tab(index) : nullptr;
+        auto should_be_visible = position != QTabBar::RightSide
+            || ((index == currentIndex() || index == m_hovered_tab_index)
+                && !(tab && tab->isEmptyNewTab() && m_tab_widget->count() == 1));
         bool did_update_button = false;
         if (button->isVisible() != should_be_visible) {
             button->setVisible(should_be_visible);
@@ -1123,6 +1129,7 @@ int TabWidget::addTab(Tab* tab, QString const& label)
     if (m_tab_bar->count() == 1)
         m_tab_bar->setCurrentIndex(0);
     updateTabLayout();
+    m_tab_bar->refreshTabLayout();
     return index;
 }
 

@@ -239,7 +239,7 @@ QString location_edit_style_sheet(QPalette const& palette)
     auto border        = style_sheet_color(border_color);
     auto hover_border  = style_sheet_color(border_color);
     auto focus_border  = style_sheet_color(focus_border_color);
-    auto text          = style_sheet_color(dark ? mix(chrome_text(palette), QColor(255, 255, 255), 0.08) : chrome_text(palette));
+    auto text          = style_sheet_color(dark ? mix(chrome_text(palette), surface_color, 0.12) : mix(chrome_text(palette), surface_color, 0.06));
     auto placeholder   = style_sheet_color(mix(chrome_muted_text(palette), surface_color, dark ? 0.46 : 0.34));
     auto selection     = style_sheet_color(chrome_accent(palette));
     auto selection_text= style_sheet_color(palette.color(QPalette::HighlightedText));

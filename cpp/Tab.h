@@ -34,6 +34,7 @@ public:
     QString title() const { return m_title; }
     QString url() const { return m_url; }
     bool isEmptyNewTab() const { return m_is_empty_new_tab; }
+    QString faviconBase64Png() const;
     QIcon siteIcon() const;
     QIcon tabIcon() const;
     int controllerId() const { return m_controller_id; }
@@ -111,6 +112,7 @@ private:
     QAction* m_reset_zoom_action { nullptr };
     QTimer* m_loading_animation_timer { nullptr };
     QIcon m_favicon;
+    bool m_has_page_favicon { false };
     QString m_url { QStringLiteral("about:blank") };
     QString m_hovered_link_url;
     QString m_title { QStringLiteral("New Tab") };

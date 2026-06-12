@@ -353,7 +353,7 @@ void BookmarksBar::rebuild()
         submenu->addSeparator();
         auto* add_to_folder = submenu->addAction(QStringLiteral("Add Bookmark Here…"));
         connect(add_to_folder, &QAction::triggered, this, [this, folder] {
-            showAddBookmarkDialog(folder.id);
+            showAddBookmarkDialog(folder.id, {}, {}, {});
         });
 
         // Install event filter on submenu for middle-click / right-click
@@ -537,7 +537,7 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
                     });
                 } else if (bm_type == QStringLiteral("folder")) {
                     ctx.addAction(QStringLiteral("Add Bookmark to Folder…"), this, [this, folder_id] {
-                        showAddBookmarkDialog(folder_id);
+                        showAddBookmarkDialog(folder_id, {}, {}, {});
                     });
                     ctx.addAction(QStringLiteral("Rename Folder…"), this, [this, folder_id] {
                         showEditFolderDialog(folder_id);
@@ -593,14 +593,15 @@ bool BookmarksBar::eventFilter(QObject* object, QEvent* event)
     return QToolBar::eventFilter(object, event);
 }
 
-void BookmarksBar::showAddBookmarkDialog(QString const& title, QString const& url)
+void BookmarksBar::showAddBookmarkDialog(QString const& title, QString const& url, QString const& favicon_base64_png)
 {
-    showAddBookmarkDialog({}, title, url);
+    showAddBookmarkDialog({}, title, url, favicon_base64_png);
 }
 
 void BookmarksBar::showAddBookmarkDialog(QString const& folder_id,
                                          QString const& prefill_title,
-                                         QString const& prefill_url)
+                                         QString const& prefill_url,
+                                         QString const& favicon_base64_png)
 {
     auto* dialog = new QDialog(this);
     dialog->setWindowTitle(QStringLiteral("Add Bookmark"));
@@ -629,9 +630,9 @@ void BookmarksBar::showAddBookmarkDialog(QString const& folder_id,
     connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
 
-    connect(dialog, &QDialog::accepted, this, [dialog, title_edit, url_edit, folder_combo] {
+    connect(dialog, &QDialog::accepted, this, [title_edit, url_edit, folder_combo, favicon_base64_png] {
         auto selected_folder = folder_combo->currentData().toString();
-        BookmarkStore::the()->addBookmark(title_edit->text(), url_edit->text(), selected_folder);
+        BookmarkStore::the()->addBookmark(title_edit->text(), url_edit->text(), selected_folder, favicon_base64_png);
     });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->open();
