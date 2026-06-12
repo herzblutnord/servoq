@@ -25,23 +25,7 @@ I still intend to keep an eye on upstream Ladybird UI changes and pull in the pa
 
 # Feature status
 
-## Missing browser features (WIP)
-
-* Downloads UI
-* Search suggestions from search engines
-* Automatic filter-list updates
-* Per-site zoom settings
-* DevTools
-* and much more...
-
-### Features currently blocked by Servo
-
-* Selecting Text on Websites
-* Scroll Bars
-* Find in page, including match count
-* Printing pages
-* Tab audio indicator
-* Cosmetic content blocking
+See [FEATURE MILESTONES](docs/FEATURE_MILESTONES.md) for implemented and WIP browser features.
 
 ## A note on how this was built
 
