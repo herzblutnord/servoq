@@ -72,7 +72,9 @@
 #include <QCloseEvent>
 #include <QDebug>
 #include <memory>
+#include <QPlainTextEdit>
 #include <QPointer>
+#include <QPushButton>
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QWheelEvent>
@@ -690,6 +692,18 @@ void BrowserWindow::createMenus()
             if (auto* tab = currentTab()) tab->resetZoom();
         });
         view_menu->addAction(reset_zoom_action);
+    }
+
+    // Developer tooling: the JS console rides the M3.7 evaluate_javascript
+    // bridge and is the manual test surface for it until the servoq://debug
+    // page (M4.4) exists. Hidden unless SERVOQ_DEBUG is set so normal chrome
+    // stays clean.
+    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        view_menu->addSeparator();
+        auto* js_console_action = new QAction(QStringLiteral("Evaluate &JavaScript…"), this);
+        js_console_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));
+        connect(js_console_action, &QAction::triggered, this, &BrowserWindow::showJavaScriptConsole);
+        view_menu->addAction(js_console_action);
     }
 
     view_menu->addSeparator();
@@ -1377,6 +1391,56 @@ void BrowserWindow::applySettings()
     if (m_toggle_bookmarks_action)
         m_toggle_bookmarks_action->setChecked(Settings::the()->show_bookmarks_bar());
     refreshHomeButtons();
+}
+
+// Developer JS console (SERVOQ_DEBUG only): non-modal dialog that evaluates
+// the entered script in the current tab via the M3.7 bridge and prints the
+// JSON result or error. The future servoq://debug page (M4.4) replaces this.
+void BrowserWindow::showJavaScriptConsole()
+{
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Evaluate JavaScript"));
+    dialog->resize(600, 440);
+
+    auto* layout = new QVBoxLayout(dialog);
+    auto* input = new QPlainTextEdit(dialog);
+    input->setPlaceholderText(QStringLiteral("JavaScript to evaluate in the current tab…"));
+    layout->addWidget(input, 1);
+
+    auto* run_button = new QPushButton(QStringLiteral("Run (Ctrl+Enter)"), dialog);
+    layout->addWidget(run_button);
+
+    auto* output = new QPlainTextEdit(dialog);
+    output->setReadOnly(true);
+    output->setPlaceholderText(QStringLiteral("Result"));
+    layout->addWidget(output, 1);
+
+    auto run_script = [this, input, output] {
+        auto* tab = currentTab();
+        if (!tab || tab->isEmptyNewTab()) {
+            output->setPlainText(QStringLiteral("No page in the current tab."));
+            return;
+        }
+        auto script = input->toPlainText();
+        if (script.trimmed().isEmpty())
+            return;
+        output->setPlainText(QStringLiteral("Evaluating…"));
+        QPointer<QPlainTextEdit> result_view(output);
+        evaluate_javascript_in_tab(tab->controllerId(), script,
+            [result_view](bool success, QString const& result) {
+                if (!result_view)
+                    return; // Console closed before the page answered.
+                result_view->setPlainText(success
+                        ? result
+                        : QStringLiteral("Error: %1").arg(result));
+            });
+    };
+    connect(run_button, &QPushButton::clicked, dialog, run_script);
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), dialog, run_script);
+
+    input->setFocus();
+    dialog->show();
 }
 
 void BrowserWindow::showHomeAndNewTabSettingsDialog()

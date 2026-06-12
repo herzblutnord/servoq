@@ -161,6 +161,11 @@ void notify_screenshot_taken(::std::int32_t tab_id,
                              ::std::int32_t width,
                              ::std::int32_t height);
 
+// JS evaluation result for servoq::evaluate_javascript (WebContentView.cpp):
+// JSON text on success, error description on failure. Routed to the callback
+// registered under request_id by ServoQ::evaluate_javascript_in_tab.
+void notify_javascript_result(::std::int32_t tab_id, ::std::uint64_t request_id, bool success, ::rust::Str result);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();

@@ -2506,6 +2506,26 @@ void notify_screenshot_taken(::std::int32_t tab_id,
     });
 }
 
+// ---- JS evaluation (debug tooling, M3.7) ----------------------------------
+// Pending callbacks keyed by request id; filled by
+// ServoQ::evaluate_javascript_in_tab, drained by notify_javascript_result.
+
+static QHash<uint64_t, std::function<void(bool, QString const&)>>& g_js_result_handlers()
+{
+    static QHash<uint64_t, std::function<void(bool, QString const&)>> handlers;
+    return handlers;
+}
+
+void notify_javascript_result(::std::int32_t tab_id, ::std::uint64_t request_id, bool success, ::rust::Str result)
+{
+    if (servo_shutdown_started())
+        return;
+    auto handler = g_js_result_handlers().take(request_id);
+    if (handler)
+        handler(success, QString::fromUtf8(result.data(), static_cast<qsizetype>(result.size())));
+    (void)tab_id;
+}
+
 // QClipboard-backed system clipboard for Servo's ClipboardDelegate. Reads and
 // writes go through Qt so the whole process shares one clipboard connection
 // (Servo's default arboard delegate would open a second Wayland data channel).
@@ -2542,3 +2562,18 @@ void show_notification(int32_t /*tab_id*/, rust::Str title, rust::Str body)
 }
 
 } // namespace servoq
+
+namespace ServoQ {
+
+// Defined after the servoq namespace so it can use the handler registry that
+// notify_javascript_result drains (same translation unit).
+void evaluate_javascript_in_tab(int tab_id, QString const& script,
+    std::function<void(bool, QString const&)> callback)
+{
+    static uint64_t s_next_request_id = 1;
+    auto request_id = s_next_request_id++;
+    servoq::g_js_result_handlers().insert(request_id, std::move(callback));
+    servoq::evaluate_javascript(tab_id, request_id, script.toStdString());
+}
+
+} // namespace ServoQ

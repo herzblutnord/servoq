@@ -120,6 +120,8 @@ pub mod ffi {
         fn request_window_resize_to(tab_id: i32, width: i32, height: i32);
         // Screenshot result: RGBA8 pixels (width*height*4) or empty = failed.
         fn notify_screenshot_taken(tab_id: i32, data: &[u8], width: i32, height: i32);
+        // JS evaluation result: success carries JSON text, failure the error.
+        fn notify_javascript_result(tab_id: i32, request_id: u64, success: bool, result: &str);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
@@ -157,6 +159,11 @@ pub mod ffi {
         // Asynchronous viewport screenshot; result arrives via
         // notify_screenshot_taken once the page is render-stable.
         fn take_screenshot(id: i32);
+
+        // Debug tooling: evaluate JavaScript in the page; the JSON-serialized
+        // result (or error text) arrives via notify_javascript_result with
+        // the same request_id.
+        fn evaluate_javascript(id: i32, request_id: u64, script: &str);
 
         // Engine lifecycle: called by WebContentView when widget is shown/hidden/destroyed
         fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
@@ -234,8 +241,9 @@ pub use crate::servo_engine::{
 // Page zoom — always present; no-ops when servo-engine feature is off
 pub use crate::servo_engine::{page_zoom, set_page_zoom};
 
-// Screenshot — always present; reports failure when servo-engine is off
-pub use crate::servo_engine::take_screenshot;
+// Screenshot and JS evaluation — always present; report failure when
+// servo-engine is off
+pub use crate::servo_engine::{evaluate_javascript, take_screenshot};
 
 pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
 pub use crate::servo_engine::{experimental_features_enabled, set_experimental_features_enabled};

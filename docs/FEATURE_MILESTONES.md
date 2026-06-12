@@ -82,7 +82,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 2.4 | Pinned tabs | ✅ | pin/unpin via tab context menu; pinned group kept first, compact favicon-only rendering (horizontal), pin indicator (vertical expanded), no close button, middle-click protected, drag stays within group, bulk closes skip pinned, persists with session |
 | 2.5 | Tab search popup | ✅ | Ctrl+Shift+A / View → Search Tabs…; Chrome-style filterable popup with per-row close |
 
-## Milestone 3 — Engine bridges (small Servo-API features, S–M each)
+## Milestone 3 — Engine bridges (small Servo-API features, S–M each)  ✅ **implemented (June 2026)**
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
@@ -92,7 +92,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 3.4 | Pinch zoom | ✅ | `Qt::ZoomNativeGesture` (both the embedded Wayland QWindow and the software-path widget) → `forward_pinch_zoom` → `adjust_pinch_zoom`; per-step factor `1.0 + value`, Servo clamps to [1, 10] |
 | 3.5 | Window move/resize requests + screen geometry | ✅ | `screen_geometry` backs `window.screen.*` with real QScreen + frame geometry (device px); `request_move_to`/`request_resize_to` honored only for single-tab windows (Firefox/Chrome popup policy), deferred via QTimer, outer→client size conversion, clamped to the available screen |
 | 3.6 | Screenshots | ✅ | File → Take Screenshot… (Ctrl+Shift+S) → async `take_screenshot` (waits for render-stable page) → save-as-PNG dialog defaulting to `~/Pictures/Screenshot <timestamp>.png` |
-| 3.7 | JS evaluation (debug tooling) | ✗ | `evaluate_javascript`; feeds servoq://debug later |
+| 3.7 | JS evaluation (debug tooling) | ✅ | `evaluate_javascript` bridge with request-id routing + JSON serialization of `JSValue`; manual test surface: View → Evaluate JavaScript… (Ctrl+Shift+J, visible only with `SERVOQ_DEBUG`); feeds servoq://debug later (M4.4) |
 
 ## Milestone 4 — Browsing-data UIs & internal pages (M each)
 

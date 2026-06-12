@@ -17,6 +17,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <functional>
+
 class QKeyEvent;
 class QMouseEvent;
 class QTimer;
@@ -27,6 +29,13 @@ namespace ServoQ {
 
 class Tab;
 class ServoWaylandContentWindow;
+
+// Debug tooling (M3.7): evaluate JavaScript in a tab's page context. The
+// callback runs on the main thread with (success, result_text) — JSON on
+// success, an error description otherwise. Implemented in WebContentView.cpp
+// next to the servoq::notify_javascript_result router.
+void evaluate_javascript_in_tab(int tab_id, QString const& script,
+    std::function<void(bool, QString const&)> callback);
 
 class WebContentView final : public QWidget {
     Q_OBJECT

@@ -2595,6 +2595,93 @@ mod engine {
         });
     }
 
+    // Debug tooling (M3.7): evaluate JavaScript in the tab's page context.
+    // Results are serialized to JSON-ish text and pushed back through
+    // notify_javascript_result with the caller-chosen request_id; this is the
+    // engine half of the future servoq://debug page (M4.4). The callback
+    // fires inside a later spin_event_loop on the main thread.
+    pub fn evaluate_javascript(id: i32, request_id: u64, script: &str) {
+        let Some(wv) = clone_webview(id) else {
+            crate::bridge::ffi::notify_javascript_result(
+                id,
+                request_id,
+                false,
+                "webview does not exist",
+            );
+            return;
+        };
+        debug_log_detail("evaluate_javascript", id, format!("request_id={request_id}"));
+        wv.evaluate_javascript(script, move |result| match result {
+            Ok(value) => crate::bridge::ffi::notify_javascript_result(
+                id,
+                request_id,
+                true,
+                &js_value_to_json(&value),
+            ),
+            Err(error) => crate::bridge::ffi::notify_javascript_result(
+                id,
+                request_id,
+                false,
+                &format!("{error:?}"),
+            ),
+        });
+    }
+
+    fn json_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    // JSON text for a JSValue. DOM references (Element/Window/…) cannot be
+    // serialized as data, so they become descriptive strings, like the
+    // "[object …]" placeholders a devtools console prints.
+    fn js_value_to_json(value: &servo::JSValue) -> String {
+        use servo::JSValue;
+        match value {
+            JSValue::Undefined => "undefined".to_string(),
+            JSValue::Null => "null".to_string(),
+            JSValue::Boolean(b) => b.to_string(),
+            JSValue::Number(n) => {
+                if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e15 {
+                    format!("{}", *n as i64)
+                } else {
+                    n.to_string()
+                }
+            }
+            JSValue::String(s) => format!("\"{}\"", json_escape(s)),
+            JSValue::Element(s) => format!("\"[object Element {}]\"", json_escape(s)),
+            JSValue::ShadowRoot(s) => format!("\"[object ShadowRoot {}]\"", json_escape(s)),
+            JSValue::Frame(s) => format!("\"[object Frame {}]\"", json_escape(s)),
+            JSValue::Window(s) => format!("\"[object Window {}]\"", json_escape(s)),
+            JSValue::Array(values) => {
+                let items: Vec<String> = values.iter().map(js_value_to_json).collect();
+                format!("[{}]", items.join(","))
+            }
+            JSValue::Object(map) => {
+                let mut entries: Vec<(&String, &JSValue)> = map.iter().collect();
+                entries.sort_by_key(|(key, _)| key.as_str());
+                let items: Vec<String> = entries
+                    .iter()
+                    .map(|(key, value)| {
+                        format!("\"{}\":{}", json_escape(key), js_value_to_json(value))
+                    })
+                    .collect();
+                format!("{{{}}}", items.join(","))
+            }
+        }
+    }
+
     pub fn set_experimental_features_enabled(enabled: bool) {
         if let Some(servo) = clone_servo() {
             for pref in EXPERIMENTAL_PREFS {
@@ -2923,6 +3010,13 @@ pub fn take_screenshot(_id: i32) {
     // doesn't wait forever.
     #[cfg(not(feature = "servo-engine"))]
     crate::bridge::ffi::notify_screenshot_taken(_id, &[], 0, 0);
+}
+
+pub fn evaluate_javascript(_id: i32, _request_id: u64, _script: &str) {
+    #[cfg(feature = "servo-engine")]
+    engine::evaluate_javascript(_id, _request_id, _script);
+    #[cfg(not(feature = "servo-engine"))]
+    crate::bridge::ffi::notify_javascript_result(_id, _request_id, false, "engine not available");
 }
 
 pub fn page_zoom(_id: i32) -> f32 {
