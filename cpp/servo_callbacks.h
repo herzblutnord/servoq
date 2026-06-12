@@ -33,6 +33,17 @@ struct PromptDialogResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
 
+#ifndef CXXBRIDGE1_STRUCT_servoq$AuthDialogResult
+#define CXXBRIDGE1_STRUCT_servoq$AuthDialogResult
+struct AuthDialogResult final {
+  bool accepted CXX_DEFAULT_VALUE(false);
+  ::rust::String username;
+  ::rust::String password;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_servoq$AuthDialogResult
+
 // Push a complete RGBA frame (device pixels) to the WebContentView identified by tab_id.
 // Called from notify_new_frame_ready after webview.paint() + read_to_image().
 void deliver_frame(::std::int32_t tab_id,
@@ -106,6 +117,11 @@ void notify_webview_close_requested(::std::int32_t tab_id);
 void clipboard_clear();
 ::rust::String clipboard_get_text();
 void clipboard_set_text(::rust::Str text);
+
+// HTTP authentication (401/407): modal username/password dialog
+// (WebDialogs.cpp). accepted=false means Cancel — the request proceeds
+// without credentials and the server's 401 page is shown.
+AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::Str url, bool for_proxy);
 
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.

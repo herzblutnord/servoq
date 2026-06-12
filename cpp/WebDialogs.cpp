@@ -27,16 +27,23 @@
 #include "servo_callbacks.h"
 
 #include <QColorDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFormLayout>
 #include <QInputDialog>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMap>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPoint>
+#include <QPushButton>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
+#include <QVBoxLayout>
 #include <QWidget>
 
 namespace servoq {
@@ -201,6 +208,64 @@ PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str me
             paths.append(path);
     }
     return paths.join(QLatin1Char('\n')).toStdString();
+}
+
+AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::Str url, bool for_proxy)
+{
+    AuthDialogResult result;
+    result.accepted = false;
+    if (servo_shutdown_started())
+        return result;
+    auto* view = ServoQ::WebContentView::findByTabId(tab_id);
+
+    auto request_url = QUrl(QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size())));
+    auto origin = request_url.host();
+    if (request_url.port() > 0)
+        origin += QStringLiteral(":%1").arg(request_url.port());
+    if (origin.isEmpty())
+        origin = QStringLiteral("This site");
+
+    QDialog dialog(dialog_parent_for_view(view));
+    dialog.setWindowTitle(QStringLiteral("Sign in"));
+    dialog.setMinimumWidth(380);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    auto prompt = for_proxy
+        ? QStringLiteral("The proxy %1 requires a username and password.").arg(origin)
+        : QStringLiteral("%1 is asking for your username and password.").arg(origin);
+    auto* prompt_label = new QLabel(prompt, &dialog);
+    prompt_label->setWordWrap(true);
+    layout->addWidget(prompt_label);
+
+    // Like Chrome: warn when HTTP Basic credentials would travel unencrypted.
+    if (!for_proxy && request_url.scheme() == QStringLiteral("http")) {
+        auto* warning = new QLabel(QStringLiteral("Your connection to this site is not private."), &dialog);
+        warning->setWordWrap(true);
+        warning->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+        layout->addWidget(warning);
+    }
+
+    auto* form = new QFormLayout;
+    auto* username_edit = new QLineEdit(&dialog);
+    auto* password_edit = new QLineEdit(&dialog);
+    password_edit->setEchoMode(QLineEdit::Password);
+    form->addRow(QStringLiteral("Username:"), username_edit);
+    form->addRow(QStringLiteral("Password:"), password_edit);
+    layout->addLayout(form);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Sign in"));
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    username_edit->setFocus();
+    result.accepted = dialog.exec() == QDialog::Accepted;
+    if (result.accepted) {
+        result.username = username_edit->text().toStdString();
+        result.password = password_edit->text().toStdString();
+    }
+    return result;
 }
 
 void notify_webview_close_requested(::std::int32_t tab_id)

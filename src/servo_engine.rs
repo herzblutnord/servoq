@@ -48,6 +48,7 @@ mod engine {
         WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
         WindowRenderingContext,
     };
+    use servo::AuthenticationRequest;
     use servo::{ClipboardDelegate, StringRequest};
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
@@ -1400,6 +1401,36 @@ mod engine {
                 }
                 // IME integration is out of scope for now (see WebContentView.h).
                 EmbedderControl::InputMethod(_) => {}
+            }
+        }
+
+        // HTTP Basic/Digest authentication (401/407). Synchronous modal dialog
+        // like the other embedder controls: the fetch blocks on its own
+        // (network) thread awaiting the oneshot response, and the SPINNING
+        // guard makes the nested Qt event loop safe. Dropping the request
+        // without responding continues the load without credentials, which
+        // surfaces the server's 401 page — the same behavior as Cancel in
+        // Chrome and Firefox. Credentials are forwarded to Servo only; ServoQ
+        // never logs or stores them (see remove_persisted_http_auth_cache).
+        fn request_authentication(
+            &self,
+            _webview: WebView,
+            authentication_request: AuthenticationRequest,
+        ) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("request_authentication", self.tab_id);
+                return;
+            }
+            let result = crate::bridge::ffi::show_authentication_dialog_sync(
+                self.tab_id,
+                authentication_request.url().as_str(),
+                authentication_request.for_proxy(),
+            );
+            if result.accepted {
+                authentication_request.authenticate(result.username, result.password);
             }
         }
 

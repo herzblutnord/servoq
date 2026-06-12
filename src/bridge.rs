@@ -16,6 +16,14 @@ pub mod ffi {
         pub value: String,
     }
 
+    // Result of the HTTP authentication dialog: accepted=false means Cancel
+    // (the request proceeds without credentials).
+    pub struct AuthDialogResult {
+        pub accepted: bool,
+        pub username: String,
+        pub password: String,
+    }
+
     unsafe extern "C++" {
         include!("servoq/cpp/qt_app.h");
         fn run_qt_application() -> i32;
@@ -79,6 +87,13 @@ pub mod ffi {
         fn clipboard_clear();
         fn clipboard_get_text() -> String;
         fn clipboard_set_text(text: &str);
+        // HTTP auth (401/407): modal username/password dialog, like the other
+        // *_sync embedder dialogs. for_proxy selects the proxy wording.
+        fn show_authentication_dialog_sync(
+            tab_id: i32,
+            url: &str,
+            for_proxy: bool,
+        ) -> AuthDialogResult;
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
