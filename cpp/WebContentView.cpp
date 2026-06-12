@@ -38,6 +38,7 @@
 #include <QMap>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -538,6 +539,22 @@ public:
 protected:
     bool event(QEvent* event) override
     {
+        // Touchpad pinch arrives on the embedded QWindow (it has pointer
+        // focus while the cursor is over the page). Mirrors Ladybird's
+        // ZoomNativeGesture handling; Servo applies the magnification.
+        if (event->type() == QEvent::NativeGesture) {
+            auto const& gesture = *static_cast<QNativeGestureEvent const*>(event);
+            if (gesture.gestureType() == Qt::ZoomNativeGesture && m_owner
+                && !g_servo_shutting_down().load(std::memory_order_acquire)) {
+                qreal dpr = devicePixelRatio();
+                auto pos = gesture.position();
+                servoq::forward_pinch_zoom(m_owner->tabId(),
+                    static_cast<float>(1.0 + gesture.value()),
+                    static_cast<float>(pos.x() * dpr),
+                    static_cast<float>(pos.y() * dpr));
+                return true;
+            }
+        }
         if (event->type() == QEvent::UpdateRequest) {
             qt_perf_stats().qwindow_update_requests++;
             if (g_servo_shutting_down().load(std::memory_order_acquire))
@@ -1961,6 +1978,21 @@ bool WebContentView::event(QEvent* ev)
     }
     if (ev->type() == QEvent::DevicePixelRatioChange) {
         forwardResizeToEngine(); // sends new physical size + new hidpi scale factor
+    }
+    // Software-rendering path: pinch gestures land on the widget when no
+    // embedded Wayland QWindow exists (the Wayland path handles them in
+    // ServoWaylandContentWindow::event above).
+    if (ev->type() == QEvent::NativeGesture) {
+        auto const& gesture = *static_cast<QNativeGestureEvent const*>(ev);
+        if (gesture.gestureType() == Qt::ZoomNativeGesture && m_webview_created) {
+            qreal dpr = devicePixelRatioF();
+            auto pos = gesture.position();
+            servoq::forward_pinch_zoom(m_tab_id,
+                static_cast<float>(1.0 + gesture.value()),
+                static_cast<float>(pos.x() * dpr),
+                static_cast<float>(pos.y() * dpr));
+            return true;
+        }
     }
     if (ev->type() == QEvent::PaletteChange || ev->type() == QEvent::ApplicationPaletteChange || ev->type() == QEvent::ThemeChange) {
         QTimer::singleShot(0, this, [this] {

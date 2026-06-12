@@ -89,7 +89,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 3.1 | Clipboard delegate | ✅ | `QtClipboardDelegate` in `servo_engine.rs` bridges Servo `ClipboardDelegate` ↔ QClipboard (one clipboard connection per process; replaces the arboard default) |
 | 3.2 | HTTP auth prompt | ✅ | `request_authentication` → modal Qt sign-in dialog (`WebDialogs.cpp`); proxy wording for 407, plain-HTTP warning, Cancel continues without credentials |
 | 3.3 | Permission prompts + per-origin persistence | ✅ | `request_permission` → Allow/Block/Not-Now prompt (`WebDialogs.cpp`); explicit answers persist per origin in `permissions.json` (`PermissionStore`), dismiss denies once (Chrome semantics); Settings → Clear Site Permissions. Enabled the permission-gated prefs `dom_geolocation_enabled`, `dom_wakelock_enabled`, `dom_credential_management_enabled` (WebRTC/media capture still need more than prompts) |
-| 3.4 | Pinch zoom | ✗ | `adjust_pinch_zoom` from touchpad gesture events |
+| 3.4 | Pinch zoom | ✅ | `Qt::ZoomNativeGesture` (both the embedded Wayland QWindow and the software-path widget) → `forward_pinch_zoom` → `adjust_pinch_zoom`; per-step factor `1.0 + value`, Servo clamps to [1, 10] |
 | 3.5 | Window move/resize requests + screen geometry | ✗ | `request_move_to`/`request_resize_to`/`screen_geometry` |
 | 3.6 | Screenshots | ✗ | `take_screenshot`; menu action + Ctrl+Shift+S |
 | 3.7 | JS evaluation (debug tooling) | ✗ | `evaluate_javascript`; feeds servoq://debug later |

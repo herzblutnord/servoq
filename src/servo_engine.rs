@@ -2283,6 +2283,21 @@ mod engine {
         }
     }
 
+    // Touchpad pinch gesture (Qt::ZoomNativeGesture). `scale` is the final
+    // multiplicative factor for this gesture step (1.0 + Qt's incremental
+    // value, matching servoshell's `delta + 1.0` for winit's PinchGesture);
+    // Servo multiplies the current pinch zoom by it and clamps to [1, 10].
+    // Pinch zoom magnifies the viewport without relayout — page zoom
+    // (Ctrl+wheel / Ctrl+±) stays a separate mechanism.
+    pub fn forward_pinch_zoom(id: i32, scale: f32, x: f32, y: f32) {
+        if let Some(wv) = clone_webview(id) {
+            if diag_enabled() {
+                diag(format!("pinch_zoom id={id} scale={scale:.3} device=({x:.1},{y:.1})"));
+            }
+            wv.adjust_pinch_zoom(scale, Point2D::new(x, y));
+        }
+    }
+
     // key_char: Unicode code point from Qt event.text()[0], 0 for non-printable.
     // qt_key:   Qt::Key enum value.
     // mods:     Qt::KeyboardModifiers flags.
@@ -2799,6 +2814,11 @@ pub fn forward_mouse_button(_id: i32, _action: i32, _button: i32, _x: f32, _y: f
 pub fn forward_wheel(_id: i32, _dx: f64, _dy: f64, _x: f32, _y: f32) {
     #[cfg(feature = "servo-engine")]
     engine::forward_wheel(_id, _dx, _dy, _x, _y);
+}
+
+pub fn forward_pinch_zoom(_id: i32, _scale: f32, _x: f32, _y: f32) {
+    #[cfg(feature = "servo-engine")]
+    engine::forward_pinch_zoom(_id, _scale, _x, _y);
 }
 
 pub fn forward_key(_id: i32, _down: bool, _key_char: u32, _qt_key: i32, _mods: u32) {

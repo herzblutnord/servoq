@@ -158,6 +158,10 @@ pub mod ffi {
         fn forward_mouse_move(id: i32, x: f32, y: f32);
         fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32, mods: u32);
         fn forward_wheel(id: i32, dx: f64, dy: f64, x: f32, y: f32);
+        // Touchpad pinch (Qt::ZoomNativeGesture): scale is the per-step
+        // multiplicative factor (1.0 + Qt value), x/y the gesture center in
+        // device pixels.
+        fn forward_pinch_zoom(id: i32, scale: f32, x: f32, y: f32);
         fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32);
         fn forward_focus(id: i32, focused: bool);
         fn forward_resize(id: i32, w: i32, h: i32, scale: f32);
@@ -196,9 +200,9 @@ pub use crate::servo_engine::{
 // Engine-lifecycle and input functions (always present; no-ops when feature is off)
 pub use crate::servo_engine::{
     close_webview, create_webview, create_webview_wayland_window, forward_focus, forward_key,
-    forward_mouse_button, forward_mouse_move, forward_resize, forward_theme_change, forward_wheel,
-    init_servo, notify_wayland_subsurface_unmapped, present_wayland_webview, set_webview_active,
-    shutdown_servo, tick_servo, tick_webview,
+    forward_mouse_button, forward_mouse_move, forward_pinch_zoom, forward_resize,
+    forward_theme_change, forward_wheel, init_servo, notify_wayland_subsurface_unmapped,
+    present_wayland_webview, set_webview_active, shutdown_servo, tick_servo, tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off
