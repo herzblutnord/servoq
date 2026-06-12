@@ -100,6 +100,13 @@ PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str me
 // window.close() from web content: close the owning tab (deferred via QTimer).
 void notify_webview_close_requested(::std::int32_t tab_id);
 
+// System clipboard bridge for Servo's ClipboardDelegate (QClipboard-backed).
+// Called on the main thread only (Servo delegate callbacks fire inside
+// spin_event_loop); implemented in WebContentView.cpp.
+void clipboard_clear();
+::rust::String clipboard_get_text();
+void clipboard_set_text(::rust::Str text);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();

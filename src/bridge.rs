@@ -74,6 +74,11 @@ pub mod ffi {
         fn show_file_picker_sync(tab_id: i32, filters: &str, allow_multiple: bool) -> String;
         // window.close() from web content: close the tab owning this webview.
         fn notify_webview_close_requested(tab_id: i32);
+        // System clipboard bridge for Servo's ClipboardDelegate (QClipboard).
+        // Main-thread only: the delegate fires inside spin_event_loop.
+        fn clipboard_clear();
+        fn clipboard_get_text() -> String;
+        fn clipboard_set_text(text: &str);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.

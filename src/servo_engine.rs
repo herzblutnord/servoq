@@ -48,6 +48,7 @@ mod engine {
         WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
         WindowRenderingContext,
     };
+    use servo::{ClipboardDelegate, StringRequest};
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
     use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
@@ -554,6 +555,7 @@ mod engine {
         EngineState {
             servo,
             user_content_manager,
+            clipboard_delegate: Rc::new(QtClipboardDelegate),
             tabs: HashMap::new(),
             rendering_context,
         }
@@ -798,8 +800,34 @@ mod engine {
         // See https://github.com/servo/servo/issues/36711.
         servo: Servo,
         user_content_manager: Rc<UserContentManager>,
+        clipboard_delegate: Rc<QtClipboardDelegate>,
         tabs: HashMap<i32, TabEntry>,
         rendering_context: EngineRenderingContext,
+    }
+
+    // System clipboard backed by QClipboard instead of Servo's default arboard
+    // delegate. Servo routes every engine-side clipboard operation here: the
+    // async clipboard API (navigator.clipboard), execCommand copy/cut/paste,
+    // and the EditingAction events ServoQ dispatches for Ctrl+C/X/V. Going
+    // through Qt keeps one clipboard connection per process (arboard would
+    // open a second Wayland data-control connection) and makes Servo-initiated
+    // copies visible to the rest of the Qt chrome immediately. All delegate
+    // methods are invoked on the main thread from spin_event_loop, which is
+    // the thread QClipboard requires.
+    struct QtClipboardDelegate;
+
+    impl ClipboardDelegate for QtClipboardDelegate {
+        fn clear(&self, _webview: WebView) {
+            crate::bridge::ffi::clipboard_clear();
+        }
+
+        fn get_text(&self, _webview: WebView, request: StringRequest) {
+            request.success(crate::bridge::ffi::clipboard_get_text());
+        }
+
+        fn set_text(&self, _webview: WebView, new_contents: String) {
+            crate::bridge::ffi::clipboard_set_text(&new_contents);
+        }
     }
 
     // ---- delegate ------------------------------------------
@@ -1181,18 +1209,23 @@ mod engine {
         fn request_create_new(&self, _parent_webview: WebView, request: CreateNewWebViewRequest) {
             if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
             let new_id = crate::servo_controller::create_tab();
-            let (rc, size, scale) = ENGINE.with(|s| {
+            let (rc, clipboard, size, scale) = ENGINE.with(|s| {
                 let s = s.borrow();
                 let e = match s.as_ref() {
                     Some(e) => e,
-                    None => return (None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
+                    None => return (None, None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
                 };
                 let (size, scale) = e.tabs.get(&self.tab_id)
                     .map(|t| (t.physical_size, t.hidpi_scale_factor))
                     .unwrap_or((PhysicalSize::new(800, 600), Scale::new(1.0)));
-                (Some(e.rendering_context.as_rendering_context()), size, scale)
+                (
+                    Some(e.rendering_context.as_rendering_context()),
+                    Some(e.clipboard_delegate.clone()),
+                    size,
+                    scale,
+                )
             });
-            let Some(rc) = rc else { return; };
+            let (Some(rc), Some(clipboard)) = (rc, clipboard) else { return; };
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: new_id,
                 rendering_context: ENGINE.with(|s| s.borrow().as_ref().map(|e| e.rendering_context.clone()).unwrap()),
@@ -1201,6 +1234,7 @@ mod engine {
             });
             let webview = request.builder(rc)
                 .hidpi_scale_factor(scale)
+                .clipboard_delegate(clipboard)
                 .delegate(delegate)
                 .build();
             configure_webview_diagnostics(&webview);
@@ -1529,6 +1563,7 @@ mod engine {
                 .url(url.clone())
                 .hidpi_scale_factor(scale_factor)
                 .user_content_manager(engine.user_content_manager.clone())
+                .clipboard_delegate(engine.clipboard_delegate.clone())
                 .delegate(delegate)
                 .build();
             configure_webview_diagnostics(&webview);
@@ -1662,6 +1697,7 @@ mod engine {
             .url(url.clone())
             .hidpi_scale_factor(scale_factor)
             .user_content_manager(engine.user_content_manager.clone())
+            .clipboard_delegate(engine.clipboard_delegate.clone())
             .delegate(delegate)
             .build();
             configure_webview_diagnostics(&webview);
@@ -1769,6 +1805,7 @@ mod engine {
             .url(url.clone())
             .hidpi_scale_factor(scale_factor)
             .user_content_manager(engine.user_content_manager.clone())
+            .clipboard_delegate(engine.clipboard_delegate.clone())
             .delegate(delegate)
             .build();
             configure_webview_diagnostics(&webview);

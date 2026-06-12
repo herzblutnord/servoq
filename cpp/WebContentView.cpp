@@ -2338,6 +2338,28 @@ void request_open_tab_for_id(::std::int32_t tab_id)
     return action_map[selected];
 }
 
+// QClipboard-backed system clipboard for Servo's ClipboardDelegate. Reads and
+// writes go through Qt so the whole process shares one clipboard connection
+// (Servo's default arboard delegate would open a second Wayland data channel).
+void clipboard_clear()
+{
+    if (auto* clipboard = QGuiApplication::clipboard())
+        clipboard->clear();
+}
+
+rust::String clipboard_get_text()
+{
+    if (auto* clipboard = QGuiApplication::clipboard())
+        return clipboard->text().toStdString();
+    return {};
+}
+
+void clipboard_set_text(rust::Str text)
+{
+    if (auto* clipboard = QGuiApplication::clipboard())
+        clipboard->setText(QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())));
+}
+
 void show_notification(int32_t /*tab_id*/, rust::Str title, rust::Str body)
 {
     static QSystemTrayIcon* s_tray = nullptr;
