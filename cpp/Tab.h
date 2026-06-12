@@ -33,6 +33,8 @@ public:
 
     QString title() const { return m_title; }
     QString url() const { return m_url; }
+    bool isEmptyNewTab() const { return m_is_empty_new_tab; }
+    QIcon siteIcon() const;
     QIcon tabIcon() const;
     int controllerId() const { return m_controller_id; }
     WebContentView* view() const { return m_view; }

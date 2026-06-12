@@ -50,6 +50,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontMetrics>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -457,14 +458,11 @@ void BrowserWindow::createMenus()
     file_menu->addAction(m_close_tab_action);
     m_hamburger_menu->addAction(m_close_tab_action);
 
-    m_reopen_tab_action = new QAction("&Reopen Last Tab", this);
+    m_reopen_tab_action = new QAction("Reopen &Closed Tab", this);
     m_reopen_tab_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
-    m_reopen_tab_action->setEnabled(false); // disabled until a tab is closed
+    m_reopen_tab_action->setEnabled(false);
     connect(m_reopen_tab_action, &QAction::triggered, this, [this] {
-        if (m_closed_tabs.isEmpty()) return;
-        auto [url, title] = m_closed_tabs.takeLast(); // pop from top of stack
-        createNewTab(url);
-        m_reopen_tab_action->setEnabled(!m_closed_tabs.isEmpty());
+        reopenClosedTabAt(m_closed_tabs.size() - 1);
     });
     file_menu->addAction(m_reopen_tab_action);
     m_hamburger_menu->addAction(m_reopen_tab_action);
@@ -522,6 +520,10 @@ void BrowserWindow::createMenus()
     auto* history_menu = menuBar()->addMenu("&History");
     connect(history_menu, &QMenu::aboutToShow, this, [this, history_menu] {
         history_menu->clear();
+        history_menu->addAction(m_reopen_tab_action);
+        auto* recently_closed_menu = history_menu->addMenu(QStringLiteral("Recently Closed Tabs"));
+        populateRecentlyClosedTabsMenu(recently_closed_menu);
+        history_menu->addSeparator();
         auto* clear_action = history_menu->addAction(QStringLiteral("Clear History"), this, [this] {
             HistoryStore::the()->clearHistory();
         });
@@ -916,11 +918,7 @@ void BrowserWindow::closeTab(int index)
     debug_log("close_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(tab == currentTab() ? 1 : 0));
 
     if (tab) {
-        m_closed_tabs.append({ tab->url(), tab->title() });
-        if (m_closed_tabs.size() > 10)
-            m_closed_tabs.removeFirst();
-        if (m_reopen_tab_action)
-            m_reopen_tab_action->setEnabled(true);
+        rememberClosedTab(*tab);
         if (tab == m_active_tab) {
             tab->setActive(false);
             m_active_tab = nullptr;
@@ -930,6 +928,86 @@ void BrowserWindow::closeTab(int index)
     m_tabs->removeTab(index);
     servoq::close_tab(tab_id);
     updateCurrentTabState();
+}
+
+void BrowserWindow::rememberClosedTab(Tab const& tab)
+{
+    m_closed_tabs.append({
+        tab.url(),
+        tab.title(),
+        tab.siteIcon(),
+        tab.isEmptyNewTab(),
+    });
+    if (m_closed_tabs.size() > 10)
+        m_closed_tabs.removeFirst();
+    updateRecentlyClosedActions();
+}
+
+void BrowserWindow::reopenClosedTabAt(int index)
+{
+    if (index < 0 || index >= m_closed_tabs.size())
+        return;
+
+    auto entry = m_closed_tabs.takeAt(index);
+    updateRecentlyClosedActions();
+
+    if (entry.was_empty_new_tab)
+        createNewTab();
+    else
+        createNewTab(entry.url);
+}
+
+void BrowserWindow::reopenAllClosedTabs()
+{
+    while (!m_closed_tabs.isEmpty())
+        reopenClosedTabAt(m_closed_tabs.size() - 1);
+}
+
+void BrowserWindow::updateRecentlyClosedActions()
+{
+    if (m_reopen_tab_action)
+        m_reopen_tab_action->setEnabled(!m_closed_tabs.isEmpty());
+}
+
+void BrowserWindow::populateRecentlyClosedTabsMenu(QMenu* menu)
+{
+    menu->clear();
+
+    if (m_closed_tabs.isEmpty()) {
+        menu->setEnabled(false);
+        auto* empty_action = menu->addAction(QStringLiteral("No Recently Closed Tabs"));
+        empty_action->setEnabled(false);
+        return;
+    }
+
+    menu->setEnabled(true);
+    constexpr int MaxMenuLabelWidth = 520;
+    for (int i = m_closed_tabs.size() - 1; i >= 0; --i) {
+        auto const& entry = m_closed_tabs[i];
+        auto title = entry.title.trimmed();
+        auto url = entry.url.trimmed();
+        if (title.isEmpty())
+            title = entry.was_empty_new_tab ? QStringLiteral("New Tab") : url;
+        if (title.isEmpty())
+            title = QStringLiteral("New Tab");
+        auto label = url.isEmpty() || title == url ? title : QStringLiteral("%1 - %2").arg(title, url);
+
+        auto* action = menu->addAction(QFontMetrics(menu->font()).elidedText(label, Qt::ElideRight, MaxMenuLabelWidth), this, [this, i] {
+            reopenClosedTabAt(i);
+        });
+        action->setIcon(entry.icon);
+        action->setIconVisibleInMenu(true);
+        action->setToolTip(entry.url);
+    }
+
+    menu->addSeparator();
+    menu->addAction(QStringLiteral("Reopen All Tabs"), this, [this] {
+        reopenAllClosedTabs();
+    });
+    menu->addAction(QStringLiteral("Clear Recently Closed Tabs"), this, [this] {
+        m_closed_tabs.clear();
+        updateRecentlyClosedActions();
+    });
 }
 
 void BrowserWindow::closeTabForController(int controller_id)

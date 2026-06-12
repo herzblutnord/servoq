@@ -333,6 +333,11 @@ QIcon Tab::tabIcon() const
 {
     if (m_is_loading)
         return loading_spinner_icon(palette(), m_loading_animation_frame);
+    return siteIcon();
+}
+
+QIcon Tab::siteIcon() const
+{
     return m_favicon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : m_favicon;
 }
 

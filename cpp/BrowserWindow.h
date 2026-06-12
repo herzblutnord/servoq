@@ -14,7 +14,7 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QPair>
+#include <QIcon>
 #include <QString>
 #include <QVector>
 
@@ -58,6 +58,13 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    struct ClosedTabEntry {
+        QString url;
+        QString title;
+        QIcon icon;
+        bool was_empty_new_tab { false };
+    };
+
     void createMenus();
     void createInitialTab();
     void clearLocationEditFocusForMousePress(QObject* target);
@@ -73,6 +80,11 @@ private:
     void refreshBookmarksBars();
     void updateCurrentTabState();
     void updateChromeStyle();
+    void rememberClosedTab(Tab const& tab);
+    void reopenClosedTabAt(int index);
+    void reopenAllClosedTabs();
+    void updateRecentlyClosedActions();
+    void populateRecentlyClosedTabsMenu(QMenu* menu);
     bool shouldDrawWindowBorder() const;
     void updateWindowBorder();
 
@@ -90,7 +102,7 @@ private:
     QAction* m_show_menu_bar_action { nullptr };
     QAction* m_reopen_tab_action { nullptr };
     QAction* m_fullscreen_action { nullptr };
-    QVector<QPair<QString, QString>> m_closed_tabs; // url, title stack; capped at 10
+    QVector<ClosedTabEntry> m_closed_tabs; // oldest to newest; capped at 10
     bool m_is_updating_chrome_style { false };
     bool m_was_maximized_before_fullscreen { false };
     int m_activation_serial { 0 };
