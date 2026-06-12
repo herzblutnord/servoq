@@ -601,6 +601,7 @@ mod engine {
         loading: bool,
         status_text: String,
         active: bool,
+        qt_modifiers: u32,
         physical_size: PhysicalSize<u32>,
         hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     }
@@ -1043,6 +1044,7 @@ mod engine {
                         loading: false,
                         status_text: String::new(),
                         active: true,
+                        qt_modifiers: 0,
                         physical_size: size,
                         hidpi_scale_factor: scale,
                     });
@@ -1364,6 +1366,7 @@ mod engine {
                     loading: false,
                     status_text: String::new(),
                     active: true,
+                    qt_modifiers: 0,
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1495,6 +1498,7 @@ mod engine {
                     loading: false,
                     status_text: String::new(),
                     active: true,
+                    qt_modifiers: 0,
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1600,6 +1604,7 @@ mod engine {
                     loading: false,
                     status_text: String::new(),
                     active: true,
+                    qt_modifiers: 0,
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1888,7 +1893,7 @@ mod engine {
         }
     }
 
-    pub fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32) {
+    pub fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32, mods: u32) {
         let action = match action {
             0 => MouseButtonAction::Down,
             _ => MouseButtonAction::Up,
@@ -1901,10 +1906,10 @@ mod engine {
         };
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseButton(MouseButtonEvent::new(action, button, point));
-        if let Some(wv) = clone_webview(id) {
+        if let Some(wv) = sync_qt_modifiers_before_mouse(id, mods) {
             if diag_enabled() {
                 diag(format!(
-                    "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1})"
+                    "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1}) mods={mods}"
                 ));
             }
             wv.notify_input_event(event);
@@ -1944,9 +1949,63 @@ mod engine {
     // True for a Control chord that is not AltGr. On Linux AltGr reports as
     // Ctrl+Alt and is used to type characters on international layouts, so it must
     // be excluded — a genuine Ctrl shortcut never holds Alt.
+    const QT_SHIFT_MODIFIER: u32 = 0x0200_0000;
+    const QT_CONTROL_MODIFIER: u32 = 0x0400_0000;
+    const QT_ALT_MODIFIER: u32 = 0x0800_0000;
+    const QT_META_MODIFIER: u32 = 0x1000_0000;
+    const QT_TRACKED_MODIFIERS: u32 =
+        QT_SHIFT_MODIFIER | QT_CONTROL_MODIFIER | QT_ALT_MODIFIER | QT_META_MODIFIER;
+
+    fn normalize_qt_modifiers(mods: u32) -> u32 {
+        mods & QT_TRACKED_MODIFIERS
+    }
+
+    fn remember_qt_modifiers(id: i32, mods: u32) {
+        let normalized = normalize_qt_modifiers(mods);
+        ENGINE.with(|s| {
+            if let Some(tab) = s.borrow_mut().as_mut().and_then(|e| e.tabs.get_mut(&id)) {
+                tab.qt_modifiers = normalized;
+            }
+        });
+    }
+
+    fn sync_qt_modifiers_before_mouse(id: i32, mods: u32) -> Option<WebView> {
+        let normalized = normalize_qt_modifiers(mods);
+        let (webview, previous) = ENGINE.with(|s| {
+            let mut state = s.borrow_mut();
+            let tab = state.as_mut()?.tabs.get_mut(&id)?;
+            let previous = tab.qt_modifiers;
+            tab.qt_modifiers = normalized;
+            Some((tab.webview.clone(), previous))
+        })?;
+
+        if previous != normalized {
+            // Servo's constellation applies its last keyboard modifier state to
+            // subsequent mouse events. Browser-level shortcuts can move focus
+            // into Qt chrome after Servo saw Ctrl/Shift/Alt/Meta go down, so the
+            // matching key-up never reaches Servo. Sync the stored modifier mask
+            // before a mouse click so ordinary links do not become Ctrl-clicks.
+            let kb_event = ServoKeyboardEvent::new_without_event(
+                KeyState::Up,
+                Key::Named(NamedKey::Unidentified),
+                Code::Unidentified,
+                Location::Standard,
+                qt_mods_to_modifiers(normalized),
+                false,
+                false,
+            );
+            if diag_enabled() {
+                diag(format!(
+                    "sync_modifiers_before_mouse id={id} previous={previous} current={normalized}"
+                ));
+            }
+            webview.notify_input_event(InputEvent::Keyboard(kb_event));
+        }
+
+        Some(webview)
+    }
+
     fn ctrl_chord_active(mods: u32) -> bool {
-        const QT_CONTROL_MODIFIER: u32 = 0x0400_0000;
-        const QT_ALT_MODIFIER: u32 = 0x0800_0000;
         mods & QT_CONTROL_MODIFIER != 0 && mods & QT_ALT_MODIFIER == 0
     }
 
@@ -1966,6 +2025,7 @@ mod engine {
     }
 
     pub fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32) {
+        remember_qt_modifiers(id, mods);
         if let Some(action) = ctrl_editing_action(qt_key, mods) {
             // Swallow both press and release of the clipboard chord so the raw
             // 'c'/'x'/'v' key never additionally reaches Servo as text input.
@@ -2377,9 +2437,9 @@ pub fn forward_mouse_move(_id: i32, _x: f32, _y: f32) {
     engine::forward_mouse_move(_id, _x, _y);
 }
 
-pub fn forward_mouse_button(_id: i32, _action: i32, _button: i32, _x: f32, _y: f32) {
+pub fn forward_mouse_button(_id: i32, _action: i32, _button: i32, _x: f32, _y: f32, _mods: u32) {
     #[cfg(feature = "servo-engine")]
-    engine::forward_mouse_button(_id, _action, _button, _x, _y);
+    engine::forward_mouse_button(_id, _action, _button, _x, _y, _mods);
 }
 
 pub fn forward_wheel(_id: i32, _dx: f64, _dy: f64, _x: f32, _y: f32) {

@@ -128,7 +128,7 @@ pub mod ffi {
 
         // Input forwarding: called by WebContentView event handlers
         fn forward_mouse_move(id: i32, x: f32, y: f32);
-        fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32);
+        fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32, mods: u32);
         fn forward_wheel(id: i32, dx: f64, dy: f64, x: f32, y: f32);
         fn forward_key(id: i32, down: bool, key_char: u32, qt_key: i32, mods: u32);
         fn forward_focus(id: i32, focused: bool);

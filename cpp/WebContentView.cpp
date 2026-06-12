@@ -1526,7 +1526,8 @@ void WebContentView::forwardMouseButton(int action, int button, QMouseEvent* ev)
     qreal dpr = devicePixelRatioF();
     float x = static_cast<float>(ev->position().x() * dpr);
     float y = static_cast<float>(ev->position().y() * dpr);
-    servoq::forward_mouse_button(m_tab_id, action, button, x, y);
+    servoq::forward_mouse_button(m_tab_id, action, button, x, y,
+        static_cast<uint32_t>(ev->modifiers()));
 }
 
 void WebContentView::forwardWindowMouseButton(int action, int button, QMouseEvent* ev)
@@ -1536,7 +1537,8 @@ void WebContentView::forwardWindowMouseButton(int action, int button, QMouseEven
     qreal dpr = m_wayland_window ? m_wayland_window->devicePixelRatio() : devicePixelRatioF();
     float x = static_cast<float>(ev->position().x() * dpr);
     float y = static_cast<float>(ev->position().y() * dpr);
-    servoq::forward_mouse_button(m_tab_id, action, button, x, y);
+    servoq::forward_mouse_button(m_tab_id, action, button, x, y,
+        static_cast<uint32_t>(ev->modifiers()));
 }
 
 void WebContentView::takeFocusFromContentClick()
