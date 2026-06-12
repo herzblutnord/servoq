@@ -872,10 +872,21 @@ void TabBar::setHoveredTabIndex(int index)
 
 void TabBar::updateTabButtonGeometry()
 {
+    auto close_button_position = static_cast<QTabBar::ButtonPosition>(
+        style()->styleHint(QStyle::SH_TabBar_CloseButtonPosition, nullptr, this));
+
     auto prepare_button = [&](QWidget* button) {
         if (!button)
             return;
         button->installEventFilter(this);
+    };
+
+    auto should_show_close_button = [&](int index, bool show_selected) {
+        auto* tab = m_tab_widget ? m_tab_widget->tab(index) : nullptr;
+        auto is_single_empty_tab = tab && tab->isEmptyNewTab() && m_tab_widget->count() == 1;
+        if (is_single_empty_tab)
+            return false;
+        return index == m_hovered_tab_index || (show_selected && index == currentIndex());
     };
 
     auto place_expanded_button = [&](int index, QTabBar::ButtonPosition position, QRect shape_rect) {
@@ -883,10 +894,8 @@ void TabBar::updateTabButtonGeometry()
         if (!button)
             return;
         prepare_button(button);
-        auto* tab = m_tab_widget ? m_tab_widget->tab(index) : nullptr;
-        auto should_be_visible = position != QTabBar::RightSide
-            || ((index == currentIndex() || index == m_hovered_tab_index)
-                && !(tab && tab->isEmptyNewTab() && m_tab_widget->count() == 1));
+        auto is_close_button = position == close_button_position;
+        auto should_be_visible = !is_close_button || should_show_close_button(index, true);
         bool did_update_button = false;
         if (button->isVisible() != should_be_visible) {
             button->setVisible(should_be_visible);
@@ -915,7 +924,8 @@ void TabBar::updateTabButtonGeometry()
         if (!button)
             return;
         prepare_button(button);
-        auto should_be_visible = position == QTabBar::LeftSide || index == m_hovered_tab_index;
+        auto is_close_button = position == close_button_position;
+        auto should_be_visible = !is_close_button || should_show_close_button(index, false);
         bool did_update_button = false;
         if (button->isVisible() != should_be_visible) {
             button->setVisible(should_be_visible);
