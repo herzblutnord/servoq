@@ -2,7 +2,7 @@
 
 # ServoQ
 
-Ladybird's Qt6 browser chrome, running on Servo instead of LibWeb.
+A Qt6 browser shell for Servo.
 
 ## Background
 
@@ -10,18 +10,18 @@ I've been following both [Ladybird](https://github.com/LadybirdBrowser/ladybird)
 [Servo](https://servo.org/) for a while. Ladybird recently got a clean Qt6 UI rewrite,
 and separately I came across [this KDAB blog post](https://www.kdab.com/embedding-servo-in-qt/)
 from early 2024, a basic proof-of-concept of embedding Servo in a Qt app using CXX-Qt.
-That demo was minimal and never continued.
 
-Which raised a question: could you take Ladybird's actual Qt frontend and wire
-it up to Servo instead of LibWeb? It turns out you can, with some changes to make it
-possible. That's ServoQ.
+Which raised a question: could you use Ladybird's Qt frontend as a starting point 
+and wire it up to Servo instead of LibWeb? It turns out you can, with some changes to make it possible. 
+That's ServoQ.
 
-The C++ chrome under `cpp/` is ported from Ladybird's Qt UI and several of its support
-libraries (search engine handling, bookmark storage, history, content blocking). Each
-file's header identifies which Ladybird source it was derived from. The Rust side under
-`src/` handles Servo embedding. Going forward I'll probably diverge from Ladybird's UI
-more and more, but I also intend to keep pulling in improvements from upstream where they
-make sense.
+The C++ chrome under `cpp/` started as a port of Ladybird's Qt UI and several of its support libraries, 
+including search engine handling, bookmark storage, history, and content blocking. Each derived file's 
+header identifies which Ladybird source it was originally based on. 
+The Rust side under `src/` handles Servo embedding.
+
+ServoQ has already diverged from Ladybird's UI in several places and will likely continue to do so. 
+I still intend to keep an eye on upstream Ladybird UI changes and pull in the parts that make sense for this project.
 
 # Feature status
 
