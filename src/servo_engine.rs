@@ -2570,6 +2570,31 @@ mod engine {
         })
     }
 
+    // Asynchronous full-viewport screenshot. Servo waits for the page to be
+    // ready (load events fired, render-blocking resources done, fonts/images
+    // loaded, no pending frames) and then calls back with the pixels; the
+    // result is pushed to C++ as RGBA8 via notify_screenshot_taken, with an
+    // empty slice signalling failure. The callback fires inside a later
+    // spin_event_loop on the main thread.
+    pub fn take_screenshot(id: i32) {
+        let Some(wv) = clone_webview(id) else {
+            crate::bridge::ffi::notify_screenshot_taken(id, &[], 0, 0);
+            return;
+        };
+        debug_log("take_screenshot", id);
+        wv.take_screenshot(None, move |result| match result {
+            Ok(image) => {
+                let w = image.width() as i32;
+                let h = image.height() as i32;
+                crate::bridge::ffi::notify_screenshot_taken(id, image.as_raw(), w, h);
+            }
+            Err(error) => {
+                eprintln!("[servoq] take_screenshot failed for tab {id}: {error:?}");
+                crate::bridge::ffi::notify_screenshot_taken(id, &[], 0, 0);
+            }
+        });
+    }
+
     pub fn set_experimental_features_enabled(enabled: bool) {
         if let Some(servo) = clone_servo() {
             for pref in EXPERIMENTAL_PREFS {
@@ -2889,6 +2914,15 @@ pub fn set_webview_active(_id: i32, _active: bool) {
 pub fn set_page_zoom(_id: i32, _zoom: f32) {
     #[cfg(feature = "servo-engine")]
     engine::set_page_zoom(_id, _zoom);
+}
+
+pub fn take_screenshot(_id: i32) {
+    #[cfg(feature = "servo-engine")]
+    engine::take_screenshot(_id);
+    // Without the engine there are no pixels; report failure so the UI
+    // doesn't wait forever.
+    #[cfg(not(feature = "servo-engine"))]
+    crate::bridge::ffi::notify_screenshot_taken(_id, &[], 0, 0);
 }
 
 pub fn page_zoom(_id: i32) -> f32 {

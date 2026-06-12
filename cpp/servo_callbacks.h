@@ -154,6 +154,13 @@ ScreenGeometryResult get_screen_geometry(::std::int32_t tab_id);
 void request_window_move_to(::std::int32_t tab_id, ::std::int32_t x, ::std::int32_t y);
 void request_window_resize_to(::std::int32_t tab_id, ::std::int32_t width, ::std::int32_t height);
 
+// Screenshot result for servoq::take_screenshot (WebContentView.cpp): RGBA8
+// pixels, empty data = failure. Prompts for a save location and writes PNG.
+void notify_screenshot_taken(::std::int32_t tab_id,
+                             ::rust::Slice<const ::std::uint8_t> data,
+                             ::std::int32_t width,
+                             ::std::int32_t height);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();

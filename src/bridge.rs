@@ -118,6 +118,8 @@ pub mod ffi {
         // C++ applies the single-tab popup policy and defers the change.
         fn request_window_move_to(tab_id: i32, x: i32, y: i32);
         fn request_window_resize_to(tab_id: i32, width: i32, height: i32);
+        // Screenshot result: RGBA8 pixels (width*height*4) or empty = failed.
+        fn notify_screenshot_taken(tab_id: i32, data: &[u8], width: i32, height: i32);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
@@ -151,6 +153,10 @@ pub mod ffi {
         // Page zoom
         fn set_page_zoom(id: i32, zoom: f32);
         fn page_zoom(id: i32) -> f32;
+
+        // Asynchronous viewport screenshot; result arrives via
+        // notify_screenshot_taken once the page is render-stable.
+        fn take_screenshot(id: i32);
 
         // Engine lifecycle: called by WebContentView when widget is shown/hidden/destroyed
         fn create_webview(id: i32, url: &str, w: i32, h: i32, scale: f32);
@@ -227,6 +233,9 @@ pub use crate::servo_engine::{
 
 // Page zoom — always present; no-ops when servo-engine feature is off
 pub use crate::servo_engine::{page_zoom, set_page_zoom};
+
+// Screenshot — always present; reports failure when servo-engine is off
+pub use crate::servo_engine::take_screenshot;
 
 pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
 pub use crate::servo_engine::{experimental_features_enabled, set_experimental_features_enabled};

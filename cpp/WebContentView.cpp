@@ -28,7 +28,12 @@
 #include <QCoreApplication>
 #include <QSystemTrayIcon>
 #include <QCursor>
+#include <QDateTime>
+#include <QDir>
+#include <QFileDialog>
 #include <QFocusEvent>
+#include <QMessageBox>
+#include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QScreen>
@@ -2452,6 +2457,53 @@ void request_window_resize_to(::std::int32_t tab_id, ::std::int32_t width, ::std
     if (auto* screen = browser->screen())
         inner = inner.boundedTo(screen->availableGeometry().size());
     QTimer::singleShot(0, browser, [browser, inner] { browser->resize(inner); });
+}
+
+// Screenshot result from servoq::take_screenshot. Deep-copies the pixels into
+// a QImage, then defers the save dialog so the Servo tick that delivered the
+// callback unwinds first.
+void notify_screenshot_taken(::std::int32_t tab_id,
+                             ::rust::Slice<const ::std::uint8_t> data,
+                             ::std::int32_t width,
+                             ::std::int32_t height)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* window = find_browser_window();
+    if (!window)
+        return;
+
+    if (data.empty() || width <= 0 || height <= 0) {
+        QTimer::singleShot(0, window, [window] {
+            QMessageBox::warning(window, QStringLiteral("Screenshot"),
+                QStringLiteral("The screenshot could not be captured."));
+        });
+        return;
+    }
+
+    // copy() detaches from the Rust-owned buffer, which is only valid for
+    // the duration of this call.
+    QImage screenshot(reinterpret_cast<uchar const*>(data.data()),
+        static_cast<int>(width), static_cast<int>(height),
+        static_cast<qsizetype>(width) * 4, QImage::Format_RGBA8888);
+    auto image = screenshot.copy();
+
+    QTimer::singleShot(0, window, [window, image] {
+        auto timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
+        auto file_name = QStringLiteral("Screenshot %1.png").arg(timestamp);
+        auto pictures_dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        if (pictures_dir.isEmpty())
+            pictures_dir = QDir::homePath();
+        auto path = QFileDialog::getSaveFileName(window,
+            QStringLiteral("Save Screenshot"),
+            pictures_dir + QLatin1Char('/') + file_name,
+            QStringLiteral("PNG Image (*.png)"));
+        if (path.isEmpty())
+            return;
+        if (!image.save(path, "PNG"))
+            QMessageBox::warning(window, QStringLiteral("Screenshot"),
+                QStringLiteral("Could not save the screenshot to %1.").arg(path));
+    });
 }
 
 // QClipboard-backed system clipboard for Servo's ClipboardDelegate. Reads and

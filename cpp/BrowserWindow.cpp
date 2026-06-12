@@ -532,6 +532,19 @@ void BrowserWindow::createMenus()
     file_menu->addAction(add_bookmark_action);
     m_hamburger_menu->addAction(add_bookmark_action);
 
+    auto* screenshot_action = new QAction("Take &Screenshot…", this);
+    screenshot_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+    connect(screenshot_action, &QAction::triggered, this, [this] {
+        auto* tab = currentTab();
+        if (!tab || tab->isEmptyNewTab())
+            return;
+        // Asynchronous: Servo waits for the page to be render-stable, then
+        // servoq::notify_screenshot_taken prompts for the save location.
+        servoq::take_screenshot(tab->controllerId());
+    });
+    file_menu->addAction(screenshot_action);
+    m_hamburger_menu->addAction(screenshot_action);
+
     file_menu->addSeparator();
     m_hamburger_menu->addSeparator();
 
