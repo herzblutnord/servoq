@@ -1,4 +1,4 @@
-<img src="docs/images/screenshot1.jpg" alt="ServoQ overview" width="800">
+<img src="docs/images/screenshot_main.jpg" alt="ServoQ overview" width="800">
 
 # ServoQ
 
