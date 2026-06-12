@@ -399,6 +399,13 @@ void BookmarksBar::updateChromeStyle()
     if (m_is_updating_chrome_style)
         return;
     m_is_updating_chrome_style = true;
+    // Clear before setting: QToolBarLayout only re-reads its margins/spacing on a
+    // real style change, and a sheet applied before the window's first polish (the
+    // initial tab's bar is built pre-show) leaves the layout on base-style metrics
+    // (margin 6/spacing 0 instead of the QSS margin 4/spacing 3) — making bookmark
+    // spacing differ between tabs. Clearing guarantees the second set is a real
+    // change that forces the metrics to be recomputed.
+    setStyleSheet(QString());
     setStyleSheet(ChromeStyle::bookmarks_bar_style_sheet(palette()));
     m_is_updating_chrome_style = false;
 }

@@ -25,6 +25,9 @@ class BookmarksBar final : public QToolBar {
 public:
     explicit BookmarksBar(QWidget* parent = nullptr);
     void rebuild();
+    // Re-applies the chrome stylesheet (clear + set). Also called by Tab after
+    // the first event-loop turn to refresh layout metrics cached pre-polish.
+    void updateChromeStyle();
 
     void setOpenUrlCallback(std::function<void(QString const&)> cb)          { m_open_url_callback = std::move(cb); }
     void setOpenUrlInNewTabCallback(std::function<void(QString const&)> cb)  { m_open_url_in_new_tab_callback = std::move(cb); }
@@ -41,7 +44,6 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
-    void updateChromeStyle();
     void showAddBookmarkDialog(QString const& folder_id, QString const& prefill_title, QString const& prefill_url);
     void showEditBookmarkDialog(QString const& id);
     void showEditFolderDialog(QString const& id);

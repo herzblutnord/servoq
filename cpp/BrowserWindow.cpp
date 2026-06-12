@@ -59,6 +59,7 @@
 #include <QDesktopServices>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QWidgetAction>
@@ -204,6 +205,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
 
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
+    updateWindowBorder();
     setMinimumSize(900, 640);
     resize(Settings::the()->last_size());
     if (auto last_position = Settings::the()->last_position(); last_position.has_value())
@@ -324,6 +326,49 @@ bool BrowserWindow::event(QEvent* event)
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange)
         updateChromeStyle();
     return QMainWindow::event(event);
+}
+
+void BrowserWindow::changeEvent(QEvent* event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) {
+        updateWindowBorder();
+        if (m_fullscreen_action)
+            m_fullscreen_action->setChecked(isFullScreen());
+    }
+}
+
+bool BrowserWindow::shouldDrawWindowBorder() const
+{
+#if defined(Q_OS_MACOS)
+    // macOS frameless windows already get rounded corners and a native shadow, so a painted border would clash.
+    return false;
+#else
+    return windowFlags().testFlag(Qt::FramelessWindowHint) && !isFullScreen() && !isMaximized();
+#endif
+}
+
+void BrowserWindow::updateWindowBorder()
+{
+    auto border_width = shouldDrawWindowBorder() ? 1 : 0;
+    setContentsMargins(border_width, border_width, border_width, border_width);
+    update();
+}
+
+void BrowserWindow::paintEvent(QPaintEvent* event)
+{
+    QMainWindow::paintEvent(event);
+
+    if (!shouldDrawWindowBorder())
+        return;
+
+    QPainter painter(this);
+    auto color = ChromeStyle::chrome_window_outline(palette());
+    auto frame = rect();
+    painter.fillRect(QRect(frame.left(), frame.top(), frame.width(), 1), color);
+    painter.fillRect(QRect(frame.left(), frame.bottom(), frame.width(), 1), color);
+    painter.fillRect(QRect(frame.left(), frame.top(), 1, frame.height()), color);
+    painter.fillRect(QRect(frame.right(), frame.top(), 1, frame.height()), color);
 }
 
 // Intercepts QCoreApplication events posted by QtEventLoopWaker::wake() from
@@ -584,6 +629,18 @@ void BrowserWindow::createMenus()
         });
         view_menu->addAction(reset_zoom_action);
     }
+
+    view_menu->addSeparator();
+    m_fullscreen_action = new QAction("&Full Screen", this);
+    m_fullscreen_action->setCheckable(true);
+    auto fullscreen_shortcuts = QKeySequence::keyBindings(QKeySequence::FullScreen);
+    if (!fullscreen_shortcuts.contains(QKeySequence(Qt::Key_F11)))
+        fullscreen_shortcuts.append(QKeySequence(Qt::Key_F11));
+    m_fullscreen_action->setShortcuts(fullscreen_shortcuts);
+    connect(m_fullscreen_action, &QAction::triggered, this, [this](bool checked) {
+        setFullscreen(checked);
+    });
+    view_menu->addAction(m_fullscreen_action);
 
     if (show_menubar_option_available()) {
         view_menu->addSeparator();

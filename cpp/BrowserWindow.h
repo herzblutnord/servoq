@@ -5,6 +5,7 @@
  * Copyright (c) 2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2024-2026, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2025, Simon Farre <simon.farre.cx@gmail.com>
+ * Copyright (c) 2026-present, the Ladybird developers.
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:
@@ -20,6 +21,7 @@
 class QAction;
 class QCloseEvent;
 class QMenu;
+class QPaintEvent;
 class QWheelEvent;
 
 namespace ServoQ {
@@ -50,7 +52,9 @@ public:
 protected:
     bool event(QEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void changeEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -69,6 +73,8 @@ private:
     void refreshBookmarksBars();
     void updateCurrentTabState();
     void updateChromeStyle();
+    bool shouldDrawWindowBorder() const;
+    void updateWindowBorder();
 
     TabWidget* m_tabs { nullptr };
     Tab* m_active_tab { nullptr };
@@ -83,6 +89,7 @@ private:
     QAction* m_toggle_bookmarks_action { nullptr };
     QAction* m_show_menu_bar_action { nullptr };
     QAction* m_reopen_tab_action { nullptr };
+    QAction* m_fullscreen_action { nullptr };
     QVector<QPair<QString, QString>> m_closed_tabs; // url, title stack; capped at 10
     bool m_is_updating_chrome_style { false };
     bool m_was_maximized_before_fullscreen { false };

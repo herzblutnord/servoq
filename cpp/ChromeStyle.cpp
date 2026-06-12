@@ -143,6 +143,16 @@ QColor chrome_border(QPalette const& palette)
     return mix(is_dark(palette) ? chrome_surface(palette) : chrome_background(palette), is_dark(palette) ? QColor(150, 155, 162) : QColor(95, 96, 98), 0.22);
 }
 
+QColor chrome_window_outline(QPalette const& palette)
+{
+    if (is_dark(palette))
+        return chrome_border(palette);
+
+    // The window outline has to hold up against arbitrary backdrops behind the window, not just our own chrome
+    // surfaces, so in light mode it is mixed further toward the border anchor than chrome_border().
+    return mix(chrome_background(palette), QColor(95, 96, 98), 0.5); // material_color_anchors(false).border = QColor(95,96,98)
+}
+
 QColor chrome_text(QPalette const& palette)
 {
     if (palette_matches_current_color_scheme(palette))

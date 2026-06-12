@@ -134,6 +134,21 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     new QShortcut(QKeySequence::Find, this, [this] { showFindInPage(); });
 
     applyControllerState();
+
+    // Stylesheets applied before the window's first polish (the initial tab's
+    // chrome is built inside the BrowserWindow constructor, pre-show) leave
+    // QToolBarLayout margins/spacing and QSS contents margins on base-style
+    // values, while tabs created later resolve the QSS box — so each tab's
+    // chrome laid out 1-4px differently and the UI visibly shifted on every
+    // tab switch. Re-assert the chrome stylesheets once the event loop (and
+    // therefore the first polish) has run so every tab settles on identical
+    // metrics. Cheap one-time repolish of this tab's chrome only.
+    QTimer::singleShot(0, this, [this] {
+        auto container_sheet = m_toolbar_container->styleSheet();
+        m_toolbar_container->setStyleSheet(QString());
+        m_toolbar_container->setStyleSheet(container_sheet);
+        m_bookmarks_bar->updateChromeStyle();
+    });
 }
 
 void Tab::setToolbarContainerInTabLayout(bool in_tab_layout)

@@ -23,6 +23,7 @@ QColor chrome_control_border(QPalette const& palette);
 QColor chrome_active_tab_surface_top(QPalette const& palette);
 QColor chrome_active_tab_surface_bottom(QPalette const& palette);
 QColor chrome_border(QPalette const& palette);
+QColor chrome_window_outline(QPalette const& palette);
 QColor chrome_text(QPalette const& palette);
 QColor chrome_button_text(QPalette const& palette);
 QColor chrome_muted_text(QPalette const& palette);
