@@ -31,6 +31,7 @@ enum class ChromeIcon {
     Star,
     StarFilled,
     Search,
+    Pin,
     Globe,
     Folder,
     Volume,

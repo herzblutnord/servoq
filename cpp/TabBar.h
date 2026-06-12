@@ -75,10 +75,16 @@ protected:
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
+public:
+    bool isTabPinned(int index) const;
+    // Number of leading pinned tabs (the pinned group is kept contiguous).
+    int pinnedCount() const;
+
 private:
     QRect visualTabRect(int index) const;
     int tabIndexAt(QPoint const& position) const;
     int insertionIndexAt(QPoint const& position) const;
+    int clampInsertionIndexForTab(int from_index, int insertion_index) const;
     int dropIndicatorIndexForInsertionIndex(int insertion_index) const;
     QPixmap renderTabDragPixmap(int index) const;
     void startTabDrag(int index);
@@ -118,6 +124,10 @@ public:
     Tab* currentTab() const;
     Tab* tab(int index) const;
     int indexOf(Tab* tab) const;
+    int pinnedTabCount() const { return m_tab_bar->pinnedCount(); }
+    // Pins/unpins and moves the tab to its group boundary (end of the pinned
+    // group on pin, front of the unpinned group on unpin), like Chrome.
+    void setTabPinned(int index, bool pinned);
     void setTabText(int index, QString const& text) { m_tab_bar->setTabText(index, text); }
     void setNewTabAction(QAction* action);
     void set_new_tab_action(QAction* action) { setNewTabAction(action); }

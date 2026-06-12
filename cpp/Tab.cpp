@@ -16,6 +16,7 @@
 #include "NewTabTrace.h"
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
+#include "FaviconStore.h"
 #include "HistoryStore.h"
 #include "ChromeLayout.h"
 #include "BrowserWindow.h"
@@ -221,8 +222,10 @@ void Tab::restoreSessionUrl(QString const& url)
     m_is_empty_new_tab = false;
     m_url = normalized_url;
     m_title = normalized_url;
-    m_favicon = {};
-    m_has_page_favicon = false;
+    // Restored tabs don't load until activated; show the site's cached favicon
+    // (Chrome does the same) instead of a generic globe until then.
+    m_favicon = FaviconStore::the()->iconForUrl(normalized_url);
+    m_has_page_favicon = !m_favicon.isNull();
     m_view->setEmptyNewTab(false);
     m_view->setInitialUrl(normalized_url);
     m_location_edit->setUrl(m_url);

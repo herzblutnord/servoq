@@ -22,7 +22,7 @@
 // tree order, matching Document::check_favicon_after_loading_link_resource).
 
 #include "Favicon.h"
-#include "BookmarkStore.h"
+#include "FaviconStore.h"
 #include "Tab.h"
 #include "WebContentView.h"
 
@@ -361,18 +361,18 @@ void apply_favicon_bitmap(WebContentView* view, QImage const& image)
     auto copy = image.convertToFormat(QImage::Format_RGBA8888);
     view->tab()->on_favicon_change(QIcon(QPixmap::fromImage(copy)));
 
-    // Like Ladybird's ViewImplementation::set_favicon(): persist as PNG.
+    // Like Ladybird's ViewImplementation::set_favicon(): persist as PNG, into
+    // the favicons database (Chromium-style) so session restore, bookmarks,
+    // and history menus can show the icon without a live page.
     QByteArray png_bytes;
     QBuffer buffer(&png_bytes);
     if (buffer.open(QIODevice::WriteOnly) && copy.save(&buffer, "PNG")) {
         auto url = view->tab()->url();
-        auto favicon = QString::fromLatin1(png_bytes.toBase64());
-        auto changed = BookmarkStore::the()->updateFavicon(url, favicon);
+        FaviconStore::the()->storeIcon(url, png_bytes);
         debug_log_favicon(view->tabId(),
-            QStringLiteral("page_url=%1 storage=png_base64 png_bytes=%2 bookmark_updated=%3")
+            QStringLiteral("page_url=%1 storage=favicon_db png_bytes=%2")
                 .arg(url)
-                .arg(png_bytes.size())
-                .arg(changed ? 1 : 0));
+                .arg(png_bytes.size()));
     }
 }
 

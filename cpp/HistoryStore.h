@@ -10,11 +10,17 @@
 #include <QDateTime>
 #include <QList>
 #include <QObject>
+#include <QSqlDatabase>
 #include <QString>
 #include <QTimer>
 
 namespace ServoQ {
 
+// Persistent browsing history, modeled on the Chromium/Firefox split:
+// a `urls` table (one row per known URL, with visit_count/last_visit_time)
+// plus a `visits` table (one row per visit). All queries that run per
+// keystroke (URL-bar autocomplete) are served from an in-memory index of the
+// most recently visited URLs, so the DB size never affects typing latency.
 class HistoryStore : public QObject {
     Q_OBJECT
 public:
@@ -24,9 +30,10 @@ public:
         QString url;
         QString title;
         QDateTime visited_at;
+        int visit_count { 1 };
         // Precomputed at insert/load time: autocompleteSuggestions() scans every
-        // entry per keystroke, and parsing a QUrl + lowering three strings for
-        // up to 1000 entries on each keypress cost milliseconds on the UI thread.
+        // entry per keystroke, and parsing a QUrl + lowering three strings per
+        // entry on each keypress cost milliseconds on the UI thread.
         QString url_lower;
         QString title_lower;
         QString host_lower;
@@ -37,6 +44,7 @@ public:
         QString title;
     };
 
+    // Unique URLs, most recently visited first (in-memory index, capped).
     QList<Entry> const& entries() const { return m_entries; }
     QList<AutocompleteSuggestion> autocompleteSuggestions(QString const& query, int limit = 8) const;
     void recordVisit(QString const& url, QString const& title = {});
@@ -47,16 +55,28 @@ signals:
 
 private:
     HistoryStore();
-    void load();
-    void save();
-    void scheduleSave();
-    static QString storePath();
+    void openDatabase();
+    void migrateLegacyJson();
+    void loadIndex();
+    void expireOldVisits();
+    // Persisting goes through SQLite in one transaction per debounce window.
+    // Visits arrive on every URL/title change (SPAs mutate these constantly),
+    // so writes are coalesced behind a timer and flushed on quit — no
+    // synchronous disk I/O on the UI thread per navigation event.
+    void scheduleFlush();
+    void flushPendingWrites();
 
-    QList<Entry> m_entries; // most recent first, capped at 1000
-    // Persisting rewrites the whole store and QSaveFile::commit() syncs to disk;
-    // doing that synchronously on every URL/title change stalled the UI thread.
-    // Writes are coalesced behind this timer and flushed on quit.
-    QTimer* m_save_timer { nullptr };
+    struct PendingWrite {
+        enum class Kind { Visit, TitleUpdate } kind { Kind::Visit };
+        QString url;
+        QString title;
+        qint64 time_secs { 0 };
+    };
+
+    QSqlDatabase m_db;
+    QList<Entry> m_entries; // most recent first, capped at the index size
+    QList<PendingWrite> m_pending_writes;
+    QTimer* m_flush_timer { nullptr };
 };
 
 }

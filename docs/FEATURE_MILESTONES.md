@@ -1,6 +1,6 @@
 # ServoQ Feature Milestones
 
-Re-sorting of `servoq_bucket1_bucket2_feature_table.md` by implementation effort,
+Re-sorting of typical browser features by implementation effort,
 grouped by related work. Status was determined by auditing the codebase
 (June 2026). Legend:
 
@@ -22,8 +22,8 @@ grouped by related work. Status was determined by auditing the codebase
 | Address bar grammar + search fallback | ✅ | `WebViewURL::sanitize_url` (localhost/IP/scheme/search) |
 | Search engine settings | ✅ | menu-based, custom engines supported |
 | Configurable homepage / new-tab URL | ✅ | settings menu, Home toolbar button, configurable blank/home/custom new tabs |
-| Bookmark storage + bookmarks bar | ✅ | JSON store, folders, bar with menus |
-| Persistent history database | ✅ | debounced JSON store + URL-bar autocomplete + History menu |
+| Bookmark storage + bookmarks bar | ✅ | JSON store (Chromium-style), folders, bar with menus; icons from favicons.db |
+| Persistent history database | ✅ | SQLite urls/visits + favicons.db (see docs/STORAGE.md); URL-bar autocomplete + History menu |
 | Vertical / horizontal tabs | ✅ | incl. collapse + hover-expand modes |
 | Tab close / middle-click close / reorder | ✅ | hardened against the mid-interaction-close bug |
 | Browser-chrome keyboard shortcuts | ✅ | Ctrl+L/T/W/Shift+T, Ctrl+Tab/PgUp/PgDn, Ctrl+1-9, zoom, find |
@@ -71,15 +71,15 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 1.4 | File picker (`<input type=file>`) | ✅ | Ladybird `Tab.cpp` on_request_file_picker; Servo `FilePicker` |
 | 1.5 | `window.close()` from content | ✅ | Servo `notify_closed` → deferred tab close |
 
-## Milestone 2 — Tabs & session continuity (pure Qt, S–M each)
+## Milestone 2 — Tabs & session continuity  ✅ **implemented (June 2026)**
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 2.1 | Session restore (open tabs + active tab on start) | ✅ | URL-level restore per the table; opt-in setting like Chrome's "continue where you left off" |
-| 2.2 | Recently-closed-tabs menu | ✅ | History-menu submenu with favicons, individual restore, Reopen All, Clear, and Ctrl+Shift+T |
+| 2.1 | Session restore (open tabs + active tab on start) | ✅ | URL-level restore (session.json, see docs/STORAGE.md); opt-in setting like Chrome's "continue where you left off"; restored tabs show cached favicons |
+| 2.2 | Recently-closed-tabs menu | ✅ | History-menu submenu with favicons, individual restore, Reopen All, Clear, Ctrl+Shift+T; persists across restarts (capped 25) |
 | 2.3 | Configurable homepage / new-tab URL | ✅ | setting + home behavior |
-| 2.4 | Pinned tabs | ✗ | tab metadata + ordering + compact rendering; persists with session |
-| 2.5 | Tab search popup | ✗ | only valuable with many tabs; last in milestone |
+| 2.4 | Pinned tabs | ✅ | pin/unpin via tab context menu; pinned group kept first, compact favicon-only rendering (horizontal), pin indicator (vertical expanded), no close button, middle-click protected, drag stays within group, bulk closes skip pinned, persists with session |
+| 2.5 | Tab search popup | ✅ | Ctrl+Shift+A / View → Search Tabs…; Chrome-style filterable popup with per-row close |
 
 ## Milestone 3 — Engine bridges (small Servo-API features, S–M each)
 

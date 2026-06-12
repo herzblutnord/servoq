@@ -34,6 +34,9 @@ public:
     QString title() const { return m_title; }
     QString url() const { return m_url; }
     bool isEmptyNewTab() const { return m_is_empty_new_tab; }
+    // Pinned state only; ordering/compact rendering live in TabWidget/TabBar.
+    bool isPinned() const { return m_pinned; }
+    void setPinned(bool pinned) { m_pinned = pinned; }
     QString faviconBase64Png() const;
     QIcon siteIcon() const;
     QIcon tabIcon() const;
@@ -118,6 +121,7 @@ private:
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };
     bool m_is_empty_new_tab { true };
+    bool m_pinned { false };
     int m_loading_animation_frame { 0 };
 };
 

@@ -17,8 +17,11 @@
  */
 #include "BrowserWindow.h"
 #include "BookmarksBar.h"
+#include "FaviconStore.h"
 #include "HistoryStore.h"
 #include "NewTabTrace.h"
+#include "SessionStore.h"
+#include "TabSearch.h"
 #include "ChromeLayout.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
@@ -324,6 +327,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     setCentralWidget(m_tabs);
 
     updateChromeStyle();
+    loadPersistedClosedTabs();
     createInitialTab();
     applyBrowserChromeCursors(this);
     if (Settings::the()->is_maximized())
@@ -570,6 +574,8 @@ void BrowserWindow::createMenus()
                 auto* act = history_menu->addAction(label, this, [this, url = e.url] {
                     createNewTab(url);
                 });
+                act->setIcon(FaviconStore::the()->iconForUrl(e.url));
+                act->setIconVisibleInMenu(true);
                 act->setToolTip(e.url);
             }
         }
@@ -637,6 +643,11 @@ void BrowserWindow::createMenus()
     });
     view_menu->addAction(open_previous_tab_action);
     connect(open_previous_tab_action, &QAction::triggered, this, &BrowserWindow::openPreviousTab);
+
+    auto* search_tabs_action = new QAction("Search &Tabs…", this);
+    search_tabs_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+    view_menu->addAction(search_tabs_action);
+    connect(search_tabs_action, &QAction::triggered, this, &BrowserWindow::showTabSearch);
 
     view_menu->addSeparator();
     {
@@ -749,7 +760,7 @@ void BrowserWindow::createMenus()
         if (enabled)
             saveSessionState();
         else
-            Settings::the()->clear_session_tabs();
+            SessionStore::the()->clearTabs();
     });
     restore_session_action->setDefaultWidget(restore_session_checkbox);
     settings_menu->addAction(restore_session_action);
@@ -899,7 +910,7 @@ bool BrowserWindow::restoreSessionTabs()
     if (!Settings::the()->restore_session_on_startup())
         return false;
 
-    auto entries = Settings::the()->session_tabs();
+    auto entries = SessionStore::the()->tabs();
     if (entries.isEmpty())
         return false;
 
@@ -907,7 +918,7 @@ bool BrowserWindow::restoreSessionTabs()
     for (auto const& entry : entries)
         createRestoredSessionTab(entry);
 
-    auto active_index = Settings::the()->session_active_tab_index();
+    auto active_index = SessionStore::the()->activeTabIndex();
     active_index = std::clamp(active_index, 0, m_tabs->count() - 1);
     m_tabs->setCurrentIndex(active_index);
     m_is_restoring_session = false;
@@ -947,8 +958,15 @@ Tab* BrowserWindow::createRestoredSessionTab(SessionTabState const& entry)
         tab->showEmptyNewTab();
     else
         tab->restoreSessionUrl(entry.url);
+    // The session is saved with the pinned group first, so restoring in order
+    // keeps the group contiguous; no reordering needed here.
+    tab->setPinned(entry.pinned);
 
     auto index = m_tabs->addTab(tab, tab->title());
+    // restoreSessionUrl ran before addTab, so its tabStateChanged couldn't
+    // reach the tab bar yet; push the cached favicon/title now — restored
+    // background tabs get no load events until activated.
+    tabStateChanged(tab);
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     debug_log("restore_session_tab", tab_id,
         QStringLiteral("index=%1 empty=%2 url=%3")
@@ -1058,17 +1076,25 @@ void BrowserWindow::closeTab(int index)
     scheduleSessionSave();
 }
 
+static constexpr int MaxRecentlyClosedTabs = 25;
+
 void BrowserWindow::rememberClosedTab(Tab const& tab)
 {
+    // An empty new tab holds nothing to restore; Chrome doesn't add its NTP to
+    // the recently-closed list either.
+    if (tab.isEmptyNewTab())
+        return;
     m_closed_tabs.append({
         tab.url(),
         tab.title(),
         tab.siteIcon(),
         tab.isEmptyNewTab(),
+        tab.isPinned(),
     });
-    if (m_closed_tabs.size() > 10)
+    if (m_closed_tabs.size() > MaxRecentlyClosedTabs)
         m_closed_tabs.removeFirst();
     updateRecentlyClosedActions();
+    persistClosedTabs();
 }
 
 void BrowserWindow::reopenClosedTabAt(int index)
@@ -1078,11 +1104,45 @@ void BrowserWindow::reopenClosedTabAt(int index)
 
     auto entry = m_closed_tabs.takeAt(index);
     updateRecentlyClosedActions();
+    persistClosedTabs();
 
-    if (entry.was_empty_new_tab)
+    if (entry.was_empty_new_tab) {
         createNewTab({}, false, false);
-    else
-        createNewTab(entry.url);
+        return;
+    }
+    createNewTab(entry.url);
+    // Closed-while-pinned tabs come back pinned (Chrome behavior). The new tab
+    // was appended and selected; pinning moves it into the pinned group.
+    if (entry.was_pinned)
+        m_tabs->setTabPinned(m_tabs->currentIndex(), true);
+}
+
+// Recently-closed tabs survive restarts (Chrome's Tabs_* session log and
+// Firefox's sessionstore both do this); icons are re-resolved from the
+// favicon DB when the menu is shown.
+void BrowserWindow::loadPersistedClosedTabs()
+{
+    for (auto const& closed : SessionStore::the()->recentlyClosedTabs()) {
+        m_closed_tabs.append({
+            closed.url,
+            closed.title,
+            QIcon(),
+            closed.was_empty_new_tab,
+            closed.was_pinned,
+        });
+    }
+    if (m_closed_tabs.size() > MaxRecentlyClosedTabs)
+        m_closed_tabs.remove(0, m_closed_tabs.size() - MaxRecentlyClosedTabs);
+    updateRecentlyClosedActions();
+}
+
+void BrowserWindow::persistClosedTabs()
+{
+    QVector<ClosedTabState> closed_tabs;
+    closed_tabs.reserve(m_closed_tabs.size());
+    for (auto const& entry : m_closed_tabs)
+        closed_tabs.append({ entry.url, entry.title, entry.was_empty_new_tab, entry.was_pinned });
+    SessionStore::the()->setRecentlyClosedTabs(closed_tabs);
 }
 
 void BrowserWindow::reopenAllClosedTabs()
@@ -1123,7 +1183,10 @@ void BrowserWindow::populateRecentlyClosedTabsMenu(QMenu* menu)
         auto* action = menu->addAction(QFontMetrics(menu->font()).elidedText(label, Qt::ElideRight, MaxMenuLabelWidth), this, [this, i] {
             reopenClosedTabAt(i);
         });
-        action->setIcon(entry.icon);
+        auto icon = entry.icon;
+        if (icon.isNull())
+            icon = FaviconStore::the()->iconForUrl(entry.url);
+        action->setIcon(icon);
         action->setIconVisibleInMenu(true);
         action->setToolTip(entry.url);
     }
@@ -1135,7 +1198,15 @@ void BrowserWindow::populateRecentlyClosedTabsMenu(QMenu* menu)
     menu->addAction(QStringLiteral("Clear Recently Closed Tabs"), this, [this] {
         m_closed_tabs.clear();
         updateRecentlyClosedActions();
+        persistClosedTabs();
     });
+}
+
+void BrowserWindow::showTabSearch()
+{
+    if (!m_tab_search)
+        m_tab_search = new TabSearchPopup(this, m_tabs);
+    m_tab_search->open();
 }
 
 void BrowserWindow::closeTabForController(int controller_id)
@@ -1358,7 +1429,7 @@ void BrowserWindow::scheduleSessionSave()
 void BrowserWindow::saveSessionState()
 {
     if (!Settings::the()->restore_session_on_startup()) {
-        Settings::the()->clear_session_tabs();
+        SessionStore::the()->clearTabs();
         return;
     }
 
@@ -1371,15 +1442,16 @@ void BrowserWindow::saveSessionState()
         tabs.append({
             tab->isEmptyNewTab() ? QStringLiteral("about:blank") : tab->url(),
             tab->isEmptyNewTab(),
+            tab->isPinned(),
         });
     }
 
     if (tabs.isEmpty()) {
-        Settings::the()->clear_session_tabs();
+        SessionStore::the()->clearTabs();
         return;
     }
 
-    Settings::the()->set_session_tabs(tabs, m_tabs->currentIndex());
+    SessionStore::the()->setTabs(tabs, m_tabs->currentIndex());
 }
 
 void BrowserWindow::refreshBookmarksBars()
@@ -1427,18 +1499,23 @@ void BrowserWindow::closeTabFromContextMenu(int index)
     closeTab(index);
 }
 
+// Bulk closes skip pinned tabs, like Chrome's "Close other tabs".
 void BrowserWindow::closeOtherTabs(int keep_index)
 {
     for (int i = m_tabs->count() - 1; i >= 0; --i) {
-        if (i != keep_index)
+        auto* tab = m_tabs->tab(i);
+        if (i != keep_index && tab && !tab->isPinned())
             closeTab(i);
     }
 }
 
 void BrowserWindow::closeTabsToRight(int from_index)
 {
-    for (int i = m_tabs->count() - 1; i > from_index; --i)
-        closeTab(i);
+    for (int i = m_tabs->count() - 1; i > from_index; --i) {
+        auto* tab = m_tabs->tab(i);
+        if (tab && !tab->isPinned())
+            closeTab(i);
+    }
 }
 
 }

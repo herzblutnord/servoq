@@ -34,11 +34,6 @@ enum class NewTabPageBehavior {
     CustomUrl,
 };
 
-struct SessionTabState {
-    QString url;
-    bool is_empty_new_tab { false };
-};
-
 class Settings final : public QObject {
 public:
     Settings(Settings const&) = delete;
@@ -87,12 +82,10 @@ public:
     void set_custom_new_tab_url(QString const& url);
     QString new_tab_url() const;
 
+    // Open-tab persistence itself lives in SessionStore (session.json); this
+    // is only the "continue where you left off" toggle.
     bool restore_session_on_startup() const;
     void set_restore_session_on_startup(bool restore);
-    QVector<SessionTabState> session_tabs() const;
-    int session_active_tab_index() const;
-    void set_session_tabs(QVector<SessionTabState> const& tabs, int active_tab_index);
-    void clear_session_tabs();
 
     bool content_blocking_enabled() const;
     void set_content_blocking_enabled(bool enabled);

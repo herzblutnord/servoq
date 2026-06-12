@@ -278,6 +278,16 @@ static QPixmap create_chrome_icon_pixmap(ChromeIcon icon, QColor color, qreal de
         painter.drawEllipse(QRectF(4.2, 4.0, 9.7, 9.7));
         painter.drawLine(QPointF(12.1, 12.1), QPointF(16.0, 16.0));
         break;
+    case ChromeIcon::Pin:
+        // Thumbtack: head plate, stem, base plate, needle.
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawRoundedRect(QRectF(7.2, 3.2, 5.6, 2.0), 1.0, 1.0);
+        painter.drawRect(QRectF(8.8, 4.6, 2.4, 4.6));
+        painter.drawRoundedRect(QRectF(5.6, 9.0, 8.8, 2.0), 1.0, 1.0);
+        painter.setPen(chrome_icon_pen(color, 1.7));
+        painter.drawLine(QPointF(10.0, 11.2), QPointF(10.0, 16.2));
+        break;
     case ChromeIcon::Globe:
         draw_globe_icon(painter, color);
         break;

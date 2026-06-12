@@ -77,6 +77,8 @@ constexpr int HorizontalTabStripHeight = 44;
 constexpr int HorizontalTabHeight = 38;
 constexpr int HorizontalTabMinWidth = 128;
 constexpr int HorizontalTabMaxWidth = 240;
+// Pinned tabs render favicon-only at a fixed compact width (Chrome-style).
+constexpr int PinnedTabWidth = 40;
 constexpr int VerticalTabHeight = 38;
 constexpr auto ServoQTabMimeType = "application/x-servoq-tab";
 constexpr int VerticalTabsCollapsedWidth = browser_chrome_layout_policy().collapsed_sidebar_width;
@@ -357,12 +359,36 @@ QSize TabBar::tabSizeHint(int index) const
         return size;
     }
 
+    if (isTabPinned(index)) {
+        size.setWidth(PinnedTabWidth);
+        size.setHeight(HorizontalTabHeight);
+        return size;
+    }
+
     if (auto tab_count = count(); tab_count > 0) {
-        auto width = (m_available_width > 0 ? m_available_width : this->width()) / tab_count;
+        auto pinned = pinnedCount();
+        auto unpinned = tab_count - pinned;
+        auto available = (m_available_width > 0 ? m_available_width : this->width()) - pinned * PinnedTabWidth;
+        auto width = unpinned > 0 ? available / unpinned : HorizontalTabMaxWidth;
         size.setWidth(std::clamp(width, HorizontalTabMinWidth, HorizontalTabMaxWidth));
     }
     size.setHeight(HorizontalTabHeight);
     return size;
+}
+
+bool TabBar::isTabPinned(int index) const
+{
+    auto* tab = m_tab_widget ? m_tab_widget->tab(index) : nullptr;
+    return tab && tab->isPinned();
+}
+
+int TabBar::pinnedCount() const
+{
+    // Pinned tabs are kept contiguous at the front by setTabPinned/drag clamps.
+    int pinned = 0;
+    while (pinned < count() && isTabPinned(pinned))
+        ++pinned;
+    return pinned;
 }
 
 void TabBar::resizeEvent(QResizeEvent* event)
@@ -445,24 +471,40 @@ void TabBar::paintEvent(QPaintEvent*)
         }
 
         auto contents_rect = shape_rect.toAlignedRect().adjusted(8, 0, -8, 0);
+        auto pinned = isTabPinned(index);
+        // Pinned horizontal tabs are favicon-only (compact, Chrome-style).
+        auto icon_only = is_collapsed || (pinned && !is_vertical);
         auto icon = tabIcon(index);
         if (icon.isNull())
             icon = create_chrome_icon(ChromeIcon::Globe, palette());
-        auto icon_size = is_collapsed ? QSize(16, 16) : QSize(16, 16);
+        auto icon_size = QSize(16, 16);
         QRect icon_rect {
-            is_collapsed ? tab_rect.center().x() - icon_size.width() / 2 : contents_rect.left(),
+            icon_only ? tab_rect.center().x() - icon_size.width() / 2 : contents_rect.left(),
             contents_rect.top() + (contents_rect.height() - icon_size.height()) / 2,
             icon_size.width(),
             icon_size.height()
         };
         icon.paint(&painter, icon_rect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
 
-        if (is_collapsed)
+        if (icon_only)
             continue;
 
         contents_rect.setLeft(icon_rect.right() + 8);
         if (auto* button = tabButton(index, QTabBar::RightSide); button && button->isVisible())
             contents_rect.setRight(contents_rect.right() - button->width() - 6);
+
+        // Pinned tabs in the expanded vertical list keep their title but show
+        // a pin indicator where the close button would be.
+        if (pinned) {
+            QRect pin_rect {
+                contents_rect.right() - 12,
+                contents_rect.top() + (contents_rect.height() - 12) / 2,
+                12,
+                12
+            };
+            create_chrome_icon(ChromeIcon::Pin, palette()).paint(&painter, pin_rect);
+            contents_rect.setRight(pin_rect.left() - 6);
+        }
 
         auto tab_font = font();
         if (selected)
@@ -532,7 +574,9 @@ void TabBar::mousePressEvent(QMouseEvent* event)
     // on release. (See mouseReleaseEvent.)
     if (event->button() == Qt::MiddleButton) {
         int index = tabIndexAt(event->pos());
-        m_middle_close_target = (index >= 0 && m_tab_widget) ? m_tab_widget->tab(index) : nullptr;
+        auto* target = (index >= 0 && m_tab_widget) ? m_tab_widget->tab(index) : nullptr;
+        // Pinned tabs are protected from accidental middle-click close.
+        m_middle_close_target = (target && !target->isPinned()) ? target : nullptr;
         if (servoq_diag_enabled())
             servoq_diag_log(QStringLiteral("TabBar::middle_press index=%1 captured=%2")
                 .arg(index).arg(m_middle_close_target ? 1 : 0));
@@ -670,15 +714,27 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
         browser_window->createNewTab(tab_ptr->url());
     });
 
+    auto* pin_action = menu->addAction(tab->isPinned() ? "Unpin Tab" : "Pin Tab");
+    connect(pin_action, &QAction::triggered, this, [tab_widget_ptr, tab_ptr] {
+        if (!tab_widget_ptr || !tab_ptr)
+            return;
+        int idx = tab_widget_ptr->indexOf(tab_ptr);
+        if (idx >= 0)
+            tab_widget_ptr->setTabPinned(idx, !tab_ptr->isPinned());
+    });
+
     menu->addSeparator();
 
+    // Start/end of the tab's own group: reordering never crosses the
+    // pinned/unpinned boundary.
     auto* move_start_action = menu->addAction("Move Tab to Start");
     connect(move_start_action, &QAction::triggered, this, [this, tab_widget_ptr, tab_ptr] {
         if (!tab_widget_ptr || !tab_ptr)
             return;
         int idx = tab_widget_ptr->indexOf(tab_ptr);
-        if (idx > 0)
-            moveTab(idx, 0);
+        int first = tab_ptr->isPinned() ? 0 : pinnedCount();
+        if (idx > first)
+            moveTab(idx, first);
     });
 
     auto* move_end_action = menu->addAction("Move Tab to End");
@@ -686,8 +742,9 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
         if (!tab_widget_ptr || !tab_ptr)
             return;
         int idx = tab_widget_ptr->indexOf(tab_ptr);
-        if (idx >= 0 && idx < count() - 1)
-            moveTab(idx, count() - 1);
+        int last = tab_ptr->isPinned() ? pinnedCount() - 1 : count() - 1;
+        if (idx >= 0 && idx < last)
+            moveTab(idx, last);
     });
 
     menu->addSeparator();
@@ -764,7 +821,9 @@ void TabBar::dragMoveEvent(QDragMoveEvent* event)
         event->ignore();
         return;
     }
-    m_drop_indicator_index = dropIndicatorIndexForInsertionIndex(insertionIndexAt(event->position().toPoint()));
+    auto from = event->mimeData()->data(ServoQTabMimeType).toInt();
+    auto insertion_index = clampInsertionIndexForTab(from, insertionIndexAt(event->position().toPoint()));
+    m_drop_indicator_index = dropIndicatorIndexForInsertionIndex(insertion_index);
     update();
     event->acceptProposedAction();
 }
@@ -776,7 +835,7 @@ void TabBar::dropEvent(QDropEvent* event)
         return;
     }
     auto from = event->mimeData()->data(ServoQTabMimeType).toInt();
-    auto to = insertionIndexAt(event->position().toPoint());
+    auto to = clampInsertionIndexForTab(from, insertionIndexAt(event->position().toPoint()));
     if (to > from)
         --to;
     to = std::clamp(to, 0, count() - 1);
@@ -785,6 +844,16 @@ void TabBar::dropEvent(QDropEvent* event)
     m_drop_indicator_index = -1;
     update();
     event->acceptProposedAction();
+}
+
+// Reordering may not move a tab across the pinned/unpinned boundary; pinning
+// state only changes through Pin/Unpin, never as a drag side effect.
+int TabBar::clampInsertionIndexForTab(int from_index, int insertion_index) const
+{
+    auto pinned_count = pinnedCount();
+    if (isTabPinned(from_index))
+        return std::clamp(insertion_index, 0, pinned_count);
+    return std::clamp(insertion_index, pinned_count, count());
 }
 
 QRect TabBar::visualTabRect(int index) const
@@ -883,6 +952,10 @@ void TabBar::updateTabButtonGeometry()
 
     auto should_show_close_button = [&](int index, bool show_selected) {
         auto* tab = m_tab_widget ? m_tab_widget->tab(index) : nullptr;
+        // Pinned tabs have no close button (Chrome behavior); closing them
+        // takes a deliberate action (context menu / Ctrl+W).
+        if (tab && tab->isPinned())
+            return false;
         auto is_single_empty_tab = tab && tab->isEmptyNewTab() && m_tab_widget->count() == 1;
         if (is_single_empty_tab)
             return false;
@@ -1174,6 +1247,26 @@ Tab* TabWidget::tab(int index) const
 int TabWidget::indexOf(Tab* tab) const
 {
     return m_stack->indexOf(tab);
+}
+
+void TabWidget::setTabPinned(int index, bool pinned)
+{
+    auto* target = tab(index);
+    if (!target || target->isPinned() == pinned)
+        return;
+    target->setPinned(pinned);
+    // After flipping the flag: pin lands at the end of the pinned group,
+    // unpin at the front of the unpinned group (= count of remaining pinned).
+    auto boundary = pinned ? pinnedTabCount() - 1 : pinnedTabCount();
+    boundary = std::clamp(boundary, 0, count() - 1);
+    if (boundary != index)
+        m_tab_bar->moveTab(index, boundary);
+    m_tab_bar->refreshTabLayout();
+    updateTabLayout();
+    // moveTab only fires tabMoved when the position changed; pinning in place
+    // still needs a session save for the pinned flag.
+    if (onTabsReordered)
+        onTabsReordered();
 }
 
 void TabWidget::setNewTabAction(QAction* action)
@@ -1521,7 +1614,9 @@ void TabWidget::updateTabLayout()
     updateVerticalTabsSeparator();
     auto available_for_tabs = width() - m_new_tab_button->width() - 36;
     m_tab_bar->setAvailableWidth(available_for_tabs);
-    auto tab_bar_width = std::min(available_for_tabs, m_tab_bar->count() * HorizontalTabMaxWidth);
+    auto pinned = m_tab_bar->pinnedCount();
+    auto natural_width = pinned * PinnedTabWidth + (m_tab_bar->count() - pinned) * HorizontalTabMaxWidth;
+    auto tab_bar_width = std::min(available_for_tabs, natural_width);
     m_tab_bar->setFixedWidth(std::max(0, tab_bar_width));
 }
 

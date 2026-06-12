@@ -21,6 +21,10 @@ fn main() {
         .atleast_version("6")
         .probe("Qt6Network")
         .expect("Qt 6 Network development package must be available via pkg-config");
+    let qt_sql = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6Sql")
+        .expect("Qt 6 Sql development package must be available via pkg-config");
     let qt_wayland = pkg_config::Config::new()
         .atleast_version("6")
         .probe("Qt6WaylandClient")
@@ -36,6 +40,7 @@ fn main() {
     for header in &[
         "cpp/BookmarkStore.h",
         "cpp/BookmarksBar.h",
+        "cpp/FaviconStore.h",
         "cpp/HistoryStore.h",
         "cpp/WebContentView.h",
     ] {
@@ -76,6 +81,9 @@ fn main() {
     for path in &qt_network.include_paths {
         build.include(path);
     }
+    for path in &qt_sql.include_paths {
+        build.include(path);
+    }
     if let Some(qt_wayland) = &qt_wayland {
         for path in &qt_wayland.include_paths {
             build.include(path);
@@ -97,7 +105,12 @@ fn main() {
             None => build.define(&flag.0, None),
         };
     }
-    for flag in qt_svg.defines.iter().chain(qt_network.defines.iter()) {
+    for flag in qt_svg
+        .defines
+        .iter()
+        .chain(qt_network.defines.iter())
+        .chain(qt_sql.defines.iter())
+    {
         match &flag.1 {
             Some(value) => build.define(&flag.0, Some(value.as_str())),
             None => build.define(&flag.0, None),
@@ -114,6 +127,10 @@ fn main() {
         "cpp/BookmarksBar.cpp",
         "cpp/BookmarkStore.cpp",
         "cpp/HistoryStore.cpp",
+        "cpp/FaviconStore.cpp",
+        "cpp/SessionStore.cpp",
+        "cpp/StorageDb.cpp",
+        "cpp/TabSearch.cpp",
         "cpp/Favicon.cpp",
         "cpp/FindInPageWidget.cpp",
         "cpp/WebContentPlaceholder.cpp",
@@ -126,7 +143,13 @@ fn main() {
     build.file(resources_cpp);
 
     // Compile MOC-generated files for Q_OBJECT classes
-    for stem in &["BookmarkStore", "BookmarksBar", "HistoryStore", "WebContentView"] {
+    for stem in &[
+        "BookmarkStore",
+        "BookmarksBar",
+        "FaviconStore",
+        "HistoryStore",
+        "WebContentView",
+    ] {
         build.file(out_dir.join(format!("moc_{stem}.cpp")));
     }
 

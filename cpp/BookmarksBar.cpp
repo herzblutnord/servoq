@@ -16,6 +16,7 @@
  */
 #include "BookmarksBar.h"
 #include "BookmarkStore.h"
+#include "FaviconStore.h"
 #include "ChromeStyle.h"
 #include "Icon.h"
 #include "Settings.h"
@@ -44,6 +45,7 @@
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 #include <QToolButton>
+#include <QUrl>
 #include <QWidget>
 
 namespace ServoQ {
@@ -117,14 +119,30 @@ static BookmarkDragPayload parse_bookmark_drag_payload(QMimeData const* mime_dat
     return payload;
 }
 
-static QIcon bookmark_icon_from_base64(QString const& favicon_base64_png, QPalette const& palette)
+static QIcon bookmark_icon_for_url(QString const& url, QPalette const& palette)
 {
-    if (!favicon_base64_png.isEmpty()) {
-        QPixmap pixmap;
-        if (pixmap.loadFromData(QByteArray::fromBase64(favicon_base64_png.toLatin1()), "PNG"))
-            return QIcon(pixmap);
-    }
+    auto icon = FaviconStore::the()->iconForUrl(url);
+    if (!icon.isNull())
+        return icon;
     return create_chrome_icon(ChromeIcon::Globe, palette);
+}
+
+static bool bookmarksReferenceHost(QString const& host)
+{
+    auto matches = [&host](BookmarkItem const& bookmark) {
+        return QUrl(bookmark.url).host().toLower() == host;
+    };
+    for (auto const& bookmark : BookmarkStore::the()->rootBookmarks()) {
+        if (matches(bookmark))
+            return true;
+    }
+    for (auto const& folder : BookmarkStore::the()->folders()) {
+        for (auto const& bookmark : folder.items) {
+            if (matches(bookmark))
+                return true;
+        }
+    }
+    return false;
 }
 
 // Custom paint replicates reference paint_bookmark_button
@@ -268,6 +286,13 @@ BookmarksBar::BookmarksBar(QWidget* parent)
     }
 
     connect(BookmarkStore::the(), &BookmarkStore::changed, this, &BookmarksBar::rebuild);
+    // Bookmark icons come from the favicon DB now; refresh when a bookmarked
+    // site's icon is (re)fetched. Icons for non-bookmarked hosts arrive on
+    // every page load — ignore those, a full bar rebuild per load is wasteful.
+    connect(FaviconStore::the(), &FaviconStore::iconsChanged, this, [this](QString const& host) {
+        if (host.isEmpty() || bookmarksReferenceHost(host))
+            rebuild();
+    });
 
     rebuild();
 }
@@ -314,7 +339,7 @@ void BookmarksBar::rebuild()
 
     auto add_bookmark_button = [this](BookmarkItem const& item) {
         auto* action = new QAction(this);
-        action->setIcon(bookmark_icon_from_base64(item.favicon_base64_png, palette()));
+        action->setIcon(bookmark_icon_for_url(item.url, palette()));
         action->setToolTip(item.url);
         action->setProperty("bookmark_id", item.id);
         action->setProperty("bookmark_type", QStringLiteral("bookmark"));
@@ -338,7 +363,7 @@ void BookmarksBar::rebuild()
 
         for (auto const& child : folder.items) {
             auto* child_action = submenu->addAction(
-                bookmark_icon_from_base64(child.favicon_base64_png, palette()), child.title);
+                bookmark_icon_for_url(child.url, palette()), child.title);
             child_action->setToolTip(child.url);
             child_action->setProperty("bookmark_id", child.id);
             child_action->setProperty("bookmark_type", QStringLiteral("bookmark"));

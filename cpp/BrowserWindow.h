@@ -28,6 +28,7 @@ namespace ServoQ {
 
 struct SessionTabState;
 class Tab;
+class TabSearchPopup;
 class TabWidget;
 
 class BrowserWindow final : public QMainWindow {
@@ -62,8 +63,9 @@ private:
     struct ClosedTabEntry {
         QString url;
         QString title;
-        QIcon icon;
+        QIcon icon; // null for entries restored from disk; menu falls back to FaviconStore
         bool was_empty_new_tab { false };
+        bool was_pinned { false };
     };
 
     void createMenus();
@@ -91,12 +93,16 @@ private:
     void reopenAllClosedTabs();
     void updateRecentlyClosedActions();
     void populateRecentlyClosedTabsMenu(QMenu* menu);
+    void loadPersistedClosedTabs();
+    void persistClosedTabs();
+    void showTabSearch();
     void showHomeAndNewTabSettingsDialog();
     bool shouldDrawWindowBorder() const;
     void updateWindowBorder();
 
     TabWidget* m_tabs { nullptr };
     Tab* m_active_tab { nullptr };
+    TabSearchPopup* m_tab_search { nullptr };
     QMenu* m_hamburger_menu { nullptr };
     QAction* m_new_tab_action { nullptr };
     QAction* m_close_tab_action { nullptr };
@@ -110,7 +116,7 @@ private:
     QAction* m_reopen_tab_action { nullptr };
     QAction* m_fullscreen_action { nullptr };
     QTimer* m_session_save_timer { nullptr };
-    QVector<ClosedTabEntry> m_closed_tabs; // oldest to newest; capped at 10
+    QVector<ClosedTabEntry> m_closed_tabs; // oldest to newest; capped at 25, persisted in SessionStore
     bool m_is_updating_chrome_style { false };
     bool m_is_restoring_session { false };
     bool m_was_maximized_before_fullscreen { false };

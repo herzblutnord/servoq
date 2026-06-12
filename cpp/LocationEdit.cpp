@@ -11,6 +11,7 @@
  */
 #include "LocationEdit.h"
 #include "ChromeStyle.h"
+#include "FaviconStore.h"
 #include "HistoryStore.h"
 #include "Icon.h"
 #include "WebViewURL.h"
@@ -324,6 +325,8 @@ void LocationEdit::updateHistorySuggestions(QString const& query)
         auto* item = new QStandardItem(label);
         item->setData(suggestion.url, Qt::UserRole);
         item->setToolTip(suggestion.url);
+        auto icon = FaviconStore::the()->iconForUrl(suggestion.url);
+        item->setIcon(icon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : icon);
         m_history_completion_model->appendRow(item);
     }
 

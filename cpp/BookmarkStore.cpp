@@ -6,6 +6,7 @@
  *   Libraries/LibWebView/BookmarkStore.cpp
  */
 #include "BookmarkStore.h"
+#include "FaviconStore.h"
 
 #include <QDir>
 #include <QFile>
@@ -63,6 +64,17 @@ void BookmarkStore::load()
     m_folders.clear();
     m_root_items.clear();
 
+    // Earlier builds embedded each bookmark's favicon as a base64 PNG in this
+    // file, which bloated it and forced a full rewrite per favicon refresh.
+    // Icons now live in FaviconStore; embedded ones are imported once and the
+    // field is dropped on the next save.
+    auto import_legacy_favicon = [](QJsonObject const& object) {
+        auto favicon = object[QStringLiteral("favicon")].toString();
+        if (!favicon.isEmpty())
+            FaviconStore::the()->importLegacyIcon(object[QStringLiteral("url")].toString(),
+                QByteArray::fromBase64(favicon.toLatin1()));
+    };
+
     for (auto const& item_val : items) {
         auto item = item_val.toObject();
         auto type = item[QStringLiteral("type")].toString();
@@ -73,8 +85,8 @@ void BookmarkStore::load()
                 item[QStringLiteral("title")].toString(),
                 item[QStringLiteral("url")].toString(),
                 {},
-                item[QStringLiteral("favicon")].toString(),
             };
+            import_legacy_favicon(item);
             m_root_items.append({ bookmark.id, BookmarkType });
             m_root_bookmarks.append(bookmark);
         } else if (type == FolderType) {
@@ -89,8 +101,8 @@ void BookmarkStore::load()
                     child[QStringLiteral("title")].toString(),
                     child[QStringLiteral("url")].toString(),
                     folder.id,
-                    child[QStringLiteral("favicon")].toString(),
                 });
+                import_legacy_favicon(child);
             }
             m_root_items.append({ folder.id, FolderType });
             m_folders.append(folder);
@@ -109,8 +121,6 @@ void BookmarkStore::save()
         obj[QStringLiteral("id")]    = bm.id;
         obj[QStringLiteral("title")] = bm.title;
         obj[QStringLiteral("url")]   = bm.url;
-        if (!bm.favicon_base64_png.isEmpty())
-            obj[QStringLiteral("favicon")] = bm.favicon_base64_png;
         items.append(obj);
     };
 
@@ -127,8 +137,6 @@ void BookmarkStore::save()
             child_obj[QStringLiteral("id")]    = child.id;
             child_obj[QStringLiteral("title")] = child.title;
             child_obj[QStringLiteral("url")]   = child.url;
-            if (!child.favicon_base64_png.isEmpty())
-                child_obj[QStringLiteral("favicon")] = child.favicon_base64_png;
             children.append(child_obj);
         }
         obj[QStringLiteral("items")] = children;
@@ -234,14 +242,17 @@ void BookmarkStore::reconcileRootOrder()
 
 void BookmarkStore::addBookmark(QString const& title, QString const& url, QString const& folder_id, QString const& favicon_base64_png)
 {
+    if (!favicon_base64_png.isEmpty())
+        FaviconStore::the()->importLegacyIcon(url, QByteArray::fromBase64(favicon_base64_png.toLatin1()));
+
     if (folder_id.isEmpty()) {
-        BookmarkItem item { generateId(), title, url, {}, favicon_base64_png };
+        BookmarkItem item { generateId(), title, url, {} };
         m_root_items.append({ item.id, BookmarkType });
         m_root_bookmarks.append(item);
     } else {
         for (auto& folder : m_folders) {
             if (folder.id == folder_id) {
-                folder.items.append(BookmarkItem { generateId(), title, url, folder_id, favicon_base64_png });
+                folder.items.append(BookmarkItem { generateId(), title, url, folder_id });
                 break;
             }
         }
@@ -269,30 +280,6 @@ void BookmarkStore::editBookmark(QString const& id, QString const& title, QStrin
             if (bm.id == id) { bm.title = title; bm.url = url; save(); emit changed(); return; }
         }
     }
-}
-
-bool BookmarkStore::updateFavicon(QString const& url, QString const& favicon_base64_png)
-{
-    bool did_change = false;
-    for (auto& bm : m_root_bookmarks) {
-        if (bm.url == url && bm.favicon_base64_png != favicon_base64_png) {
-            bm.favicon_base64_png = favicon_base64_png;
-            did_change = true;
-        }
-    }
-    for (auto& folder : m_folders) {
-        for (auto& bm : folder.items) {
-            if (bm.url == url && bm.favicon_base64_png != favicon_base64_png) {
-                bm.favicon_base64_png = favicon_base64_png;
-                did_change = true;
-            }
-        }
-    }
-    if (!did_change)
-        return false;
-    save();
-    emit changed();
-    return true;
 }
 
 void BookmarkStore::editFolder(QString const& id, QString const& title)
@@ -533,7 +520,7 @@ void BookmarkStore::importFlatList(QStringList const& items)
     for (auto const& entry : items) {
         auto parts = entry.split(QStringLiteral("\t"));
         if (parts.size() >= 2) {
-            BookmarkItem item { generateId(), parts.first(), parts.last(), {}, {} };
+            BookmarkItem item { generateId(), parts.first(), parts.last(), {} };
             m_root_items.append({ item.id, BookmarkType });
             m_root_bookmarks.append(item);
         }
