@@ -4,7 +4,7 @@
 // Copyright (c) 2023, Linus Groh <linusg@serenityos.org>
 // Copyright (c) 2023, Srikavin Ramkumar <me@srikavin.me>
 // Copyright (c) 2024-2025, Sam Atkins <sam@ladybird.org>
-// Copyright (c) 2026-present, the Ladybird developers.
+// Copyright (c) 2025, Tim Ledbetter <tim.ledbetter@ladybird.org>
 // SPDX-License-Identifier: BSD-2-Clause
 //
 // Derived from Ladybird:

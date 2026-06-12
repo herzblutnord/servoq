@@ -11,9 +11,13 @@ Thumbs.db
 /target-servo/
 /memory/
 /bottles/
+/.codex/
+/.agents/
 
 # Reference repositories, not part of ServoQ source
 /vendor/*
 
 /docs/DEVIATIONS.md
 /docs/servoq_bucket1_bucket2_feature_table.md
+/docs/AI_AGENT_INSTRUCTIONS.md
+

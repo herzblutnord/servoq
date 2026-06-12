@@ -6,7 +6,7 @@
  * Copyright (c) 2023-2026, Tim Flynn <trflynn89@ladybird.org>
  * Copyright (c) 2024-2026, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2025, Simon Farre <simon.farre.cx@gmail.com>
- * Copyright (c) 2026-present, the Ladybird developers.
+ * Copyright (c) 2025, Tim Ledbetter <tim.ledbetter@ladybird.org>
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:

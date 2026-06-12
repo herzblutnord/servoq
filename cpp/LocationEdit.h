@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2023, Cameron Youell <cameronyouell@gmail.com>
- * Copyright (c) 2026-present, the Ladybird developers.
+ * Copyright (c) 2026, Andreas Kling <andreas@ladybird.org>
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Derived from Ladybird:
