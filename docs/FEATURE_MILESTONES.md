@@ -40,12 +40,12 @@ grouped by related work. Status was determined by auditing the codebase
 | Crash UI | ✅ | inline crash page in the view |
 | Animation/event-loop driving | ✅ | wake-event architecture; see DEVIATIONS.md |
 | Window management UI (single window) | ✅ | geometry/maximized persistence (multi-window is L, see M5) |
+| Session restore | ✅ | opt-in URL-level open tabs + active tab restore |
 
 ## Partially implemented
 
 | Feature | Status | Gap | Picked up in |
 |---|---|---|---|
-| Session restore | ◐ | window geometry only; open tabs are not restored | M2 |
 | Clipboard support | ◐ | Ctrl+C/X/V forwarded as EditingActions; no `ClipboardDelegate` so JS/async clipboard and Servo-initiated copy don't reach the system clipboard | M3 |
 | Notifications | ◐ | tray popup shown unconditionally; no permission prompt / per-origin persistence | M3 |
 | Console messages | ◐ | stderr behind `SERVOQ_DEBUG`; no debug-page panel | M4 |
@@ -75,7 +75,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 2.1 | Session restore (open tabs + active tab on start) | ◐ | URL-level restore per the table; opt-in setting like Chrome's "continue where you left off" |
+| 2.1 | Session restore (open tabs + active tab on start) | ✅ | URL-level restore per the table; opt-in setting like Chrome's "continue where you left off" |
 | 2.2 | Recently-closed-tabs menu | ✅ | History-menu submenu with favicons, individual restore, Reopen All, Clear, and Ctrl+Shift+T |
 | 2.3 | Configurable homepage / new-tab URL | ✅ | setting + home behavior |
 | 2.4 | Pinned tabs | ✗ | tab metadata + ordering + compact rendering; persists with session |

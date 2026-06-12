@@ -21,10 +21,12 @@ class QAction;
 class QCloseEvent;
 class QMenu;
 class QPaintEvent;
+class QTimer;
 class QWheelEvent;
 
 namespace ServoQ {
 
+struct SessionTabState;
 class Tab;
 class TabWidget;
 
@@ -66,6 +68,8 @@ private:
 
     void createMenus();
     void createInitialTab();
+    bool restoreSessionTabs();
+    Tab* createRestoredSessionTab(SessionTabState const& entry);
     void clearLocationEditFocusForMousePress(QObject* target);
     void applyBrowserChromeCursors(QWidget* root);
     void closeTab(int index);
@@ -78,6 +82,8 @@ private:
     void applySettings();
     void refreshBookmarksBars();
     void refreshHomeButtons();
+    void scheduleSessionSave();
+    void saveSessionState();
     void updateCurrentTabState();
     void updateChromeStyle();
     void rememberClosedTab(Tab const& tab);
@@ -103,8 +109,10 @@ private:
     QAction* m_show_menu_bar_action { nullptr };
     QAction* m_reopen_tab_action { nullptr };
     QAction* m_fullscreen_action { nullptr };
+    QTimer* m_session_save_timer { nullptr };
     QVector<ClosedTabEntry> m_closed_tabs; // oldest to newest; capped at 10
     bool m_is_updating_chrome_style { false };
+    bool m_is_restoring_session { false };
     bool m_was_maximized_before_fullscreen { false };
     int m_activation_serial { 0 };
 };

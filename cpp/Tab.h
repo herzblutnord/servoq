@@ -49,6 +49,7 @@ public:
     void setHomeButtonVisible(bool visible);
     void setActive(bool active);
     void showEmptyNewTab();
+    void restoreSessionUrl(QString const& url);
     void attachExistingWebView(QString const& initial_url = {});
     void updateToggleVerticalTabsIcon();
     void navigate(QString const& url);

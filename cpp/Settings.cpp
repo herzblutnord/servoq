@@ -14,6 +14,9 @@
 #include "Settings.h"
 
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QUrl>
 
 namespace ServoQ {
@@ -234,6 +237,72 @@ QString Settings::new_tab_url() const
         return is_blank(custom_new_tab_url()) ? QString {} : custom_new_tab_url();
     }
     return {};
+}
+
+bool Settings::restore_session_on_startup() const
+{
+    return m_qsettings.value(QStringLiteral("startup/restore_session"), QVariant(false)).toBool();
+}
+
+void Settings::set_restore_session_on_startup(bool restore)
+{
+    m_qsettings.setValue(QStringLiteral("startup/restore_session"), restore);
+}
+
+QVector<SessionTabState> Settings::session_tabs() const
+{
+    QVector<SessionTabState> tabs;
+
+    auto raw_json = m_qsettings.value(QStringLiteral("session/tabs_json")).toString().toUtf8();
+    if (raw_json.isEmpty())
+        return tabs;
+
+    QJsonParseError error;
+    auto document = QJsonDocument::fromJson(raw_json, &error);
+    if (error.error != QJsonParseError::NoError || !document.isArray())
+        return tabs;
+
+    auto array = document.array();
+    tabs.reserve(array.size());
+    for (auto const& value : array) {
+        if (!value.isObject())
+            continue;
+        auto object = value.toObject();
+        auto is_empty_new_tab = object.value(QStringLiteral("empty")).toBool(false);
+        auto url = object.value(QStringLiteral("url")).toString().trimmed();
+        if (is_empty_new_tab) {
+            tabs.append({ QStringLiteral("about:blank"), true });
+        } else if (!url.isEmpty()) {
+            tabs.append({ url, false });
+        }
+    }
+
+    return tabs;
+}
+
+int Settings::session_active_tab_index() const
+{
+    return m_qsettings.value(QStringLiteral("session/active_tab_index"), 0).toInt();
+}
+
+void Settings::set_session_tabs(QVector<SessionTabState> const& tabs, int active_tab_index)
+{
+    QJsonArray array;
+    for (auto const& tab : tabs) {
+        QJsonObject object;
+        object.insert(QStringLiteral("url"), tab.url);
+        object.insert(QStringLiteral("empty"), tab.is_empty_new_tab);
+        array.append(object);
+    }
+
+    m_qsettings.setValue(QStringLiteral("session/tabs_json"), QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact)));
+    m_qsettings.setValue(QStringLiteral("session/active_tab_index"), active_tab_index);
+}
+
+void Settings::clear_session_tabs()
+{
+    m_qsettings.remove(QStringLiteral("session/tabs_json"));
+    m_qsettings.remove(QStringLiteral("session/active_tab_index"));
 }
 
 bool Settings::experimental_features_enabled() const

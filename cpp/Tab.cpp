@@ -213,6 +213,21 @@ void Tab::showEmptyNewTab()
     update_tab_title();
 }
 
+void Tab::restoreSessionUrl(QString const& url)
+{
+    auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
+    m_is_empty_new_tab = false;
+    m_url = normalized_url;
+    m_title = normalized_url;
+    m_favicon = {};
+    m_view->setEmptyNewTab(false);
+    m_view->setInitialUrl(normalized_url);
+    m_location_edit->setUrl(m_url);
+    set_loading(false);
+    refreshBookmarkIcon();
+    update_tab_title();
+}
+
 void Tab::attachExistingWebView(QString const& initial_url)
 {
     auto normalized_url = initial_url.trimmed().isEmpty() ? QStringLiteral("about:blank") : initial_url.trimmed();

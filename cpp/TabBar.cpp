@@ -1104,6 +1104,8 @@ TabWidget::TabWidget(QWidget* parent)
         m_toolbar_container->insertWidget(to, toolbar);
         m_stack->setCurrentIndex(to);
         m_toolbar_container->setCurrentIndex(to);
+        if (onTabsReordered)
+            onTabsReordered();
     });
 
     recreateIcons();

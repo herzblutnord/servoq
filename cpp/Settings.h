@@ -14,6 +14,7 @@
 
 #include <QList>
 #include <QPoint>
+#include <QVector>
 #include <QSettings>
 #include <QSize>
 #include <QStringList>
@@ -31,6 +32,11 @@ enum class NewTabPageBehavior {
     Blank,
     Homepage,
     CustomUrl,
+};
+
+struct SessionTabState {
+    QString url;
+    bool is_empty_new_tab { false };
 };
 
 class Settings final : public QObject {
@@ -80,6 +86,13 @@ public:
     QString custom_new_tab_url() const;
     void set_custom_new_tab_url(QString const& url);
     QString new_tab_url() const;
+
+    bool restore_session_on_startup() const;
+    void set_restore_session_on_startup(bool restore);
+    QVector<SessionTabState> session_tabs() const;
+    int session_active_tab_index() const;
+    void set_session_tabs(QVector<SessionTabState> const& tabs, int active_tab_index);
+    void clear_session_tabs();
 
     bool content_blocking_enabled() const;
     void set_content_blocking_enabled(bool enabled);

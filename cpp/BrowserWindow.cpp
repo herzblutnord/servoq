@@ -194,6 +194,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_tabs(new TabWidget(this))
     , m_hamburger_menu(new QMenu(this))
+    , m_session_save_timer(new QTimer(this))
 {
     // Install event filter on qApp so BrowserWindow::eventFilter() receives the
     // QtEventLoopWaker wake event (QEvent::User+1) posted from Servo's threads.
@@ -231,8 +232,17 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     applySettings();
     updateMenuBarVisibility();
 
+    m_session_save_timer->setSingleShot(true);
+    m_session_save_timer->setInterval(1000);
+    connect(m_session_save_timer, &QTimer::timeout, this, &BrowserWindow::saveSessionState);
+
     m_tabs->onCurrentChanged = [this](int index) {
         NewTabTraceScope trace_scope("currentChanged");
+        if (m_is_restoring_session) {
+            m_active_tab = currentTab();
+            updateCurrentTabState();
+            return;
+        }
         auto* next_tab = currentTab();
         {
             NewTabTraceScope scope("deactivate_other_tabs");
@@ -261,6 +271,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             }
         }
         updateCurrentTabState();
+        scheduleSessionSave();
         // Defer activateTab so any mouse event that triggered the tab switch
         // fully unwinds before we show/hide/reposition the native Wayland
         // wl_subsurface. Doing this synchronously corrupts Qt/Wayland event
@@ -306,6 +317,9 @@ BrowserWindow::BrowserWindow(QWidget* parent)
         newtab_trace_point("new_tab_button_clicked");
         createNewTab();
     };
+    m_tabs->onTabsReordered = [this] {
+        scheduleSessionSave();
+    };
     m_tabs->setNewTabAction(m_new_tab_action);
     setCentralWidget(m_tabs);
 
@@ -330,6 +344,7 @@ void BrowserWindow::tabStateChanged(Tab* tab)
     }
     if (tab == currentTab())
         updateCurrentTabState();
+    scheduleSessionSave();
 }
 
 bool BrowserWindow::showMenuBar() const
@@ -726,6 +741,19 @@ void BrowserWindow::createMenus()
     connect(home_and_new_tab_action, &QAction::triggered, this, &BrowserWindow::showHomeAndNewTabSettingsDialog);
     settings_menu->addAction(home_and_new_tab_action);
 
+    auto* restore_session_action = new QWidgetAction(this);
+    auto* restore_session_checkbox = new QCheckBox(QStringLiteral("Continue where you left off"), this);
+    restore_session_checkbox->setChecked(Settings::the()->restore_session_on_startup());
+    connect(restore_session_checkbox, &QCheckBox::toggled, this, [this](bool enabled) {
+        Settings::the()->set_restore_session_on_startup(enabled);
+        if (enabled)
+            saveSessionState();
+        else
+            Settings::the()->clear_session_tabs();
+    });
+    restore_session_action->setDefaultWidget(restore_session_checkbox);
+    settings_menu->addAction(restore_session_action);
+
     settings_menu->addSeparator();
 
     // Search engine selector
@@ -846,18 +874,88 @@ void BrowserWindow::createMenus()
 
 void BrowserWindow::closeEvent(QCloseEvent* event)
 {
+    if (m_session_save_timer)
+        m_session_save_timer->stop();
     Settings::the()->set_last_position(pos());
     Settings::the()->set_last_size(size());
     Settings::the()->set_is_maximized(isMaximized());
+    saveSessionState();
     servoq::begin_servo_shutdown();
     QMainWindow::closeEvent(event);
 }
 
 void BrowserWindow::createInitialTab()
 {
+    if (restoreSessionTabs())
+        return;
+
     createNewTab();
     if (auto* tab = currentTab())
         tab->focusLocationEditor();
+}
+
+bool BrowserWindow::restoreSessionTabs()
+{
+    if (!Settings::the()->restore_session_on_startup())
+        return false;
+
+    auto entries = Settings::the()->session_tabs();
+    if (entries.isEmpty())
+        return false;
+
+    m_is_restoring_session = true;
+    for (auto const& entry : entries)
+        createRestoredSessionTab(entry);
+
+    auto active_index = Settings::the()->session_active_tab_index();
+    active_index = std::clamp(active_index, 0, m_tabs->count() - 1);
+    m_tabs->setCurrentIndex(active_index);
+    m_is_restoring_session = false;
+
+    if (auto* tab = currentTab()) {
+        m_active_tab = tab;
+        tab->setActive(true);
+        if (tab->isEmptyNewTab())
+            tab->focusLocationEditor();
+        else if (auto* view = tab->view())
+            view->setFocus(Qt::OtherFocusReason);
+
+        QPointer<Tab> target_tab = tab;
+        QPointer<TabWidget> tabs = m_tabs;
+        int serial = ++m_activation_serial;
+        QTimer::singleShot(0, this, [this, tabs, target_tab, serial] {
+            if (!tabs || !target_tab)
+                return;
+            if (serial != m_activation_serial)
+                return;
+            int idx = tabs->indexOf(target_tab);
+            if (idx < 0)
+                return;
+            NewTabTraceScope scope("restore_activateTab", target_tab->controllerId());
+            tabs->activateTab(idx);
+        });
+    }
+    updateCurrentTabState();
+    return true;
+}
+
+Tab* BrowserWindow::createRestoredSessionTab(SessionTabState const& entry)
+{
+    auto tab_id = servoq::create_tab();
+    auto* tab = new Tab(this, tab_id);
+    if (entry.is_empty_new_tab)
+        tab->showEmptyNewTab();
+    else
+        tab->restoreSessionUrl(entry.url);
+
+    auto index = m_tabs->addTab(tab, tab->title());
+    tab->setHamburgerButtonVisible(!menuBar()->isVisible());
+    debug_log("restore_session_tab", tab_id,
+        QStringLiteral("index=%1 empty=%2 url=%3")
+            .arg(index)
+            .arg(entry.is_empty_new_tab ? 1 : 0)
+            .arg(entry.url));
+    return tab;
 }
 
 void BrowserWindow::createNewTab(QString const& url, bool background, bool use_configured_new_tab)
@@ -891,7 +989,8 @@ void BrowserWindow::createNewTab(QString const& url, bool background, bool use_c
     if (target_url.isEmpty()) {
         NewTabTraceScope scope("showEmptyNewTab", tab_id);
         tab->showEmptyNewTab();
-        tab->focusLocationEditor();
+        if (!background)
+            tab->focusLocationEditor();
     } else {
         NewTabTraceScope scope("navigate", tab_id);
         tab->navigate(target_url);
@@ -902,6 +1001,7 @@ void BrowserWindow::createNewTab(QString const& url, bool background, bool use_c
     }
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("<<< createNewTab END tab_id=%1").arg(tab_id));
+    scheduleSessionSave();
 }
 
 void BrowserWindow::openTabForExistingId(int tab_id)
@@ -915,6 +1015,7 @@ void BrowserWindow::openTabForExistingId(int tab_id)
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
     tab->attachExistingWebView(initial_url);
     updateCurrentTabState();
+    scheduleSessionSave();
 }
 
 void BrowserWindow::setFullscreen(bool fullscreen)
@@ -954,6 +1055,7 @@ void BrowserWindow::closeTab(int index)
     m_tabs->removeTab(index);
     servoq::close_tab(tab_id);
     updateCurrentTabState();
+    scheduleSessionSave();
 }
 
 void BrowserWindow::rememberClosedTab(Tab const& tab)
@@ -1243,6 +1345,41 @@ void BrowserWindow::refreshHomeButtons()
         if (auto* tab = m_tabs->tab(i))
             tab->setHomeButtonVisible(visible);
     }
+}
+
+void BrowserWindow::scheduleSessionSave()
+{
+    if (m_is_restoring_session || !Settings::the()->restore_session_on_startup())
+        return;
+    if (m_session_save_timer)
+        m_session_save_timer->start();
+}
+
+void BrowserWindow::saveSessionState()
+{
+    if (!Settings::the()->restore_session_on_startup()) {
+        Settings::the()->clear_session_tabs();
+        return;
+    }
+
+    QVector<SessionTabState> tabs;
+    tabs.reserve(m_tabs->count());
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        auto* tab = m_tabs->tab(i);
+        if (!tab)
+            continue;
+        tabs.append({
+            tab->isEmptyNewTab() ? QStringLiteral("about:blank") : tab->url(),
+            tab->isEmptyNewTab(),
+        });
+    }
+
+    if (tabs.isEmpty()) {
+        Settings::the()->clear_session_tabs();
+        return;
+    }
+
+    Settings::the()->set_session_tabs(tabs, m_tabs->currentIndex());
 }
 
 void BrowserWindow::refreshBookmarksBars()

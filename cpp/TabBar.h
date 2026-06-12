@@ -159,6 +159,7 @@ public:
     std::function<void(int)> onCurrentChanged;
     std::function<void(int)> onTabCloseRequested;
     std::function<void()> onNewTabRequested;
+    std::function<void()> onTabsReordered;
 
 protected:
     bool event(QEvent* event) override;
