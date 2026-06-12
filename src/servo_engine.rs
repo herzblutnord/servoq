@@ -26,7 +26,7 @@ mod engine {
     use std::ffi::{c_char, c_void, CStr};
     use std::ptr::NonNull;
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -421,8 +421,17 @@ mod engine {
 
     // Mirrors servoshell EXPERIMENTAL_PREFS — all enabled by default.
     // The user can disable them via Settings → Experimental Web Platform Features.
+    // ServoQ addition beyond the servoshell list: dom_cookiestore_enabled — the
+    // async CookieStore API is a thin layer over the same engine cookie jar that
+    // ServoQ now persists (docs/STORAGE.md), and its core surface
+    // (get/getAll/set/delete + change events) is implemented in Servo 0.2.
+    // The remaining default-off prefs stay off: Geolocation, Wake Lock,
+    // Credential Management, WebRTC, and Media Capture all need the M3.3
+    // permission-prompt UI first, and ServiceWorker/SharedWorker/Web Animations/
+    // AdoptedStyleSheets are partial enough that feature-detecting sites break.
     pub(super) const EXPERIMENTAL_PREFS: &[&str] = &[
         "dom_async_clipboard_enabled",
+        "dom_cookiestore_enabled",
         "dom_exec_command_enabled",
         "dom_fontface_enabled",
         "dom_indexeddb_enabled",
@@ -458,7 +467,8 @@ mod engine {
             return None;
         }
 
-        let mut path = PathBuf::from(app_data_dir);
+        let app_data_path = PathBuf::from(app_data_dir);
+        let mut path = app_data_path.clone();
         path.push("servo-profile");
         if let Err(error) = std::fs::create_dir_all(&path) {
             eprintln!(
@@ -467,12 +477,56 @@ mod engine {
             );
             return None;
         }
+        restrict_profile_dir_permissions(&app_data_path);
+        restrict_profile_dir_permissions(&path);
         Some(path)
+    }
+
+    // Browser profiles are private per OS user (Firefox creates profile
+    // directories 0700); Qt's mkpath and create_dir_all honor the umask and
+    // typically leave 0755, which would let other local users read
+    // cookie_jar.json, history.db, and the rest of the profile.
+    fn restrict_profile_dir_permissions(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) =
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            {
+                eprintln!(
+                    "ServoQ storage: cannot restrict permissions on {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
+    // Servo's resource thread persists auth_cache.json (plaintext HTTP
+    // Basic/Digest usernames and passwords) next to the cookie jar whenever a
+    // config_dir is set. Chrome and Firefox keep HTTP auth session-only, so
+    // remove the file before Servo can load it and again after the shutdown
+    // write — credentials must not outlive the session on disk.
+    fn remove_persisted_http_auth_cache(profile_dir: &Path) {
+        let path = profile_dir.join("auth_cache.json");
+        if let Err(error) = std::fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "ServoQ storage: cannot remove persisted HTTP auth cache {}: {error}",
+                    path.display()
+                );
+            }
+        }
     }
 
     fn servo_opts() -> Opts {
         let mut opts = Opts::default();
-        opts.config_dir = servo_profile_dir();
+        let profile_dir = servo_profile_dir();
+        if let Some(dir) = &profile_dir {
+            remove_persisted_http_auth_cache(dir);
+        }
+        opts.config_dir = profile_dir;
         opts.temporary_storage = false;
         opts
     }
@@ -635,8 +689,78 @@ mod engine {
         status_text: String,
         active: bool,
         qt_modifiers: u32,
+        paint_hold: NavPaintHold,
         physical_size: PhysicalSize<u32>,
         hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
+    }
+
+    // Navigation paint holding (the Chrome behavior: keep showing the old page
+    // until the new one can paint content). At navigation commit Servo swaps
+    // the frame tree to the new pipeline before that pipeline has any display
+    // list, so webrender paints pure `shell_background_color_rgba` (white)
+    // until the new document's first styled layout — a full-white flash
+    // between clicking a link and the page rendering. The embedder gets no
+    // first-contentful-paint signal, so detect content from the pixels: while
+    // a hold is active, every painted frame is read back and a uniformly
+    // white frame is not presented — visually identical to not presenting at
+    // all, so nothing is lost — while the first frame with any non-white
+    // pixel is presented immediately and ends the hold. The hold is armed at
+    // `LoadStatus::Started` (emitted from the NEW document's
+    // set_ready_state(Loading), i.e. at commit, exactly when blank frames
+    // begin) and at webview creation (a fresh webview never fires Started for
+    // its initial load), and released by content, `LoadStatus::Complete`
+    // (a genuinely blank page must still appear), a crash, or the timeout.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum NavPaintHold {
+        /// No top-level navigation in flight; frames present normally.
+        Idle,
+        /// Navigation in flight: present nothing until a frame has content.
+        Held { deadline: Instant },
+    }
+
+    const NAVIGATION_PAINT_HOLD_TIMEOUT_MS: u64 = 10_000;
+
+    fn navigation_paint_hold() -> NavPaintHold {
+        NavPaintHold::Held {
+            deadline: Instant::now() + Duration::from_millis(NAVIGATION_PAINT_HOLD_TIMEOUT_MS),
+        }
+    }
+
+    fn set_paint_hold(id: i32, hold: NavPaintHold) {
+        ENGINE.with(|s| {
+            if let Some(tab) = s.borrow_mut().as_mut().and_then(|e| e.tabs.get_mut(&id)) {
+                tab.paint_hold = hold;
+            }
+        });
+    }
+
+    /// Whether the tab is inside a navigation paint hold. Clears an expired
+    /// hold so the timeout falls back to presenting whatever Servo paints.
+    fn paint_hold_active(id: i32) -> bool {
+        ENGINE.with(|s| {
+            let mut state = s.borrow_mut();
+            let Some(tab) = state.as_mut().and_then(|e| e.tabs.get_mut(&id)) else {
+                return false;
+            };
+            match tab.paint_hold {
+                NavPaintHold::Idle => false,
+                NavPaintHold::Held { deadline } => {
+                    if Instant::now() < deadline {
+                        true
+                    } else {
+                        tab.paint_hold = NavPaintHold::Idle;
+                        false
+                    }
+                }
+            }
+        })
+    }
+
+    /// True when every pixel equals Servo's navigation clear color (opaque
+    /// white) — i.e. the frame carries no content worth presenting. Early
+    /// exit on the first differing byte keeps contentful frames cheap.
+    fn frame_is_blank_white(rgba_bytes: &[u8]) -> bool {
+        rgba_bytes.iter().all(|&byte| byte == 0xFF)
     }
 
     #[derive(Clone)]
@@ -724,6 +848,15 @@ mod engine {
             let rect: Box2D<i32, DevicePixel> =
                 Box2D::new(Point2D::origin(), Point2D::new(w as i32, h as i32));
             if let Some(image) = rendering_context.read_to_image(rect) {
+                if paint_hold_active(self.tab_id) {
+                    if frame_is_blank_white(image.as_raw()) {
+                        // Navigation paint hold: keep the previous m_frame (or
+                        // the new-tab placeholder) instead of a blank flash.
+                        debug_log("held_blank_navigation_frame", self.tab_id);
+                        return;
+                    }
+                    set_paint_hold(self.tab_id, NavPaintHold::Idle);
+                }
                 if debug_enabled() {
                     debug_log_detail("deliver_frame", self.tab_id, format!("{w}x{h}"));
                 }
@@ -881,10 +1014,12 @@ mod engine {
             });
             match status {
                 LoadStatus::Started => {
+                    set_paint_hold(self.tab_id, navigation_paint_hold());
                     let url = url_for_start.unwrap_or_default();
                     crate::bridge::ffi::notify_load_started(self.tab_id, &url);
                 }
                 LoadStatus::Complete => {
+                    set_paint_hold(self.tab_id, NavPaintHold::Idle);
                     crate::bridge::ffi::notify_load_finished(self.tab_id);
                     // Servo may not issue another frame notification after load completion.
                     // Force one software paint/read so Qt receives the final post-load pixels.
@@ -915,6 +1050,7 @@ mod engine {
                 return;
             }
             eprintln!("Servo WebView crashed: {reason}");
+            set_paint_hold(self.tab_id, NavPaintHold::Idle);
             crate::bridge::ffi::notify_webview_crashed(self.tab_id, &reason);
         }
 
@@ -1078,6 +1214,7 @@ mod engine {
                         status_text: String::new(),
                         active: true,
                         qt_modifiers: 0,
+                        paint_hold: navigation_paint_hold(),
                         physical_size: size,
                         hidpi_scale_factor: scale,
                     });
@@ -1251,6 +1388,12 @@ mod engine {
         // delegate callback triggers further Qt event processing (e.g. a modal
         // dialog or explicit processEvents()). The guard is cheap and defensive.
         static SPINNING: Cell<bool> = const { Cell::new(false) };
+        // Which tab's pixels the shared Wayland subsurface currently shows:
+        // Some(id) after a successful swap, None after C++ unmaps the
+        // subsurface (empty-tab activation). Navigation paint holding uses it
+        // to decide whether skipping a blank frame would leave another tab's
+        // stale content visible.
+        static WAYLAND_SURFACE_CONTENT_TAB: Cell<Option<i32>> = const { Cell::new(None) };
     }
 
     struct SpinGuard;
@@ -1400,6 +1543,7 @@ mod engine {
                     status_text: String::new(),
                     active: true,
                     qt_modifiers: 0,
+                    paint_hold: navigation_paint_hold(),
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1532,6 +1676,7 @@ mod engine {
                     status_text: String::new(),
                     active: true,
                     qt_modifiers: 0,
+                    paint_hold: navigation_paint_hold(),
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1638,6 +1783,7 @@ mod engine {
                     status_text: String::new(),
                     active: true,
                     qt_modifiers: 0,
+                    paint_hold: navigation_paint_hold(),
                     physical_size: size,
                     hidpi_scale_factor: scale_factor,
                 },
@@ -1678,6 +1824,12 @@ mod engine {
             // Wayland proxy has already been torn down by Qt.
             *s.borrow_mut() = None;
         });
+        // Servo's resource thread has now written its profile files (the drop
+        // above completes the engine shutdown); delete the plaintext HTTP auth
+        // cache it persisted alongside the cookie jar.
+        if let Some(profile_dir) = servo_profile_dir() {
+            remove_persisted_http_auth_cache(&profile_dir);
+        }
         SPINNING.with(|s| s.set(false));
     }
 
@@ -1749,6 +1901,10 @@ mod engine {
         }
     }
 
+    pub fn notify_wayland_subsurface_unmapped() {
+        WAYLAND_SURFACE_CONTENT_TAB.with(|t| t.set(None));
+    }
+
     pub fn present_wayland_webview(id: i32) {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return;
@@ -1795,8 +1951,32 @@ mod engine {
         let paint_started = Instant::now();
         webview.paint();
         let paint_time = paint_started.elapsed();
+        // Navigation paint hold: while the new document has nothing to show,
+        // don't swap — the shared subsurface keeps showing this tab's previous
+        // page (or stays unmapped behind the new-tab placeholder). The swap is
+        // still required when the surface currently shows ANOTHER tab's pixels
+        // (tab switch onto a mid-load tab): blank is correct there, stale
+        // foreign content is not. Read failures fail open and present.
+        if paint_hold_active(id) {
+            let surface_size = context.size2d().to_i32();
+            let rect: Box2D<i32, DevicePixel> =
+                Box2D::new(Point2D::origin(), Point2D::new(surface_size.width, surface_size.height));
+            match context.read_to_image(rect) {
+                Some(image) if frame_is_blank_white(image.as_raw()) => {
+                    let surface_shows_other_tab = WAYLAND_SURFACE_CONTENT_TAB
+                        .with(|t| t.get())
+                        .is_some_and(|content_tab| content_tab != id);
+                    if !surface_shows_other_tab {
+                        debug_log("held_blank_navigation_frame", id);
+                        return;
+                    }
+                }
+                _ => set_paint_hold(id, NavPaintHold::Idle),
+            }
+        }
         let swap_started = Instant::now();
         context.present();
+        WAYLAND_SURFACE_CONTENT_TAB.with(|t| t.set(Some(id)));
         let swap_time = swap_started.elapsed();
         record_wayland_present(
             started.elapsed(),
@@ -2466,6 +2646,11 @@ pub fn tick_servo() {
 pub fn present_wayland_webview(_id: i32) {
     #[cfg(feature = "servo-engine")]
     engine::present_wayland_webview(_id);
+}
+
+pub fn notify_wayland_subsurface_unmapped() {
+    #[cfg(feature = "servo-engine")]
+    engine::notify_wayland_subsurface_unmapped();
 }
 
 pub fn forward_mouse_move(_id: i32, _x: f32, _y: f32) {

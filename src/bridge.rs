@@ -126,6 +126,9 @@ pub mod ffi {
         // Called by BrowserWindow::eventFilter on the Qt EventLoopWaker wake event.
         fn tick_servo();
         fn present_wayland_webview(id: i32);
+        // Called by unmap_shared_servo_subsurface so navigation paint holding
+        // knows the shared surface no longer shows any tab's pixels.
+        fn notify_wayland_subsurface_unmapped();
 
         // Input forwarding: called by WebContentView event handlers
         fn forward_mouse_move(id: i32, x: f32, y: f32);
@@ -170,8 +173,8 @@ pub use crate::servo_engine::{
 pub use crate::servo_engine::{
     close_webview, create_webview, create_webview_wayland_window, forward_focus, forward_key,
     forward_mouse_button, forward_mouse_move, forward_resize, forward_theme_change, forward_wheel,
-    init_servo, present_wayland_webview, set_webview_active, shutdown_servo, tick_servo,
-    tick_webview,
+    init_servo, notify_wayland_subsurface_unmapped, present_wayland_webview, set_webview_active,
+    shutdown_servo, tick_servo, tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off

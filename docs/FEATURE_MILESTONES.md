@@ -88,7 +88,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 |---|---|---|---|
 | 3.1 | Clipboard delegate | ◐ | bridge Servo `ClipboardDelegate` ↔ QClipboard |
 | 3.2 | HTTP auth prompt | ✗ | `request_authentication`; servoshell dialog.rs reference |
-| 3.3 | Permission prompts + per-origin persistence | ✗ | `request_permission`; gates Notifications properly |
+| 3.3 | Permission prompts + per-origin persistence | ✗ | `request_permission`; gates Notifications properly. When this lands, also enable the permission-gated Servo prefs kept off until then: `dom_geolocation_enabled`, `dom_wakelock_enabled`, `dom_credential_management_enabled` (WebRTC/media capture need more than prompts). ServoQ already enables servoshell's full experimental set plus `dom_cookiestore_enabled` (see `EXPERIMENTAL_PREFS` in `src/servo_engine.rs`) |
 | 3.4 | Pinch zoom | ✗ | `adjust_pinch_zoom` from touchpad gesture events |
 | 3.5 | Window move/resize requests + screen geometry | ✗ | `request_move_to`/`request_resize_to`/`screen_geometry` |
 | 3.6 | Screenshots | ✗ | `take_screenshot`; menu action + Ctrl+Shift+S |

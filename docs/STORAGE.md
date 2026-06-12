@@ -10,7 +10,7 @@ QSettings INI (`~/.config/ServoQ/ServoQ.ini`).
 |---|---|---|---|
 | Browsing history | `history.db` | SQLite (`urls` + `visits`) | Chromium `History`, Firefox `places.sqlite` |
 | Favicons | `favicons.db` | SQLite (PNG blobs keyed by host) | Chromium `Favicons` |
-| Cookies, HSTS, HTTP auth cache | `servo-profile/cookie_jar.json`, `servo-profile/hsts_list.json`, `servo-profile/auth_cache.json` | Servo persistent profile files | Browser profile network state |
+| Cookies, HSTS | `servo-profile/cookie_jar.json`, `servo-profile/hsts_list.json` | Servo persistent profile files | Browser profile network state |
 | Bookmarks | `bookmarks.json` | JSON tree | Chromium `Bookmarks` |
 | Session (open tabs, active tab, pinned flags, recently closed) | `session.json` | JSON | Firefox `sessionstore.jsonlz4` (uncompressed; it is tiny) |
 | Settings, window geometry, search engines | QSettings INI | INI | — |
@@ -77,6 +77,33 @@ store for now and keeps it under the same browser profile root as the SQLite
 stores above. Session cookies are cleared at startup and again before Servo
 shutdown so cookies without `Expires`/`Max-Age` do not become restart-persistent
 just because the public cookie jar is now saved on disk.
+
+Audited mechanics (Servo 0.2 `servo-net` `resource_thread.rs`):
+
+- The jar/HSTS files are read once at startup and written **only** on the
+  resource thread's `Exit` message, which `Servo`'s `Drop` impl triggers and
+  waits for — so ServoQ's drop-based `shutdown_servo` does persist them. A
+  crash loses cookies acquired that session (Chromium batches every ~30 s; we
+  lose more on a crash) but never corrupts the previous jar, because no write
+  happens mid-run. A corrupt file is logged and replaced with an empty jar,
+  not a crash. The shutdown-side `clear_session_cookies()` is synchronous on
+  the same channel as `Exit`, so it is ordered before the write.
+- The private-browsing cookie jar is in-memory only and never persisted.
+- **HTTP auth is session-only by policy.** Setting a `config_dir` also makes
+  Servo persist `auth_cache.json` — plaintext Basic/Digest usernames and
+  passwords. Chrome and Firefox keep HTTP auth in memory (saved passwords go
+  to the encrypted password store instead), so ServoQ deletes the file before
+  Servo loads it and again after the shutdown write
+  (`remove_persisted_http_auth_cache` in `src/servo_engine.rs`).
+- **Profile directories are chmod 0700** (`AppDataLocation` root and
+  `servo-profile`) like a Firefox profile; the cookie jar itself is written
+  0644 by Servo, so the directory permission is the protection boundary.
+  Cookie values are plaintext on disk — the Firefox model. Chromium-style
+  OS-keychain encryption is not possible from the embedder: Servo owns the
+  jar serialization and exposes no crypto delegate.
+- **Known limitation:** two ServoQ instances sharing the profile clobber each
+  other's jar on exit (last writer wins). Firefox/Chromium prevent this with
+  a profile lock; ServoQ has no single-instance guard yet.
 
 ## session.json
 

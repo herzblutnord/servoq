@@ -794,6 +794,7 @@ static void unmap_shared_servo_subsurface(char const* trace_marker)
     wl_surface_commit(surface);
     if (auto* app = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>(); app && app->display())
         wl_display_flush(app->display());
+    servoq::notify_wayland_subsurface_unmapped();
     newtab_trace_point(trace_marker);
 }
 
