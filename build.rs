@@ -114,6 +114,7 @@ fn main() {
         "cpp/BookmarksBar.cpp",
         "cpp/BookmarkStore.cpp",
         "cpp/HistoryStore.cpp",
+        "cpp/Favicon.cpp",
         "cpp/FindInPageWidget.cpp",
         "cpp/WebContentPlaceholder.cpp",
         "cpp/WebContentView.cpp",

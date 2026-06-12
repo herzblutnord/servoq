@@ -1,5 +1,4 @@
 target/
-# Local perf/diagnostic capture files (SERVOQ_PERF/SERVOQ_DIAG runs)
 *.log
 build/
 .idea/
@@ -8,18 +7,13 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
-
-# Reference repositories, not part of ServoQ source
-/vendor/reference-kdab-servo-webview/
-/vendor/reference-ladybird/
-/vendor/reference-servo/
-/vendor/reference-beaver/
-/vendor/reference-qt6-docs/
-/vendor/*
-
 /.claude/
 /target-servo/
 /memory/
 /bottles/
+
+# Reference repositories, not part of ServoQ source
+/vendor/*
+
 /docs/DEVIATIONS.md
 /docs/servoq_bucket1_bucket2_feature_table.md

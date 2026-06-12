@@ -60,6 +60,9 @@ public:
     // Public so TabWidget::updateContainerGeometry can delegate to it.
     void updateContainerGeometry();
 
+    // tab_id -> view lookup for async completions (Favicon.cpp probe callbacks).
+    static WebContentView* findByTabId(int tab_id);
+
     // State accessors used by TabWidget::dumpPresentationState.
     static WebContentView* currentWaylandOwner();
     static QWidget* sharedWaylandContainer();

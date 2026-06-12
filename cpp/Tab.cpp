@@ -342,7 +342,11 @@ void Tab::applyControllerState()
     // history store to disk twice per tab switch and filled it with duplicates.
     on_url_change(url, /* record_visit */ false);
     on_title_change(title, /* record_visit */ false);
-    set_loading(servoq::loading(m_controller_id));
+    // No set_loading() here: like Ladybird, the tab spinner is driven only by
+    // load events (on_load_start/on_load_finish). The controller's cached
+    // loading flag stays true whenever Servo never reports LoadStatus::Complete,
+    // so re-deriving it on every tab switch replaced the favicon with a spinner
+    // that never stopped.
     auto status = QString::fromStdString(std::string(servoq::status_text(m_controller_id)));
     setStatusText(status);
     m_back_action->setEnabled(servoq::can_go_back(m_controller_id));
