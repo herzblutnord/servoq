@@ -39,7 +39,7 @@ public:
     void toggleVerticalTabsExpanded();
     void openNextTab();
     void openPreviousTab();
-    void createNewTab(QString const& url = {}, bool background = false);
+    void createNewTab(QString const& url = {}, bool background = false, bool use_configured_new_tab = true);
     void openTabForExistingId(int tab_id);
     void setFullscreen(bool fullscreen);
     void closeTabFromContextMenu(int index);
@@ -77,6 +77,7 @@ private:
     void updateMenuBarVisibility();
     void applySettings();
     void refreshBookmarksBars();
+    void refreshHomeButtons();
     void updateCurrentTabState();
     void updateChromeStyle();
     void rememberClosedTab(Tab const& tab);
@@ -84,6 +85,7 @@ private:
     void reopenAllClosedTabs();
     void updateRecentlyClosedActions();
     void populateRecentlyClosedTabsMenu(QMenu* menu);
+    void showHomeAndNewTabSettingsDialog();
     bool shouldDrawWindowBorder() const;
     void updateWindowBorder();
 

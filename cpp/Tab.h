@@ -46,6 +46,7 @@ public:
     void setToolbarContainerInTabLayout(bool in_tab_layout);
     void setVerticalTabsEnabled(bool enabled);
     void setHamburgerButtonVisible(bool visible);
+    void setHomeButtonVisible(bool visible);
     void setActive(bool active);
     void showEmptyNewTab();
     void attachExistingWebView(QString const& initial_url = {});
@@ -100,6 +101,8 @@ private:
     QSpacerItem* m_sidebar_toggle_spacer { nullptr };
     QAction* m_back_action { nullptr };
     QAction* m_forward_action { nullptr };
+    QAction* m_home_action { nullptr };
+    QToolButton* m_home_button { nullptr };
     QAction* m_reload_action { nullptr };
     QStringList m_history_urls;
     int m_history_current { -1 };

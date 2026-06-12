@@ -27,6 +27,7 @@
 #include "Tab.h"
 #include "TabBar.h"
 #include "WebContentView.h"
+#include "WebViewURL.h"
 #include "servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
@@ -73,6 +74,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <optional>
 
 // TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — defined in WebContentView.cpp.
 bool servoq_diag_enabled();
@@ -171,6 +173,19 @@ bool is_location_completion_popup(QObject const* object)
         return popup && popup->objectName() == QStringLiteral("LadybirdAutocompletePopup");
     }
     return false;
+}
+
+std::optional<QString> normalize_configured_page_url(QString const& raw_url)
+{
+    auto trimmed = raw_url.trimmed();
+    if (trimmed.isEmpty() || trimmed.compare(QStringLiteral("about:blank"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("about:blank");
+    auto sanitized = WebViewURL::sanitize_url(trimmed);
+    if (!sanitized.has_value())
+        return std::nullopt;
+    if (*sanitized == Settings::the()->search_url_for_query(trimmed))
+        return std::nullopt;
+    return sanitized;
 }
 
 }
@@ -705,6 +720,14 @@ void BrowserWindow::createMenus()
     });
     settings_menu->addAction(site_blocking_action);
 
+    settings_menu->addSeparator();
+
+    auto* home_and_new_tab_action = new QAction(QStringLiteral("Home and New Tab…"), this);
+    connect(home_and_new_tab_action, &QAction::triggered, this, &BrowserWindow::showHomeAndNewTabSettingsDialog);
+    settings_menu->addAction(home_and_new_tab_action);
+
+    settings_menu->addSeparator();
+
     // Search engine selector
     auto* search_engine_action = new QWidgetAction(this);
     auto* search_engine_widget = new QWidget(this);
@@ -837,12 +860,15 @@ void BrowserWindow::createInitialTab()
         tab->focusLocationEditor();
 }
 
-void BrowserWindow::createNewTab(QString const& url, bool background)
+void BrowserWindow::createNewTab(QString const& url, bool background, bool use_configured_new_tab)
 {
     NewTabTraceScope trace_scope("createNewTab");
     if (servoq_diag_enabled())
-        servoq_diag_log(QStringLiteral(">>> createNewTab BEGIN url='%1' background=%2 existing_tab_count=%3")
-            .arg(url).arg(background ? 1 : 0).arg(m_tabs->count()));
+        servoq_diag_log(QStringLiteral(">>> createNewTab BEGIN url='%1' background=%2 use_configured_new_tab=%3 existing_tab_count=%4")
+            .arg(url).arg(background ? 1 : 0).arg(use_configured_new_tab ? 1 : 0).arg(m_tabs->count()));
+    auto target_url = url.trimmed();
+    if (target_url.isEmpty() && use_configured_new_tab)
+        target_url = Settings::the()->new_tab_url().trimmed();
     auto tab_id = servoq::create_tab();
     Tab* tab = nullptr;
     {
@@ -862,13 +888,13 @@ void BrowserWindow::createNewTab(QString const& url, bool background)
     }
     debug_log("create_tab", tab_id, QStringLiteral("index=%1 active=%2").arg(index).arg(background ? 0 : 1));
     tab->setHamburgerButtonVisible(!menuBar()->isVisible());
-    if (url.trimmed().isEmpty()) {
+    if (target_url.isEmpty()) {
         NewTabTraceScope scope("showEmptyNewTab", tab_id);
         tab->showEmptyNewTab();
         tab->focusLocationEditor();
     } else {
         NewTabTraceScope scope("navigate", tab_id);
-        tab->navigate(url);
+        tab->navigate(target_url);
     }
     {
         NewTabTraceScope scope("updateCurrentTabState", tab_id);
@@ -952,7 +978,7 @@ void BrowserWindow::reopenClosedTabAt(int index)
     updateRecentlyClosedActions();
 
     if (entry.was_empty_new_tab)
-        createNewTab();
+        createNewTab({}, false, false);
     else
         createNewTab(entry.url);
 }
@@ -1141,6 +1167,82 @@ void BrowserWindow::applySettings()
     }
     if (m_toggle_bookmarks_action)
         m_toggle_bookmarks_action->setChecked(Settings::the()->show_bookmarks_bar());
+    refreshHomeButtons();
+}
+
+void BrowserWindow::showHomeAndNewTabSettingsDialog()
+{
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Home and New Tab"));
+
+    auto* layout = new QFormLayout(dialog);
+
+    auto* homepage_edit = new QLineEdit(dialog);
+    homepage_edit->setText(Settings::the()->homepage_url());
+    homepage_edit->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
+    layout->addRow(QStringLiteral("Homepage:"), homepage_edit);
+
+    auto* show_home_button_checkbox = new QCheckBox(QStringLiteral("Show Home button"), dialog);
+    show_home_button_checkbox->setChecked(Settings::the()->show_home_button());
+    layout->addRow(QString {}, show_home_button_checkbox);
+
+    auto* new_tab_combo = new QComboBox(dialog);
+    new_tab_combo->addItem(QStringLiteral("Blank page"), static_cast<int>(NewTabPageBehavior::Blank));
+    new_tab_combo->addItem(QStringLiteral("Homepage"), static_cast<int>(NewTabPageBehavior::Homepage));
+    new_tab_combo->addItem(QStringLiteral("Custom URL"), static_cast<int>(NewTabPageBehavior::CustomUrl));
+    auto behavior = Settings::the()->new_tab_page_behavior();
+    auto behavior_index = new_tab_combo->findData(static_cast<int>(behavior));
+    new_tab_combo->setCurrentIndex(behavior_index >= 0 ? behavior_index : 0);
+    layout->addRow(QStringLiteral("New tabs open:"), new_tab_combo);
+
+    auto* custom_new_tab_edit = new QLineEdit(dialog);
+    custom_new_tab_edit->setText(Settings::the()->custom_new_tab_url());
+    custom_new_tab_edit->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
+    custom_new_tab_edit->setEnabled(behavior == NewTabPageBehavior::CustomUrl);
+    connect(new_tab_combo, &QComboBox::currentIndexChanged, this, [new_tab_combo, custom_new_tab_edit](int) {
+        custom_new_tab_edit->setEnabled(static_cast<NewTabPageBehavior>(new_tab_combo->currentData().toInt()) == NewTabPageBehavior::CustomUrl);
+    });
+    layout->addRow(QStringLiteral("Custom new-tab URL:"), custom_new_tab_edit);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, this, [this, dialog, homepage_edit, show_home_button_checkbox, new_tab_combo, custom_new_tab_edit] {
+        auto homepage = normalize_configured_page_url(homepage_edit->text());
+        if (!homepage.has_value()) {
+            QMessageBox::warning(this, QStringLiteral("Home and New Tab"),
+                QStringLiteral("Enter a valid homepage URL, such as about:blank or https://example.com/."));
+            return;
+        }
+
+        auto custom_new_tab = normalize_configured_page_url(custom_new_tab_edit->text());
+        if (!custom_new_tab.has_value()) {
+            QMessageBox::warning(this, QStringLiteral("Home and New Tab"),
+                QStringLiteral("Enter a valid custom new-tab URL, such as about:blank or https://example.com/."));
+            return;
+        }
+
+        Settings::the()->set_homepage_url(*homepage);
+        Settings::the()->set_show_home_button(show_home_button_checkbox->isChecked());
+        Settings::the()->set_new_tab_page_behavior(static_cast<NewTabPageBehavior>(new_tab_combo->currentData().toInt()));
+        Settings::the()->set_custom_new_tab_url(*custom_new_tab);
+        refreshHomeButtons();
+        dialog->accept();
+    });
+
+    auto size_hint = dialog->sizeHint();
+    dialog->resize(qMax(size_hint.width(), 680), size_hint.height());
+    dialog->open();
+}
+
+void BrowserWindow::refreshHomeButtons()
+{
+    auto visible = Settings::the()->show_home_button();
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto* tab = m_tabs->tab(i))
+            tab->setHomeButtonVisible(visible);
+    }
 }
 
 void BrowserWindow::refreshBookmarksBars()

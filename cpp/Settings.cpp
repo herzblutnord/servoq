@@ -158,6 +158,84 @@ void Settings::set_show_bookmarks_bar(bool show_bookmarks_bar)
     m_qsettings.setValue(QStringLiteral("chrome/show_bookmarks_bar"), show_bookmarks_bar);
 }
 
+bool Settings::show_home_button() const
+{
+    return m_qsettings.value(QStringLiteral("chrome/show_home_button"), QVariant(false)).toBool();
+}
+
+void Settings::set_show_home_button(bool show_home_button)
+{
+    m_qsettings.setValue(QStringLiteral("chrome/show_home_button"), show_home_button);
+}
+
+QString Settings::homepage_url() const
+{
+    return m_qsettings.value(QStringLiteral("startup/homepage_url"), QStringLiteral("about:blank")).toString();
+}
+
+void Settings::set_homepage_url(QString const& url)
+{
+    auto normalized_url = url.trimmed();
+    m_qsettings.setValue(QStringLiteral("startup/homepage_url"),
+        normalized_url.isEmpty() ? QStringLiteral("about:blank") : normalized_url);
+}
+
+NewTabPageBehavior Settings::new_tab_page_behavior() const
+{
+    auto behavior = m_qsettings.value(QStringLiteral("startup/new_tab_behavior"), QStringLiteral("blank")).toString();
+    if (behavior == QStringLiteral("homepage"))
+        return NewTabPageBehavior::Homepage;
+    if (behavior == QStringLiteral("custom"))
+        return NewTabPageBehavior::CustomUrl;
+    return NewTabPageBehavior::Blank;
+}
+
+void Settings::set_new_tab_page_behavior(NewTabPageBehavior behavior)
+{
+    QString value;
+    switch (behavior) {
+    case NewTabPageBehavior::Blank:
+        value = QStringLiteral("blank");
+        break;
+    case NewTabPageBehavior::Homepage:
+        value = QStringLiteral("homepage");
+        break;
+    case NewTabPageBehavior::CustomUrl:
+        value = QStringLiteral("custom");
+        break;
+    }
+    m_qsettings.setValue(QStringLiteral("startup/new_tab_behavior"), value);
+}
+
+QString Settings::custom_new_tab_url() const
+{
+    return m_qsettings.value(QStringLiteral("startup/custom_new_tab_url"), QStringLiteral("about:blank")).toString();
+}
+
+void Settings::set_custom_new_tab_url(QString const& url)
+{
+    auto normalized_url = url.trimmed();
+    m_qsettings.setValue(QStringLiteral("startup/custom_new_tab_url"),
+        normalized_url.isEmpty() ? QStringLiteral("about:blank") : normalized_url);
+}
+
+QString Settings::new_tab_url() const
+{
+    auto is_blank = [](QString const& url) {
+        auto trimmed_url = url.trimmed();
+        return trimmed_url.isEmpty() || trimmed_url.compare(QStringLiteral("about:blank"), Qt::CaseInsensitive) == 0;
+    };
+    switch (new_tab_page_behavior()) {
+    case NewTabPageBehavior::Blank:
+        return {};
+    case NewTabPageBehavior::Homepage:
+        return is_blank(homepage_url()) ? QString {} : homepage_url();
+    case NewTabPageBehavior::CustomUrl:
+        return is_blank(custom_new_tab_url()) ? QString {} : custom_new_tab_url();
+    }
+    return {};
+}
+
 bool Settings::experimental_features_enabled() const
 {
     return m_qsettings.value(QStringLiteral("engine/experimental_features_enabled"), QVariant(true)).toBool();

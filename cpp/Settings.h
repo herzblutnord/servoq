@@ -27,6 +27,12 @@ struct SearchEngineDefinition {
     bool custom { false };
 };
 
+enum class NewTabPageBehavior {
+    Blank,
+    Homepage,
+    CustomUrl,
+};
+
 class Settings final : public QObject {
 public:
     Settings(Settings const&) = delete;
@@ -63,6 +69,17 @@ public:
 
     bool show_bookmarks_bar() const;
     void set_show_bookmarks_bar(bool show_bookmarks_bar);
+
+    bool show_home_button() const;
+    void set_show_home_button(bool show_home_button);
+
+    QString homepage_url() const;
+    void set_homepage_url(QString const& url);
+    NewTabPageBehavior new_tab_page_behavior() const;
+    void set_new_tab_page_behavior(NewTabPageBehavior behavior);
+    QString custom_new_tab_url() const;
+    void set_custom_new_tab_url(QString const& url);
+    QString new_tab_url() const;
 
     bool content_blocking_enabled() const;
     void set_content_blocking_enabled(bool enabled);

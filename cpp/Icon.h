@@ -21,6 +21,7 @@ namespace ServoQ {
 enum class ChromeIcon {
     Back,
     Forward,
+    Home,
     Reload,
     Stop,
     NewTab,

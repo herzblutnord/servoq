@@ -187,6 +187,12 @@ void Tab::setHamburgerButtonVisible(bool visible)
     m_hamburger_button->setVisible(visible);
 }
 
+void Tab::setHomeButtonVisible(bool visible)
+{
+    if (m_home_button)
+        m_home_button->setVisible(visible);
+}
+
 void Tab::setActive(bool active)
 {
     NewTabTraceScope scope(active ? "ffi_set_webview_active_true" : "ffi_set_webview_active_false", m_controller_id);
@@ -512,6 +518,9 @@ void Tab::buildToolbar()
     m_forward_action = new QAction("›", this);
     m_forward_action->setToolTip("Forward");
     m_forward_action->setShortcut(QKeySequence::Forward);
+    m_home_action = new QAction(this);
+    m_home_action->setToolTip("Home");
+    m_home_action->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Home));
     m_reload_action = new QAction("↻", this);
     m_reload_action->setToolTip("Reload");
     m_reload_action->setShortcuts({ QKeySequence(Qt::CTRL | Qt::Key_R), QKeySequence(Qt::Key_F5) });
@@ -520,11 +529,13 @@ void Tab::buildToolbar()
 
     m_back_action->setIcon(create_chrome_icon(ChromeIcon::Back, palette()));
     m_forward_action->setIcon(create_chrome_icon(ChromeIcon::Forward, palette()));
+    m_home_action->setIcon(create_chrome_icon(ChromeIcon::Home, palette()));
     m_reload_action->setIcon(create_chrome_icon(ChromeIcon::Reload, palette()));
     m_bookmark_action->setIcon(create_chrome_icon(ChromeIcon::Star, palette()));
 
     connect(m_back_action, &QAction::triggered, this, [this] { servoq::go_back(m_controller_id); applyControllerState(); });
     connect(m_forward_action, &QAction::triggered, this, [this] { servoq::go_forward(m_controller_id); applyControllerState(); });
+    connect(m_home_action, &QAction::triggered, this, [this] { navigate(Settings::the()->homepage_url()); });
     connect(m_reload_action, &QAction::triggered, this, [this] {
         on_load_start(m_url);
         servoq::reload(m_controller_id);
@@ -586,6 +597,9 @@ void Tab::buildToolbar()
 
     navigation_layout->addWidget(back_btn);
     navigation_layout->addWidget(forward_btn);
+    m_home_button = createToolbarButton(m_home_action);
+    m_home_button->setVisible(Settings::the()->show_home_button());
+    navigation_layout->addWidget(m_home_button);
     navigation_layout->addWidget(createToolbarButton(m_reload_action));
 
     m_reset_zoom_action = new QAction(this);

@@ -160,7 +160,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/servo_controller.rs");
     println!("cargo:rerun-if-changed=cpp");
     println!("cargo:rerun-if-changed=cpp/resources.qrc");
-    println!("cargo:rerun-if-changed=cpp/icons/ladybird.png");
     println!("cargo:rerun-if-changed=cpp/icons/servo.png");
     println!("cargo:rerun-if-changed=data/servoq.desktop");
     println!("cargo:rerun-if-changed=scripts/install-dev-desktop-file.sh");

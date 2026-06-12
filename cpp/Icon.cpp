@@ -71,6 +71,36 @@ static void draw_forward_icon(QPainter& painter, QColor const& color)
     draw_stroked_icon_path(painter, path, color, 2.0);
 }
 
+static void draw_home_icon(QPainter& painter, QColor const& color)
+{
+    QPainterPath shape;
+    shape.setFillRule(Qt::WindingFill);
+
+    shape.moveTo(5.0, 15.83);
+    shape.lineTo(7.5, 15.83);
+    shape.lineTo(7.5, 10.83);
+    shape.lineTo(12.5, 10.83);
+    shape.lineTo(12.5, 15.83);
+    shape.lineTo(15.0, 15.83);
+    shape.lineTo(15.0, 8.33);
+    shape.lineTo(10.0, 4.58);
+    shape.lineTo(5.0, 8.33);
+    shape.closeSubpath();
+
+    shape.moveTo(3.33, 17.5);
+    shape.lineTo(3.33, 7.5);
+    shape.lineTo(10.0, 2.5);
+    shape.lineTo(16.67, 7.5);
+    shape.lineTo(16.67, 17.5);
+    shape.lineTo(10.83, 17.5);
+    shape.lineTo(10.83, 12.5);
+    shape.lineTo(9.17, 12.5);
+    shape.lineTo(9.17, 17.5);
+    shape.closeSubpath();
+
+    painter.fillPath(shape, color);
+}
+
 static void draw_reload_icon(QPainter& painter, QColor const& color)
 {
     QPainterPath shape;
@@ -204,6 +234,9 @@ static QPixmap create_chrome_icon_pixmap(ChromeIcon icon, QColor color, qreal de
         break;
     case ChromeIcon::Forward:
         draw_forward_icon(painter, color);
+        break;
+    case ChromeIcon::Home:
+        draw_home_icon(painter, color);
         break;
     case ChromeIcon::Reload:
         draw_reload_icon(painter, color);
@@ -363,7 +396,7 @@ QIcon create_chrome_icon(ChromeIcon icon, QPalette const& palette)
         qicon.addPixmap(create_chrome_icon_pixmap(icon, active, device_pixel_ratio), QIcon::Selected);
     }
 
-    if (icon == ChromeIcon::Back || icon == ChromeIcon::Forward || icon == ChromeIcon::NewTab)
+    if (icon == ChromeIcon::Back || icon == ChromeIcon::Forward || icon == ChromeIcon::Home || icon == ChromeIcon::NewTab)
         return create_y_offset_icon(qicon, -1);
     return qicon;
 }
