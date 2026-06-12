@@ -22,6 +22,7 @@
 // dialogs.
 
 #include "BrowserWindow.h"
+#include "PermissionStore.h"
 #include "Tab.h"
 #include "WebContentView.h"
 #include "servo_callbacks.h"
@@ -266,6 +267,81 @@ AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::
         result.password = password_edit->text().toStdString();
     }
     return result;
+}
+
+namespace {
+
+// What the page is asking for, in Chrome's prompt phrasing.
+QString permission_request_description(QString const& feature)
+{
+    if (feature == QStringLiteral("geolocation"))
+        return QStringLiteral("Know your location");
+    if (feature == QStringLiteral("notifications"))
+        return QStringLiteral("Show notifications");
+    if (feature == QStringLiteral("push"))
+        return QStringLiteral("Receive push messages");
+    if (feature == QStringLiteral("midi"))
+        return QStringLiteral("Use your MIDI devices");
+    if (feature == QStringLiteral("camera"))
+        return QStringLiteral("Use your camera");
+    if (feature == QStringLiteral("microphone"))
+        return QStringLiteral("Use your microphone");
+    if (feature == QStringLiteral("speaker-selection"))
+        return QStringLiteral("Select audio output devices");
+    if (feature == QStringLiteral("device-info"))
+        return QStringLiteral("Read device information");
+    if (feature == QStringLiteral("background-sync"))
+        return QStringLiteral("Sync in the background");
+    if (feature == QStringLiteral("bluetooth"))
+        return QStringLiteral("Use your Bluetooth devices");
+    if (feature == QStringLiteral("persistent-storage"))
+        return QStringLiteral("Store data persistently on this device");
+    if (feature == QStringLiteral("screen-wake-lock"))
+        return QStringLiteral("Keep your screen awake");
+    if (feature == QStringLiteral("gamepad"))
+        return QStringLiteral("Use your gamepads");
+    return QStringLiteral("Use a protected feature (%1)").arg(feature);
+}
+
+} // namespace
+
+bool request_permission_sync(::std::int32_t tab_id, ::rust::Str origin, ::rust::Str feature)
+{
+    if (servo_shutdown_started())
+        return false;
+
+    auto origin_text = QString::fromUtf8(origin.data(), static_cast<qsizetype>(origin.size()));
+    auto feature_text = QString::fromUtf8(feature.data(), static_cast<qsizetype>(feature.size()));
+    if (origin_text.isEmpty() || origin_text == QStringLiteral("null"))
+        return false; // Opaque origin: nothing to key a grant on; deny.
+
+    // A previously persisted Allow/Block answers without prompting.
+    if (auto stored = ServoQ::PermissionStore::the()->decision(origin_text, feature_text))
+        return *stored;
+
+    auto* view = ServoQ::WebContentView::findByTabId(tab_id);
+    QMessageBox dialog(QMessageBox::Question,
+        QStringLiteral("Permission request"),
+        QStringLiteral("%1 wants to:\n\n%2")
+            .arg(origin_text, permission_request_description(feature_text)),
+        QMessageBox::NoButton,
+        dialog_parent_for_view(view));
+    auto* allow_button = dialog.addButton(QStringLiteral("Allow"), QMessageBox::AcceptRole);
+    auto* block_button = dialog.addButton(QStringLiteral("Block"), QMessageBox::RejectRole);
+    auto* not_now_button = dialog.addButton(QStringLiteral("Not Now"), QMessageBox::DestructiveRole);
+    dialog.setDefaultButton(allow_button);
+    // Esc / closing the window = "Not Now": deny this request only, ask again
+    // next time (Chrome's dismiss semantics).
+    dialog.setEscapeButton(not_now_button);
+    dialog.exec();
+
+    auto* clicked = dialog.clickedButton();
+    if (clicked == allow_button || clicked == block_button) {
+        bool allow = clicked == allow_button;
+        ServoQ::PermissionStore::the()->setDecision(origin_text, feature_text, allow);
+        return allow;
+    }
+    return false;
 }
 
 void notify_webview_close_requested(::std::int32_t tab_id)

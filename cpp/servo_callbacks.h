@@ -123,6 +123,11 @@ void clipboard_set_text(::rust::Str text);
 // without credentials and the server's 401 page is shown.
 AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::Str url, bool for_proxy);
 
+// Permission prompt (WebDialogs.cpp). Checks PermissionStore for a stored
+// per-origin decision first; otherwise shows a modal Allow/Block prompt.
+// Allow/Block persist; dismissing denies once without persisting.
+bool request_permission_sync(::std::int32_t tab_id, ::rust::Str origin, ::rust::Str feature);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();

@@ -47,8 +47,8 @@ grouped by related work. Status was determined by auditing the codebase
 
 | Feature | Status | Gap | Picked up in |
 |---|---|---|---|
-| Clipboard support | ◐ | Ctrl+C/X/V forwarded as EditingActions; no `ClipboardDelegate` so JS/async clipboard and Servo-initiated copy don't reach the system clipboard | M3 |
-| Notifications | ◐ | tray popup shown unconditionally; no permission prompt / per-origin persistence | M3 |
+| Clipboard support | ✅ | resolved by M3.1: QClipboard-backed `ClipboardDelegate`; JS/async clipboard and Servo-initiated copy reach the system clipboard | — |
+| Notifications | ✅ | resolved by M3.3: gated by the permission prompt + per-origin persistence | — |
 | Console messages | ◐ | stderr behind `SERVOQ_DEBUG`; no debug-page panel | M4 |
 | Settings page | ◐ | menu-based settings only; no dedicated page | M4 |
 | History page/search | ◐ | menu + autocomplete only; no full searchable view | M4 |
@@ -86,9 +86,9 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 3.1 | Clipboard delegate | ◐ | bridge Servo `ClipboardDelegate` ↔ QClipboard |
-| 3.2 | HTTP auth prompt | ✗ | `request_authentication`; servoshell dialog.rs reference |
-| 3.3 | Permission prompts + per-origin persistence | ✗ | `request_permission`; gates Notifications properly. When this lands, also enable the permission-gated Servo prefs kept off until then: `dom_geolocation_enabled`, `dom_wakelock_enabled`, `dom_credential_management_enabled` (WebRTC/media capture need more than prompts). ServoQ already enables servoshell's full experimental set plus `dom_cookiestore_enabled` (see `EXPERIMENTAL_PREFS` in `src/servo_engine.rs`) |
+| 3.1 | Clipboard delegate | ✅ | `QtClipboardDelegate` in `servo_engine.rs` bridges Servo `ClipboardDelegate` ↔ QClipboard (one clipboard connection per process; replaces the arboard default) |
+| 3.2 | HTTP auth prompt | ✅ | `request_authentication` → modal Qt sign-in dialog (`WebDialogs.cpp`); proxy wording for 407, plain-HTTP warning, Cancel continues without credentials |
+| 3.3 | Permission prompts + per-origin persistence | ✅ | `request_permission` → Allow/Block/Not-Now prompt (`WebDialogs.cpp`); explicit answers persist per origin in `permissions.json` (`PermissionStore`), dismiss denies once (Chrome semantics); Settings → Clear Site Permissions. Enabled the permission-gated prefs `dom_geolocation_enabled`, `dom_wakelock_enabled`, `dom_credential_management_enabled` (WebRTC/media capture still need more than prompts) |
 | 3.4 | Pinch zoom | ✗ | `adjust_pinch_zoom` from touchpad gesture events |
 | 3.5 | Window move/resize requests + screen geometry | ✗ | `request_move_to`/`request_resize_to`/`screen_geometry` |
 | 3.6 | Screenshots | ✗ | `take_screenshot`; menu action + Ctrl+Shift+S |

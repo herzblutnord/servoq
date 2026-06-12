@@ -13,6 +13,7 @@ QSettings INI (`~/.config/ServoQ/ServoQ.ini`).
 | Cookies, HSTS | `servo-profile/cookie_jar.json`, `servo-profile/hsts_list.json` | Servo persistent profile files | Browser profile network state |
 | Bookmarks | `bookmarks.json` | JSON tree | Chromium `Bookmarks` |
 | Session (open tabs, active tab, pinned flags, recently closed) | `session.json` | JSON | Firefox `sessionstore.jsonlz4` (uncompressed; it is tiny) |
+| Web permission decisions | `permissions.json` | JSON (origin → feature → allow/block) | Chromium content-settings exceptions in `Preferences` |
 | Settings, window geometry, search engines | QSettings INI | INI | — |
 | Content-blocking lists | `blocklists/` | EasyList text | — |
 
@@ -104,6 +105,20 @@ Audited mechanics (Servo 0.2 `servo-net` `resource_thread.rs`):
 - **Known limitation:** two ServoQ instances sharing the profile clobber each
   other's jar on exit (last writer wins). Firefox/Chromium prevent this with
   a profile lock; ServoQ has no single-instance guard yet.
+
+## permissions.json
+
+```json
+{ "https://example.com": { "notifications": "allow", "geolocation": "block" } }
+```
+
+Written by `cpp/PermissionStore.cpp` for the M3.3 permission prompt
+(`request_permission_sync` in `cpp/WebDialogs.cpp`). Only explicit Allow/Block
+answers are stored — dismissing the prompt ("Not Now") denies once and stores
+nothing, matching Chrome. Saves are synchronous: permission decisions are
+rare, explicit user actions, not navigation-event traffic, so the
+no-sync-I/O rule above does not apply. Settings → "Clear Site Permissions"
+wipes the store.
 
 ## session.json
 

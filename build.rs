@@ -129,6 +129,7 @@ fn main() {
         "cpp/HistoryStore.cpp",
         "cpp/FaviconStore.cpp",
         "cpp/SessionStore.cpp",
+        "cpp/PermissionStore.cpp",
         "cpp/StorageDb.cpp",
         "cpp/TabSearch.cpp",
         "cpp/Favicon.cpp",

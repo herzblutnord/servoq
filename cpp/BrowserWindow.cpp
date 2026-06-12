@@ -20,6 +20,7 @@
 #include "FaviconStore.h"
 #include "HistoryStore.h"
 #include "NewTabTrace.h"
+#include "PermissionStore.h"
 #include "SessionStore.h"
 #include "TabSearch.h"
 #include "ChromeLayout.h"
@@ -860,6 +861,23 @@ void BrowserWindow::createMenus()
             ok ? QStringLiteral("Filter lists reloaded.") : QStringLiteral("Filter lists could not be reloaded."));
     });
     settings_menu->addAction(reload_filter_lists_action);
+
+    settings_menu->addSeparator();
+
+    // Per-origin Allow/Block decisions from the web permission prompt
+    // (notifications, geolocation, …). A full per-site management page is
+    // M4.5; until then this offers the Firefox-style "clear all exceptions".
+    auto* clear_permissions_action = new QAction(QStringLiteral("Clear Site Permissions"), this);
+    connect(settings_menu, &QMenu::aboutToShow, this, [clear_permissions_action] {
+        clear_permissions_action->setEnabled(!PermissionStore::the()->isEmpty());
+    });
+    connect(clear_permissions_action, &QAction::triggered, this, [this] {
+        if (QMessageBox::question(this, QStringLiteral("Clear Site Permissions"),
+                QStringLiteral("Forget all Allow/Block permission decisions for all sites?"))
+            == QMessageBox::Yes)
+            PermissionStore::the()->clearAll();
+    });
+    settings_menu->addAction(clear_permissions_action);
 
     m_hamburger_menu->addMenu(settings_menu);
 

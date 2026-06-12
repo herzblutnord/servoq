@@ -94,6 +94,10 @@ pub mod ffi {
             url: &str,
             for_proxy: bool,
         ) -> AuthDialogResult;
+        // Permission prompt (Permissions API / notifications / geolocation…).
+        // Consults the per-origin PermissionStore first; prompts only when no
+        // decision is stored. Returns the allow/deny answer.
+        fn request_permission_sync(tab_id: i32, origin: &str, feature: &str) -> bool;
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.

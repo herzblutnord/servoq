@@ -48,7 +48,7 @@ mod engine {
         WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
         WindowRenderingContext,
     };
-    use servo::AuthenticationRequest;
+    use servo::{AuthenticationRequest, PermissionFeature, PermissionRequest};
     use servo::{ClipboardDelegate, StringRequest};
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
@@ -423,19 +423,26 @@ mod engine {
 
     // Mirrors servoshell EXPERIMENTAL_PREFS — all enabled by default.
     // The user can disable them via Settings → Experimental Web Platform Features.
-    // ServoQ addition beyond the servoshell list: dom_cookiestore_enabled — the
-    // async CookieStore API is a thin layer over the same engine cookie jar that
-    // ServoQ now persists (docs/STORAGE.md), and its core surface
-    // (get/getAll/set/delete + change events) is implemented in Servo 0.2.
-    // The remaining default-off prefs stay off: Geolocation, Wake Lock,
-    // Credential Management, WebRTC, and Media Capture all need the M3.3
-    // permission-prompt UI first, and ServiceWorker/SharedWorker/Web Animations/
-    // AdoptedStyleSheets are partial enough that feature-detecting sites break.
+    // ServoQ additions beyond the servoshell list:
+    // - dom_cookiestore_enabled — the async CookieStore API is a thin layer
+    //   over the same engine cookie jar that ServoQ now persists
+    //   (docs/STORAGE.md), and its core surface (get/getAll/set/delete +
+    //   change events) is implemented in Servo 0.2.
+    // - dom_geolocation_enabled, dom_wakelock_enabled,
+    //   dom_credential_management_enabled — permission-gated features that
+    //   were kept off until the M3.3 permission prompts landed; requests now
+    //   go through request_permission + the per-origin PermissionStore.
+    // The remaining default-off prefs stay off: WebRTC and Media Capture need
+    // more than prompts (no capture backend), and ServiceWorker/SharedWorker/
+    // Web Animations/AdoptedStyleSheets are partial enough that
+    // feature-detecting sites break.
     pub(super) const EXPERIMENTAL_PREFS: &[&str] = &[
         "dom_async_clipboard_enabled",
         "dom_cookiestore_enabled",
+        "dom_credential_management_enabled",
         "dom_exec_command_enabled",
         "dom_fontface_enabled",
+        "dom_geolocation_enabled",
         "dom_indexeddb_enabled",
         "dom_intersection_observer_enabled",
         "dom_navigator_protocol_handlers_enabled",
@@ -444,6 +451,7 @@ mod engine {
         "dom_permissions_enabled",
         "dom_sanitizer_enabled",
         "dom_storage_manager_api_enabled",
+        "dom_wakelock_enabled",
         "dom_webgl2_enabled",
         "dom_webgpu_enabled",
         "layout_columns_enabled",
@@ -606,6 +614,25 @@ mod engine {
             Cursor::AllScroll => 32,
             Cursor::ZoomIn => 33,
             Cursor::ZoomOut => 34,
+        }
+    }
+
+    // Stable per-feature keys for the permission prompt and PermissionStore;
+    // Permissions-API descriptor names where they exist.
+    fn permission_feature_name(feature: PermissionFeature) -> &'static str {
+        match feature {
+            PermissionFeature::Geolocation => "geolocation",
+            PermissionFeature::Notifications => "notifications",
+            PermissionFeature::Push => "push",
+            PermissionFeature::Midi => "midi",
+            PermissionFeature::Camera => "camera",
+            PermissionFeature::Microphone => "microphone",
+            PermissionFeature::Speaker => "speaker-selection",
+            PermissionFeature::DeviceInfo => "device-info",
+            PermissionFeature::BackgroundSync => "background-sync",
+            PermissionFeature::Bluetooth => "bluetooth",
+            PermissionFeature::PersistentStorage => "persistent-storage",
+            PermissionFeature::ScreenWakeLock => "screen-wake-lock",
         }
     }
 
@@ -1401,6 +1428,44 @@ mod engine {
                 }
                 // IME integration is out of scope for now (see WebContentView.h).
                 EmbedderControl::InputMethod(_) => {}
+            }
+        }
+
+        // Permissions API / permission-gated features (notifications,
+        // geolocation, wake lock, …). The script thread blocks on its own
+        // channel awaiting the answer, so the synchronous modal-dialog FFI
+        // pattern applies. C++ owns the per-origin persistence
+        // (PermissionStore): a stored Allow/Block answers without UI, an
+        // explicit Allow/Block in the prompt is persisted, and dismissing
+        // denies once without persisting — Chrome's semantics.
+        fn request_permission(&self, _webview: WebView, request: PermissionRequest) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                request.deny();
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                log_ignored_closed_callback("request_permission", self.tab_id);
+                request.deny();
+                return;
+            }
+            let origin = ENGINE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .and_then(|e| e.tabs.get(&self.tab_id))
+                    .and_then(|t| Url::parse(&t.current_url).ok())
+                    .map(|u| u.origin().ascii_serialization())
+                    .unwrap_or_default()
+            });
+            let feature = permission_feature_name(request.feature());
+            debug_log_detail(
+                "request_permission",
+                self.tab_id,
+                format!("origin={origin} feature={feature}"),
+            );
+            if crate::bridge::ffi::request_permission_sync(self.tab_id, &origin, feature) {
+                request.allow();
+            } else {
+                request.deny();
             }
         }
 
