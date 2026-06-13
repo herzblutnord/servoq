@@ -214,6 +214,13 @@ void Tab::setActive(bool active)
 
 void Tab::showInternalPage(QString const& url)
 {
+    // Already showing this exact internal page: do nothing. Re-running the
+    // body would recompute previous_url from m_url (now itself a servoq:// URL)
+    // and wrongly reset m_internal_page_can_return_to_web, silently dropping the
+    // PDF viewer's Back-to-source behavior. (Reload uses showUrl() directly.)
+    if (m_is_internal_page && m_url == url)
+        return;
+
     auto previous_url = m_url;
     bool previous_was_web_content = !m_is_empty_new_tab
         && !m_is_internal_page
