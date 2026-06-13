@@ -17,6 +17,7 @@
 #include "BookmarkStore.h"
 #include "ChromeStyle.h"
 #include "Favicon.h"
+#include "InternalPageView.h"
 #include "NewTabTrace.h"
 #include "WebContentView.h"
 #include "Settings.h"
@@ -47,6 +48,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QDebug>
 #include <QResizeEvent>
 #include <QStyleHints>
@@ -2153,6 +2155,24 @@ void notify_load_finished(::std::int32_t tab_id)
     debug_log("notify_load_finished", tab_id);
     view->tab()->on_load_finish();
     ServoQ::start_favicon_probe(view);
+}
+
+void notify_pdf_navigation_requested(::std::int32_t tab_id, ::rust::Str url)
+{
+    if (servo_shutdown_started())
+        return;
+    auto* view = find_view(tab_id);
+    auto text = QString::fromUtf8(url.data(), static_cast<qsizetype>(url.size()));
+    if (!view || !view->tab()) {
+        debug_log("ignored_pdf_navigation_missing_view", tab_id, text);
+        return;
+    }
+    QPointer<ServoQ::Tab> tab = view->tab();
+    QTimer::singleShot(0, view, [tab, text] {
+        if (!tab)
+            return;
+        tab->navigate(ServoQ::InternalPageView::urlForPdfSource(text));
+    });
 }
 
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text)

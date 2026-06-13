@@ -104,7 +104,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 4.4 | Internal pages scheme (`servoq://`) + debug page | ✅ | `InternalPageView` hosted per-tab in a content `QStackedWidget`; `servoq://settings/history/downloads/debug`; debug page shows shell state + a console-message panel (capture-gated). Surface handling: see DEVIATIONS.md §0h |
 | 4.5 | Site data / cookies clearing UI | ✅ | Settings → Privacy: "Manage site data" lists eTLD+1 sites from `SiteDataManager::site_data` with per-site/all removal; "Clear browsing data" clears history/cookies/cache |
 | 4.6 | HTTP cache clearing | ✅ | wired via `NetworkManager::clear_cache` from the Clear browsing data dialog (servoq::clear_http_cache) |
-| 4.7 | External PDF handoff | ✗ | MIME/extension detect via `load_web_resource`, open externally |
+| 4.7 | Inline PDF viewer | ✅ | `servoq://pdf` native Qt PDF view (`QPdfDocument`/`QPdfView`); local files plus obvious `.pdf` main-frame URLs from typed URLs, Open File, and clicked links |
 | 4.8 | Qt chrome accessibility pass | ✗ | accessible names, tab order, focus rings |
 
 ## Milestone 5 — Large / architectural (L, needs design first)

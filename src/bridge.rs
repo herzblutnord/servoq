@@ -57,6 +57,7 @@ pub mod ffi {
         fn notify_load_started(tab_id: i32, url: &str);
         fn notify_load_finished(tab_id: i32);
         fn notify_status_changed(tab_id: i32, text: &str);
+        fn notify_pdf_navigation_requested(tab_id: i32, url: &str);
         fn notify_webview_crashed(tab_id: i32, reason: &str);
         fn notify_request_blocked(tab_id: i32, url: &str);
         fn content_blocking_enabled() -> bool;

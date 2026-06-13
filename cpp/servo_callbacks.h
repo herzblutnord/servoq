@@ -74,6 +74,7 @@ void notify_title_changed(::std::int32_t tab_id, ::rust::Str title);
 void notify_load_started(::std::int32_t tab_id, ::rust::Str url);
 void notify_load_finished(::std::int32_t tab_id);
 void notify_status_changed(::std::int32_t tab_id, ::rust::Str text);
+void notify_pdf_navigation_requested(::std::int32_t tab_id, ::rust::Str url);
 
 // Called when Servo panics / crashes during event loop spin.
 void notify_webview_crashed(::std::int32_t tab_id, ::rust::Str reason);

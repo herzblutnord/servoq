@@ -61,6 +61,7 @@ public:
     void attachExistingWebView(QString const& initial_url = {});
     void updateToggleVerticalTabsIcon();
     void navigate(QString const& url);
+    void returnToWebContentFromInternalPage();
     void location_edit_return_pressed();
     void focusLocationEditor();
     void showFindInPage();
@@ -121,13 +122,16 @@ private:
     QAction* m_reset_zoom_action { nullptr };
     QTimer* m_loading_animation_timer { nullptr };
     QIcon m_favicon;
+    QIcon m_return_web_favicon;
     bool m_has_page_favicon { false };
+    bool m_return_web_has_page_favicon { false };
     QString m_url { QStringLiteral("about:blank") };
     QString m_hovered_link_url;
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };
     bool m_is_empty_new_tab { true };
     bool m_is_internal_page { false };
+    bool m_internal_page_can_return_to_web { false };
     bool m_pinned { false };
     int m_loading_animation_frame { 0 };
 };

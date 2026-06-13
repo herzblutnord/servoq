@@ -44,6 +44,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -213,6 +214,30 @@ void Tab::setActive(bool active)
 
 void Tab::showInternalPage(QString const& url)
 {
+    auto previous_url = m_url;
+    bool previous_was_web_content = !m_is_empty_new_tab
+        && !m_is_internal_page
+        && !previous_url.startsWith(QStringLiteral("servoq://"), Qt::CaseInsensitive)
+        && previous_url != QStringLiteral("about:blank");
+    m_internal_page_can_return_to_web = InternalPageView::kindForUrl(url) == InternalPageView::Kind::Pdf
+        && previous_was_web_content;
+    if (m_internal_page_can_return_to_web) {
+        m_return_web_favicon = m_favicon;
+        m_return_web_has_page_favicon = m_has_page_favicon;
+        if (!m_return_web_has_page_favicon) {
+            auto cached_icon = FaviconStore::the()->iconForUrl(previous_url);
+            if (!cached_icon.isNull()) {
+                m_return_web_favicon = cached_icon;
+                m_return_web_has_page_favicon = true;
+                m_favicon = cached_icon;
+                m_has_page_favicon = true;
+            }
+        }
+    } else {
+        m_return_web_favicon = {};
+        m_return_web_has_page_favicon = false;
+    }
+
     m_is_empty_new_tab = false;
     m_is_internal_page = true;
     m_url = url;
@@ -238,9 +263,14 @@ void Tab::showInternalPage(QString const& url)
     m_internal_page->showUrl(url);
     m_content_stack->setCurrentWidget(m_internal_page);
 
-    m_favicon = {};
-    m_has_page_favicon = false;
+    if (!m_internal_page_can_return_to_web) {
+        auto source_icon = FaviconStore::the()->iconForUrl(QUrlQuery(QUrl(url)).queryItemValue(QStringLiteral("url"), QUrl::FullyDecoded));
+        m_favicon = source_icon.isNull() ? QIcon() : source_icon;
+        m_has_page_favicon = !source_icon.isNull();
+    }
     m_location_edit->setUrl(url);
+    m_back_action->setEnabled(m_internal_page_can_return_to_web);
+    m_forward_action->setEnabled(false);
     m_find_in_page->hide();
     set_loading(false);
     refreshBookmarkIcon();
@@ -248,10 +278,41 @@ void Tab::showInternalPage(QString const& url)
     m_internal_page->setFocus();
 }
 
+void Tab::returnToWebContentFromInternalPage()
+{
+    if (!m_is_internal_page || !m_internal_page_can_return_to_web)
+        return;
+
+    m_is_internal_page = false;
+    m_internal_page_can_return_to_web = false;
+    m_view->setInternalPageActive(false);
+    if (m_content_stack)
+        m_content_stack->setCurrentWidget(m_view);
+    applyControllerState();
+    if (m_return_web_has_page_favicon && !m_return_web_favicon.isNull()) {
+        m_favicon = m_return_web_favicon;
+        m_has_page_favicon = true;
+    } else {
+        auto cached_icon = FaviconStore::the()->iconForUrl(m_url);
+        m_favicon = cached_icon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : cached_icon;
+        m_has_page_favicon = !cached_icon.isNull();
+    }
+    m_return_web_favicon = {};
+    m_return_web_has_page_favicon = false;
+    if (m_window)
+        m_window->tabStateChanged(this);
+    if (m_window && m_window->currentTab() == this)
+        m_view->onBecomeActiveTab();
+    m_view->setFocus();
+}
+
 void Tab::showEmptyNewTab()
 {
     if (m_is_internal_page) {
         m_is_internal_page = false;
+        m_internal_page_can_return_to_web = false;
+        m_return_web_favicon = {};
+        m_return_web_has_page_favicon = false;
         m_view->setInternalPageActive(false);
         if (m_content_stack)
             m_content_stack->setCurrentWidget(m_view);
@@ -311,6 +372,10 @@ void Tab::navigate(QString const& url)
         showInternalPage(normalized_url);
         return;
     }
+    if (InternalPageView::isPdfSourceUrl(normalized_url)) {
+        showInternalPage(InternalPageView::urlForPdfSource(normalized_url));
+        return;
+    }
 
     bool leaving_internal = m_is_internal_page;
     m_is_internal_page = false;
@@ -318,6 +383,7 @@ void Tab::navigate(QString const& url)
     if (leaving_internal) {
         // Returning to web content: re-show the WebContentView and re-claim the
         // shared Servo surface that the internal page released.
+        m_internal_page_can_return_to_web = false;
         m_view->setInternalPageActive(false);
         if (m_content_stack)
             m_content_stack->setCurrentWidget(m_view);
@@ -477,7 +543,7 @@ void Tab::applyControllerState()
         // navigations: keep their URL/title and don't read controller state.
         m_location_edit->setUrl(m_url);
         set_loading(false);
-        m_back_action->setEnabled(false);
+        m_back_action->setEnabled(m_internal_page_can_return_to_web);
         m_forward_action->setEnabled(false);
         m_find_in_page->setVisible(false);
         m_bookmarks_bar->setVisible(Settings::the()->show_bookmarks_bar());
@@ -669,10 +735,23 @@ void Tab::buildToolbar()
     m_reload_action->setIcon(create_chrome_icon(ChromeIcon::Reload, palette()));
     m_bookmark_action->setIcon(create_chrome_icon(ChromeIcon::Star, palette()));
 
-    connect(m_back_action, &QAction::triggered, this, [this] { if (m_is_internal_page) return; servoq::go_back(m_controller_id); applyControllerState(); });
+    connect(m_back_action, &QAction::triggered, this, [this] {
+        if (m_is_internal_page) {
+            returnToWebContentFromInternalPage();
+            return;
+        }
+        servoq::go_back(m_controller_id);
+        applyControllerState();
+    });
     connect(m_forward_action, &QAction::triggered, this, [this] { if (m_is_internal_page) return; servoq::go_forward(m_controller_id); applyControllerState(); });
     connect(m_home_action, &QAction::triggered, this, [this] { navigate(Settings::the()->homepage_url()); });
     connect(m_reload_action, &QAction::triggered, this, [this] {
+        if (m_is_internal_page) {
+            if (m_internal_page)
+                m_internal_page->showUrl(m_url);
+            set_loading(false);
+            return;
+        }
         on_load_start(m_url);
         servoq::reload(m_controller_id);
         applyControllerState();

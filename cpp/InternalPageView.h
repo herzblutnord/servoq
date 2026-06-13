@@ -19,7 +19,14 @@
 
 class QLineEdit;
 class QListWidget;
+class QLabel;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QPdfDocument;
+class QPdfPageSelector;
+class QPdfView;
 class QPlainTextEdit;
+class QTemporaryFile;
 class QVBoxLayout;
 
 namespace ServoQ {
@@ -62,12 +69,14 @@ private:
 class InternalPageView final : public QWidget {
     Q_OBJECT
 public:
-    enum class Kind { Unknown, Settings, History, Downloads, Debug };
+    enum class Kind { Unknown, Settings, History, Downloads, Debug, Pdf };
 
     explicit InternalPageView(QWidget* parent = nullptr);
     ~InternalPageView() override;
 
     static bool isInternalUrl(QString const& url);
+    static bool isPdfSourceUrl(QString const& url);
+    static QString urlForPdfSource(QString const& source_url);
     static Kind kindForUrl(QString const& url);
     static QString titleForUrl(QString const& url);
 
@@ -89,9 +98,14 @@ private:
     void buildHistoryPage();
     void buildDownloadsPage();
     void buildDebugPage();
+    void buildPdfPage(QString const& source_url);
 
     void refreshHistoryList(QString const& filter);
     void setConsoleConsuming(bool consuming);
+    void openPdfFile(QString const& path);
+    void startPdfDownload(QString const& source_url);
+    void finishPdfDownload(QNetworkReply* reply);
+    void showPdfError(QString const& message);
 
     Kind m_kind { Kind::Unknown };
     QVBoxLayout* m_root_layout { nullptr };
@@ -102,6 +116,12 @@ private:
     QListWidget* m_history_list { nullptr };
 
     bool m_console_consuming { false };
+    QPdfDocument* m_pdf_document { nullptr };
+    QPdfView* m_pdf_view { nullptr };
+    QPdfPageSelector* m_pdf_page_selector { nullptr };
+    QLabel* m_pdf_status_label { nullptr };
+    QNetworkAccessManager* m_pdf_network { nullptr };
+    QTemporaryFile* m_pdf_temp_file { nullptr };
 };
 
 }

@@ -29,6 +29,14 @@ fn main() {
         .atleast_version("6")
         .probe("Qt6DBus")
         .expect("Qt 6 DBus development package must be available via pkg-config");
+    let qt_pdf = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6Pdf")
+        .expect("Qt 6 Pdf development package must be available via pkg-config");
+    let qt_pdf_widgets = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6PdfWidgets")
+        .expect("Qt 6 PdfWidgets development package must be available via pkg-config");
     let qt_wayland = pkg_config::Config::new()
         .atleast_version("6")
         .probe("Qt6WaylandClient")
@@ -93,6 +101,12 @@ fn main() {
     for path in &qt_dbus.include_paths {
         build.include(path);
     }
+    for path in &qt_pdf.include_paths {
+        build.include(path);
+    }
+    for path in &qt_pdf_widgets.include_paths {
+        build.include(path);
+    }
     if let Some(qt_wayland) = &qt_wayland {
         for path in &qt_wayland.include_paths {
             build.include(path);
@@ -120,6 +134,8 @@ fn main() {
         .chain(qt_network.defines.iter())
         .chain(qt_sql.defines.iter())
         .chain(qt_dbus.defines.iter())
+        .chain(qt_pdf.defines.iter())
+        .chain(qt_pdf_widgets.defines.iter())
     {
         match &flag.1 {
             Some(value) => build.define(&flag.0, Some(value.as_str())),

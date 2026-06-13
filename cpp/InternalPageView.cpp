@@ -31,14 +31,25 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPdfDocument>
+#include <QPdfPageNavigator>
+#include <QPdfPageSelector>
+#include <QPdfView>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStringList>
+#include <QTemporaryFile>
 #include <QToolButton>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace ServoQ {
 
@@ -59,6 +70,27 @@ QString normalize_configured_url(QString const& raw)
     if (sanitized.has_value() && *sanitized != Settings::the()->search_url_for_query(trimmed))
         return *sanitized;
     return trimmed;
+}
+
+QString source_url_for_internal_pdf_url(QString const& url)
+{
+    QUrl parsed(url);
+    QUrlQuery query(parsed);
+    return query.queryItemValue(QStringLiteral("url"), QUrl::FullyDecoded);
+}
+
+QString pdf_error_text(QPdfDocument::Error error)
+{
+    switch (error) {
+    case QPdfDocument::Error::None: return {};
+    case QPdfDocument::Error::Unknown: return QStringLiteral("The PDF could not be opened.");
+    case QPdfDocument::Error::DataNotYetAvailable: return QStringLiteral("The PDF is still loading.");
+    case QPdfDocument::Error::FileNotFound: return QStringLiteral("The PDF file was not found.");
+    case QPdfDocument::Error::InvalidFileFormat: return QStringLiteral("This file is not a valid PDF document.");
+    case QPdfDocument::Error::IncorrectPassword: return QStringLiteral("This PDF needs a password.");
+    case QPdfDocument::Error::UnsupportedSecurityScheme: return QStringLiteral("This PDF uses an unsupported security scheme.");
+    }
+    return QStringLiteral("The PDF could not be opened.");
 }
 
 }
@@ -128,14 +160,42 @@ bool InternalPageView::isInternalUrl(QString const& url)
     return url.startsWith(QStringLiteral("servoq://"), Qt::CaseInsensitive);
 }
 
+bool InternalPageView::isPdfSourceUrl(QString const& url)
+{
+    auto parsed = QUrl(url);
+    if (!parsed.isValid())
+        return false;
+    auto scheme = parsed.scheme().toLower();
+    if (scheme != QStringLiteral("file") && scheme != QStringLiteral("http") && scheme != QStringLiteral("https"))
+        return false;
+    return parsed.path().endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive);
+}
+
+QString InternalPageView::urlForPdfSource(QString const& source_url)
+{
+    QUrl url;
+    url.setScheme(QStringLiteral("servoq"));
+    url.setHost(QStringLiteral("pdf"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("url"), source_url);
+    url.setQuery(query);
+    return url.toString(QUrl::FullyEncoded);
+}
+
 InternalPageView::Kind InternalPageView::kindForUrl(QString const& url)
 {
     if (!isInternalUrl(url))
         return Kind::Unknown;
-    auto host = url.mid(QStringLiteral("servoq://").size());
-    int slash = host.indexOf(QLatin1Char('/'));
-    if (slash >= 0)
-        host = host.left(slash);
+    auto host = QUrl(url).host();
+    if (host.isEmpty()) {
+        host = url.mid(QStringLiteral("servoq://").size());
+        int slash = host.indexOf(QLatin1Char('/'));
+        if (slash >= 0)
+            host = host.left(slash);
+        int query = host.indexOf(QLatin1Char('?'));
+        if (query >= 0)
+            host = host.left(query);
+    }
     host = host.toLower();
     if (host == QStringLiteral("settings"))
         return Kind::Settings;
@@ -145,6 +205,8 @@ InternalPageView::Kind InternalPageView::kindForUrl(QString const& url)
         return Kind::Downloads;
     if (host == QStringLiteral("debug"))
         return Kind::Debug;
+    if (host == QStringLiteral("pdf"))
+        return Kind::Pdf;
     return Kind::Unknown;
 }
 
@@ -155,6 +217,13 @@ QString InternalPageView::titleForUrl(QString const& url)
     case Kind::History: return QStringLiteral("History");
     case Kind::Downloads: return QStringLiteral("Downloads");
     case Kind::Debug: return QStringLiteral("Debug");
+    case Kind::Pdf: {
+        auto source = source_url_for_internal_pdf_url(url);
+        if (source.isEmpty())
+            return QStringLiteral("PDF Viewer");
+        auto file_name = QFileInfo(QUrl(source).isLocalFile() ? QUrl(source).toLocalFile() : QUrl(source).path()).fileName();
+        return file_name.isEmpty() ? QStringLiteral("PDF Viewer") : file_name;
+    }
     case Kind::Unknown: break;
     }
     return QStringLiteral("ServoQ");
@@ -165,6 +234,18 @@ void InternalPageView::clearContent()
     setConsoleConsuming(false);
     m_history_search = nullptr;
     m_history_list = nullptr;
+    m_pdf_document = nullptr;
+    m_pdf_view = nullptr;
+    m_pdf_page_selector = nullptr;
+    m_pdf_status_label = nullptr;
+    if (m_pdf_network) {
+        m_pdf_network->deleteLater();
+        m_pdf_network = nullptr;
+    }
+    if (m_pdf_temp_file) {
+        m_pdf_temp_file->deleteLater();
+        m_pdf_temp_file = nullptr;
+    }
     if (m_content) {
         m_root_layout->removeWidget(m_content);
         delete m_content;
@@ -209,6 +290,7 @@ void InternalPageView::showUrl(QString const& url)
     case Kind::History: buildHistoryPage(); break;
     case Kind::Downloads: buildDownloadsPage(); break;
     case Kind::Debug: buildDebugPage(); break;
+    case Kind::Pdf: buildPdfPage(source_url_for_internal_pdf_url(url)); break;
     case Kind::Unknown: {
         // Unknown servoq:// host: show a small "page not found" notice.
         QVBoxLayout* layout = nullptr;
@@ -224,6 +306,191 @@ void InternalPageView::showUrl(QString const& url)
         break;
     }
     }
+}
+
+// ---- PDF viewer ---------------------------------------------------------
+
+void InternalPageView::buildPdfPage(QString const& source_url)
+{
+    auto* host = new QWidget(this);
+    auto* layout = new QVBoxLayout(host);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto* toolbar = new QWidget(host);
+    toolbar->setObjectName(QStringLiteral("ServoQPdfToolbar"));
+    auto* toolbar_layout = new QHBoxLayout(toolbar);
+    toolbar_layout->setContentsMargins(12, 8, 12, 8);
+    toolbar_layout->setSpacing(8);
+
+    auto* title = new QLabel(titleForUrl(urlForPdfSource(source_url)), toolbar);
+    title->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    toolbar_layout->addWidget(title, 1);
+
+    auto* zoom_out = new QPushButton(QStringLiteral("-"), toolbar);
+    zoom_out->setToolTip(QStringLiteral("Zoom out"));
+    auto* zoom_in = new QPushButton(QStringLiteral("+"), toolbar);
+    zoom_in->setToolTip(QStringLiteral("Zoom in"));
+    auto* fit_width = new QPushButton(QStringLiteral("Fit Width"), toolbar);
+    auto* open_external = new QPushButton(QStringLiteral("Open Externally"), toolbar);
+
+    m_pdf_page_selector = new QPdfPageSelector(toolbar);
+    toolbar_layout->addWidget(m_pdf_page_selector);
+    toolbar_layout->addWidget(zoom_out);
+    toolbar_layout->addWidget(zoom_in);
+    toolbar_layout->addWidget(fit_width);
+    toolbar_layout->addWidget(open_external);
+    layout->addWidget(toolbar);
+
+    m_pdf_status_label = new QLabel(QStringLiteral("Loading PDF..."), host);
+    m_pdf_status_label->setAlignment(Qt::AlignCenter);
+    m_pdf_status_label->setMinimumHeight(32);
+    layout->addWidget(m_pdf_status_label);
+
+    m_pdf_document = new QPdfDocument(host);
+    m_pdf_view = new QPdfView(host);
+    m_pdf_view->setDocument(m_pdf_document);
+    m_pdf_view->setPageMode(QPdfView::PageMode::MultiPage);
+    m_pdf_view->setZoomMode(QPdfView::ZoomMode::FitToWidth);
+    m_pdf_view->setPageSpacing(10);
+    m_pdf_view->setDocumentMargins(QMargins(12, 12, 12, 12));
+    m_pdf_page_selector->setDocument(m_pdf_document);
+    layout->addWidget(m_pdf_view, 1);
+
+    connect(zoom_out, &QPushButton::clicked, this, [this] {
+        if (!m_pdf_view)
+            return;
+        m_pdf_view->setZoomMode(QPdfView::ZoomMode::Custom);
+        m_pdf_view->setZoomFactor(std::max<qreal>(0.25, m_pdf_view->zoomFactor() / 1.2));
+    });
+    connect(zoom_in, &QPushButton::clicked, this, [this] {
+        if (!m_pdf_view)
+            return;
+        m_pdf_view->setZoomMode(QPdfView::ZoomMode::Custom);
+        m_pdf_view->setZoomFactor(std::min<qreal>(8.0, m_pdf_view->zoomFactor() * 1.2));
+    });
+    connect(fit_width, &QPushButton::clicked, this, [this] {
+        if (m_pdf_view)
+            m_pdf_view->setZoomMode(QPdfView::ZoomMode::FitToWidth);
+    });
+    connect(open_external, &QPushButton::clicked, this, [source_url] {
+        QDesktopServices::openUrl(QUrl(source_url));
+    });
+    connect(m_pdf_page_selector, &QPdfPageSelector::currentPageChanged, this, [this](int page) {
+        if (m_pdf_view && m_pdf_view->pageNavigator() && page >= 0)
+            m_pdf_view->pageNavigator()->jump(page, QPointF(), 0);
+    });
+    connect(m_pdf_view->pageNavigator(), &QPdfPageNavigator::currentPageChanged,
+        m_pdf_page_selector, &QPdfPageSelector::setCurrentPage);
+    connect(m_pdf_document, &QPdfDocument::passwordRequired, this, [this] {
+        if (!m_pdf_document)
+            return;
+        bool ok = false;
+        auto password = QInputDialog::getText(this, QStringLiteral("PDF Password"),
+            QStringLiteral("Enter the password for this PDF:"), QLineEdit::Password, {}, &ok);
+        if (ok)
+            m_pdf_document->setPassword(password);
+    });
+    connect(m_pdf_document, &QPdfDocument::statusChanged, this, [this](QPdfDocument::Status status) {
+        if (!m_pdf_status_label || !m_pdf_document)
+            return;
+        if (status == QPdfDocument::Status::Ready) {
+            m_pdf_status_label->setText(QStringLiteral("%1 page%2")
+                .arg(m_pdf_document->pageCount())
+                .arg(m_pdf_document->pageCount() == 1 ? QString() : QStringLiteral("s")));
+        } else if (status == QPdfDocument::Status::Error) {
+            m_pdf_status_label->setText(pdf_error_text(m_pdf_document->error()));
+        } else if (status == QPdfDocument::Status::Loading) {
+            m_pdf_status_label->setText(QStringLiteral("Loading PDF..."));
+        }
+    });
+
+    m_content = host;
+    m_root_layout->addWidget(m_content, 1);
+
+    auto parsed = QUrl(source_url);
+    if (!parsed.isValid() || source_url.isEmpty()) {
+        showPdfError(QStringLiteral("No PDF URL was provided."));
+    } else if (parsed.isLocalFile()) {
+        openPdfFile(parsed.toLocalFile());
+    } else {
+        startPdfDownload(source_url);
+    }
+}
+
+void InternalPageView::openPdfFile(QString const& path)
+{
+    if (!m_pdf_document)
+        return;
+    auto error = m_pdf_document->load(path);
+    if (error != QPdfDocument::Error::None)
+        showPdfError(pdf_error_text(error));
+}
+
+void InternalPageView::startPdfDownload(QString const& source_url)
+{
+    if (!m_pdf_document)
+        return;
+    auto* owner = m_content ? m_content : this;
+    m_pdf_network = new QNetworkAccessManager(owner);
+    m_pdf_temp_file = new QTemporaryFile(QDir::tempPath() + QStringLiteral("/servoq-pdf-XXXXXX.pdf"), owner);
+    if (!m_pdf_temp_file->open()) {
+        showPdfError(QStringLiteral("Could not create a temporary file for the PDF."));
+        return;
+    }
+
+    QNetworkRequest request { QUrl(source_url) };
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("ServoQ"));
+    auto* reply = m_pdf_network->get(request);
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply] {
+        if (m_pdf_temp_file)
+            m_pdf_temp_file->write(reply->readAll());
+    });
+    connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
+        if (!m_pdf_status_label)
+            return;
+        if (total > 0)
+            m_pdf_status_label->setText(QStringLiteral("Downloading PDF... %1%").arg((received * 100) / total));
+        else
+            m_pdf_status_label->setText(QStringLiteral("Downloading PDF..."));
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        finishPdfDownload(reply);
+    });
+}
+
+void InternalPageView::finishPdfDownload(QNetworkReply* reply)
+{
+    if (!reply)
+        return;
+    reply->deleteLater();
+    if (!m_pdf_temp_file)
+        return;
+    m_pdf_temp_file->write(reply->readAll());
+    m_pdf_temp_file->flush();
+
+    auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (reply->error() != QNetworkReply::NoError || (status >= 400 && status < 600)) {
+        showPdfError(QStringLiteral("Could not download the PDF: %1").arg(reply->errorString()));
+        return;
+    }
+
+    auto content_type = reply->header(QNetworkRequest::ContentTypeHeader).toString();
+    if (!content_type.isEmpty() && !content_type.startsWith(QStringLiteral("application/pdf"), Qt::CaseInsensitive)
+        && !content_type.startsWith(QStringLiteral("text/pdf"), Qt::CaseInsensitive)) {
+        showPdfError(QStringLiteral("The server did not return a PDF document."));
+        return;
+    }
+
+    m_pdf_temp_file->close();
+    openPdfFile(m_pdf_temp_file->fileName());
+}
+
+void InternalPageView::showPdfError(QString const& message)
+{
+    if (m_pdf_status_label)
+        m_pdf_status_label->setText(message);
 }
 
 // ---- Settings page (M4.3) + site data / privacy UI (M4.5) ---------------

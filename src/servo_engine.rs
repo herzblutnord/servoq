@@ -712,6 +712,11 @@ mod engine {
         }
     }
 
+    fn is_probably_pdf_navigation_url(url: &Url) -> bool {
+        matches!(url.scheme(), "file" | "http" | "https")
+            && url.path().to_ascii_lowercase().ends_with(".pdf")
+    }
+
     fn content_blocking_allowed_for_url(url: &Url) -> bool {
         if !content_blocking_enabled() {
             return false;
@@ -1154,6 +1159,14 @@ mod engine {
                 navigation_request.deny();
                 return;
             }
+            if is_probably_pdf_navigation_url(&navigation_request.url) {
+                crate::bridge::ffi::notify_pdf_navigation_requested(
+                    self.tab_id,
+                    navigation_request.url.as_str(),
+                );
+                navigation_request.deny();
+                return;
+            }
             if content_blocking_allowed_for_url(&navigation_request.url)
                 && should_block_request(&navigation_request.url, &navigation_request.url, "document")
             {
@@ -1173,6 +1186,12 @@ mod engine {
             let source_url = request.referrer_url.as_ref().unwrap_or(&url);
             let destination = format!("{:?}", request.destination);
             let request_type = resource_type_for_destination(&destination, request.is_for_main_frame);
+            if request.is_for_main_frame && is_probably_pdf_navigation_url(&url) {
+                crate::bridge::ffi::notify_pdf_navigation_requested(self.tab_id, url.as_str());
+                let intercepted = load.intercept(WebResourceResponse::new(url));
+                intercepted.finish();
+                return;
+            }
             if content_blocking_allowed_for_url(source_url)
                 && should_block_request(&url, source_url, request_type)
             {
@@ -2356,7 +2375,8 @@ mod engine {
         };
         let point = WebViewPoint::Device(Point2D::new(x, y));
         let event = InputEvent::MouseButton(MouseButtonEvent::new(action, button, point));
-        if let Some(wv) = sync_qt_modifiers_before_mouse(id, mods) {
+        let force_modifier_sync = matches!(action, MouseButtonAction::Down);
+        if let Some(wv) = sync_qt_modifiers_before_mouse(id, mods, force_modifier_sync) {
             if diag_enabled() {
                 diag(format!(
                     "mouse_button id={id} action={action:?} button={button:?} device=({x:.1},{y:.1}) mods={mods}"
@@ -2434,7 +2454,7 @@ mod engine {
         });
     }
 
-    fn sync_qt_modifiers_before_mouse(id: i32, mods: u32) -> Option<WebView> {
+    fn sync_qt_modifiers_before_mouse(id: i32, mods: u32, force: bool) -> Option<WebView> {
         let normalized = normalize_qt_modifiers(mods);
         let (webview, previous) = ENGINE.with(|s| {
             let mut state = s.borrow_mut();
@@ -2444,7 +2464,7 @@ mod engine {
             Some((tab.webview.clone(), previous))
         })?;
 
-        if previous != normalized {
+        if force || previous != normalized {
             // Servo's constellation applies its last keyboard modifier state to
             // subsequent mouse events. Browser-level shortcuts can move focus
             // into Qt chrome after Servo saw Ctrl/Shift/Alt/Meta go down, so the
