@@ -6,5 +6,6 @@ namespace servoq {
 
 int run_qt_application();
 ::rust::String servo_profile_data_dir();
+::rust::String system_cjk_font_family(::rust::Str generic);
 
 }

@@ -7,8 +7,10 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QImageReader>
+#include <QLocale>
 #include <QDebug>
 #include <QResource>
 #include <QStandardPaths>
@@ -81,6 +83,47 @@ namespace servoq {
         return {};
     QDir().mkpath(dir);
     return ::rust::String(dir.toUtf8().constData());
+}
+
+::rust::String system_cjk_font_family(::rust::Str generic)
+{
+    auto generic_name = QString::fromUtf8(generic.data(), static_cast<int>(generic.size()));
+    bool serif = generic_name == QStringLiteral("serif");
+
+    // Order the pan-CJK variants by the system locale so unified Han renders
+    // with the user's preferred regional glyphs (Servo can't pick per-script).
+    QStringList regions;
+    switch (QLocale::system().language()) {
+    case QLocale::Korean:
+        regions = { QStringLiteral("KR"), QStringLiteral("JP"), QStringLiteral("SC"), QStringLiteral("TC"), QStringLiteral("HK") };
+        break;
+    case QLocale::Chinese:
+        if (auto t = QLocale::system().territory(); t == QLocale::Taiwan || t == QLocale::HongKong || t == QLocale::Macau)
+            regions = { QStringLiteral("TC"), QStringLiteral("HK"), QStringLiteral("SC"), QStringLiteral("JP"), QStringLiteral("KR") };
+        else
+            regions = { QStringLiteral("SC"), QStringLiteral("TC"), QStringLiteral("HK"), QStringLiteral("JP"), QStringLiteral("KR") };
+        break;
+    case QLocale::Japanese:
+    default:
+        regions = { QStringLiteral("JP"), QStringLiteral("SC"), QStringLiteral("TC"), QStringLiteral("HK"), QStringLiteral("KR") };
+        break;
+    }
+
+    QStringList candidates;
+    auto base = serif ? QStringLiteral("Noto Serif CJK %1") : QStringLiteral("Noto Sans CJK %1");
+    for (auto const& region : regions)
+        candidates << base.arg(region);
+    if (serif)
+        candidates << QStringLiteral("Source Han Serif") << QStringLiteral("AR PL UMing CN");
+    else
+        candidates << QStringLiteral("Source Han Sans") << QStringLiteral("WenQuanYi Micro Hei")
+                   << QStringLiteral("Droid Sans Fallback");
+
+    for (auto const& family : candidates) {
+        if (QFontDatabase::hasFamily(family))
+            return ::rust::String(family.toUtf8().constData());
+    }
+    return {};
 }
 
 int run_qt_application()

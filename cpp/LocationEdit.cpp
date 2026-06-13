@@ -19,6 +19,7 @@
 #include <QAction>
 #include <QAbstractItemView>
 #include <QCompleter>
+#include <QItemSelectionModel>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFocusEvent>
@@ -253,11 +254,18 @@ void LocationEdit::keyPressEvent(QKeyEvent* event)
         && m_history_completer
         && m_history_completer->popup()
         && m_history_completer->popup()->isVisible()) {
-        auto index = m_history_completer->popup()->currentIndex();
-        if (index.isValid() && activateHistorySuggestion(index)) {
+        auto* popup = m_history_completer->popup();
+        // Only open a history suggestion when the user has explicitly moved into
+        // the popup (Up/Down). A freshly shown popup has no selection, so Enter
+        // falls through to returnPressed and uses the typed text / default search
+        // — the popup never silently hijacks the first result.
+        bool user_selected = popup->selectionModel() && popup->selectionModel()->hasSelection();
+        auto index = popup->currentIndex();
+        if (user_selected && index.isValid() && activateHistorySuggestion(index)) {
             event->accept();
             return;
         }
+        popup->hide();
     }
 
     if (event->key() == Qt::Key_Escape) {
@@ -337,6 +345,14 @@ void LocationEdit::updateHistorySuggestions(QString const& query)
     }
 
     m_history_completer->complete();
+    // QCompleter preselects (and highlights) the first row when the popup opens,
+    // which made Enter open that result instead of submitting the typed query.
+    // Clear it so nothing is selected until the user presses Up/Down — matching
+    // Ladybird's Autocomplete::clear_selection().
+    if (auto* popup = m_history_completer->popup()) {
+        popup->setCurrentIndex(QModelIndex());
+        popup->clearSelection();
+    }
 }
 
 void LocationEdit::animateFocusGlow(int target_alpha)

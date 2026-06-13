@@ -42,6 +42,12 @@ pub mod ffi {
         include!("servoq/cpp/qt_app.h");
         fn run_qt_application() -> i32;
         fn servo_profile_data_dir() -> String;
+        // Best installed CJK-capable font family for a generic family
+        // ("serif"/"sans-serif"/"monospace"), locale-ordered, or "" if none.
+        // Used to give Servo's generic font preferences CJK coverage so
+        // characters Servo's built-in fallback list misses (CJK punctuation)
+        // don't render as tofu. See servo_preferences().
+        fn system_cjk_font_family(generic: &str) -> String;
 
         // Frame and delegate notifications: Rust -> C++ (safe per CXX's unsafe extern "C++" contract)
         include!("servoq/cpp/servo_callbacks.h");

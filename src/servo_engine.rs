@@ -473,6 +473,24 @@ mod engine {
         preferences.viewport_meta_enabled = true;
         // Experimental features are enabled at startup via set_experimental_features_enabled
         // (called from applySettings after init_servo). Listed here for clarity only.
+
+        // CJK coverage for the generic font families. Servo's built-in fallback
+        // list (servo-fonts) misses the CJK Symbols & Punctuation block (「」『』
+        // 、。 etc.) on common Linux setups — e.g. the family "Droid Sans Fallback"
+        // it relies on resolves via fontconfig to a non-CJK font — so those
+        // characters render as tofu. Point the generic families at an installed,
+        // locale-appropriate CJK font (Latin glyphs are unchanged: Noto Sans/Serif
+        // CJK carry the same Latin design as Noto Sans/Serif). Empty when no CJK
+        // font is installed, leaving Servo's platform default in place.
+        let sans = crate::bridge::ffi::system_cjk_font_family("sans-serif");
+        if !sans.is_empty() {
+            preferences.fonts_sans_serif = sans.clone();
+            preferences.fonts_default = sans;
+        }
+        let serif = crate::bridge::ffi::system_cjk_font_family("serif");
+        if !serif.is_empty() {
+            preferences.fonts_serif = serif;
+        }
         preferences
     }
 

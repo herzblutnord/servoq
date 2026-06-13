@@ -219,7 +219,10 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
     updateWindowBorder();
-    setMinimumSize(900, 640);
+    // Keep the floor only as large as the chrome needs to stay usable (toolbar
+    // cluster + location bar + hamburger; vertical tab strip). Was 900x640,
+    // which felt oversized.
+    setMinimumSize(480, 360);
     resize(Settings::the()->last_size());
     if (auto last_position = Settings::the()->last_position(); last_position.has_value())
         move(*last_position);
