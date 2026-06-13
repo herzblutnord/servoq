@@ -59,6 +59,13 @@ public:
     void setEmptyNewTab(bool empty_new_tab);
     bool ensureEngineStarted();
 
+    // Internal-page mode (servoq:// pages, M4.4): when active, this view's tab
+    // is showing a native Qt internal page instead of web content, so the
+    // shared Servo Wayland surface is released/unmapped and never re-attached
+    // while the flag is set. Cleared when navigating back to a web URL.
+    void setInternalPageActive(bool active);
+    bool internalPageActive() const { return m_internal_page_active; }
+
     // Activation transaction — called by TabWidget::activateTab (always deferred via
     // QTimer::singleShot so the mouse event that triggered the switch has unwound).
     // These are the ONLY paths that change g_wayland_owner or touch the container.
@@ -149,6 +156,7 @@ private:
     bool m_empty_new_tab { true };
 
     bool m_crashed { false };
+    bool m_internal_page_active { false };
     bool m_pending_frame_repaint { false };
     QString m_crash_reason;
 

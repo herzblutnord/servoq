@@ -19,6 +19,8 @@
 #include "BookmarksBar.h"
 #include "FaviconStore.h"
 #include "HistoryStore.h"
+#include "InternalPageView.h"
+#include "MprisManager.h"
 #include "NewTabTrace.h"
 #include "PermissionStore.h"
 #include "SessionStore.h"
@@ -575,6 +577,10 @@ void BrowserWindow::createMenus()
     auto* history_menu = menuBar()->addMenu("&History");
     connect(history_menu, &QMenu::aboutToShow, this, [this, history_menu] {
         history_menu->clear();
+        auto* show_history_action = history_menu->addAction(QStringLiteral("Show Full History\tCtrl+H"),
+            this, [this] { openInternalPage(QStringLiteral("servoq://history")); });
+        Q_UNUSED(show_history_action);
+        history_menu->addSeparator();
         history_menu->addAction(m_reopen_tab_action);
         auto* recently_closed_menu = history_menu->addMenu(QStringLiteral("Recently Closed Tabs"));
         populateRecentlyClosedTabsMenu(recently_closed_menu);
@@ -704,6 +710,10 @@ void BrowserWindow::createMenus()
         js_console_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));
         connect(js_console_action, &QAction::triggered, this, &BrowserWindow::showJavaScriptConsole);
         view_menu->addAction(js_console_action);
+        auto* debug_page_action = new QAction(QStringLiteral("Debug Page"), this);
+        connect(debug_page_action, &QAction::triggered, this,
+            [this] { openInternalPage(QStringLiteral("servoq://debug")); });
+        view_menu->addAction(debug_page_action);
     }
 
     view_menu->addSeparator();
@@ -731,6 +741,13 @@ void BrowserWindow::createMenus()
     m_hamburger_menu->addMenu(view_menu);
 
     auto* settings_menu = menuBar()->addMenu("&Settings");
+    auto* open_settings_page_action = new QAction(QStringLiteral("Settings"), this);
+    open_settings_page_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
+    connect(open_settings_page_action, &QAction::triggered, this,
+        [this] { openInternalPage(QStringLiteral("servoq://settings")); });
+    settings_menu->addAction(open_settings_page_action);
+    m_hamburger_menu->addAction(open_settings_page_action);
+    settings_menu->addSeparator();
     auto* experimental_action = new QWidgetAction(this);
     auto* experimental_checkbox = new QCheckBox("Experimental Web Platform Features", this);
     experimental_checkbox->setChecked(Settings::the()->experimental_features_enabled());
@@ -918,6 +935,11 @@ void BrowserWindow::createMenus()
     about_action->setEnabled(false);
     help_menu->addAction(about_action);
     m_hamburger_menu->addMenu(help_menu);
+
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_H), this,
+        [this] { openInternalPage(QStringLiteral("servoq://history")); });
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_J), this,
+        [this] { openInternalPage(QStringLiteral("servoq://downloads")); });
 
     for (int i = 0; i <= 7; ++i) {
         new QShortcut(QKeySequence(Qt::CTRL | static_cast<Qt::Key>(Qt::Key_1 + i)), this, [this, i] {
@@ -1122,6 +1144,7 @@ void BrowserWindow::closeTab(int index)
 
     m_tabs->removeTab(index);
     servoq::close_tab(tab_id);
+    MprisManager::the()->onTabClosed(tab_id);
     updateCurrentTabState();
     scheduleSessionSave();
 }
@@ -1391,6 +1414,29 @@ void BrowserWindow::applySettings()
     if (m_toggle_bookmarks_action)
         m_toggle_bookmarks_action->setChecked(Settings::the()->show_bookmarks_bar());
     refreshHomeButtons();
+}
+
+void BrowserWindow::onSettingsChangedFromPage()
+{
+    // The servoq://settings page wrote a value directly to Settings; re-apply
+    // everything chrome-side so the change is reflected live (tab layout,
+    // toolbar buttons, bookmarks bar, menu bar).
+    applySettings();
+    if (m_show_menu_bar_action)
+        m_show_menu_bar_action->setChecked(Settings::the()->show_menu_bar());
+    updateMenuBarVisibility();
+    refreshBookmarksBars();
+}
+
+void BrowserWindow::openInternalPage(QString const& url)
+{
+    auto* tab = currentTab();
+    // Open in the current tab when it is empty/already an internal page,
+    // otherwise a new tab — matching Chrome's chrome:// behavior.
+    if (tab && (tab->isEmptyNewTab() || tab->isInternalPage()))
+        tab->navigate(url);
+    else
+        createNewTab(url);
 }
 
 // Developer JS console (SERVOQ_DEBUG only): non-modal dialog that evaluates

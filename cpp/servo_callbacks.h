@@ -166,6 +166,20 @@ void notify_screenshot_taken(::std::int32_t tab_id,
 // registered under request_id by ServoQ::evaluate_javascript_in_tab.
 void notify_javascript_result(::std::int32_t tab_id, ::std::uint64_t request_id, bool success, ::rust::Str result);
 
+// Media Session API event for MPRIS integration (M5.6). kind: 0 SetMetadata,
+// 1 PlaybackStateChange, 2 SetPositionState. playback_state: 1 none, 2 playing,
+// 3 paused (kind 1 only). Metadata fields valid for kind 0; position fields for
+// kind 2. Routed to MprisManager.
+void notify_media_session_event(::std::int32_t tab_id, ::std::int32_t kind,
+                                ::std::int32_t playback_state, ::rust::Str title,
+                                ::rust::Str artist, ::rust::Str album, double duration,
+                                double position, double playback_rate);
+
+// Page console message for the servoq://debug console panel (M4.4). level:
+// 0 Log, 1 Debug, 2 Info, 3 Warn, 4 Error, 5 Trace. Only delivered while console
+// capture is enabled (servoq::set_console_capture_enabled).
+void notify_console_message(::std::int32_t tab_id, ::std::int32_t level, ::rust::Str message);
+
 // Posts QEvent(User+1) to qApp to wake the Qt event loop from any thread.
 // Called by QtEventLoopWaker::wake() from Servo's background threads.
 void servoq_wake_event_loop();

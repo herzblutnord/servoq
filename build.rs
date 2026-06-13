@@ -25,6 +25,10 @@ fn main() {
         .atleast_version("6")
         .probe("Qt6Sql")
         .expect("Qt 6 Sql development package must be available via pkg-config");
+    let qt_dbus = pkg_config::Config::new()
+        .atleast_version("6")
+        .probe("Qt6DBus")
+        .expect("Qt 6 DBus development package must be available via pkg-config");
     let qt_wayland = pkg_config::Config::new()
         .atleast_version("6")
         .probe("Qt6WaylandClient")
@@ -43,6 +47,8 @@ fn main() {
         "cpp/FaviconStore.h",
         "cpp/HistoryStore.h",
         "cpp/WebContentView.h",
+        "cpp/MprisManager.h",
+        "cpp/InternalPageView.h",
     ] {
         let stem = std::path::Path::new(header)
             .file_stem()
@@ -84,6 +90,9 @@ fn main() {
     for path in &qt_sql.include_paths {
         build.include(path);
     }
+    for path in &qt_dbus.include_paths {
+        build.include(path);
+    }
     if let Some(qt_wayland) = &qt_wayland {
         for path in &qt_wayland.include_paths {
             build.include(path);
@@ -110,6 +119,7 @@ fn main() {
         .iter()
         .chain(qt_network.defines.iter())
         .chain(qt_sql.defines.iter())
+        .chain(qt_dbus.defines.iter())
     {
         match &flag.1 {
             Some(value) => build.define(&flag.0, Some(value.as_str())),
@@ -140,6 +150,8 @@ fn main() {
         "cpp/ChromeStyle.cpp",
         "cpp/Icon.cpp",
         "cpp/Settings.cpp",
+        "cpp/MprisManager.cpp",
+        "cpp/InternalPageView.cpp",
     ]);
     build.file(resources_cpp);
 
@@ -150,6 +162,8 @@ fn main() {
         "FaviconStore",
         "HistoryStore",
         "WebContentView",
+        "MprisManager",
+        "InternalPageView",
     ] {
         build.file(out_dir.join(format!("moc_{stem}.cpp")));
     }

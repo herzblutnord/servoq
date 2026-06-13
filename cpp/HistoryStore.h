@@ -48,6 +48,9 @@ public:
     QList<Entry> const& entries() const { return m_entries; }
     QList<AutocompleteSuggestion> autocompleteSuggestions(QString const& query, int limit = 8) const;
     void recordVisit(QString const& url, QString const& title = {});
+    // Remove a single URL (and its visits) — used by the history page's
+    // per-entry delete. Synchronous like clearHistory (an explicit user action).
+    void removeUrl(QString const& url);
     void clearHistory();
 
 signals:

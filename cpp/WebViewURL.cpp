@@ -45,6 +45,7 @@ bool has_supported_scheme(QString const& scheme)
         QStringLiteral("http"),
         QStringLiteral("https"),
         QStringLiteral("resource"),
+        QStringLiteral("servoq"),
     };
     return supported_schemes.contains(scheme.toLower());
 }

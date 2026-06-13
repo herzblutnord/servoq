@@ -49,6 +49,11 @@ public:
     void setFullscreen(bool fullscreen);
     void closeTabFromContextMenu(int index);
     void closeOtherTabs(int keep_index);
+    // Re-apply settings after the servoq://settings page changes a value.
+    void onSettingsChangedFromPage();
+    // Open a servoq:// internal page in the current tab (or a new tab if the
+    // current tab is mid-load on a real page).
+    void openInternalPage(QString const& url);
     void closeTabsToRight(int from_index);
     // window.close() from web content (servoq::notify_webview_close_requested).
     void closeTabForController(int controller_id);

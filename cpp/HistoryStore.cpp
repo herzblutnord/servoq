@@ -350,6 +350,45 @@ void HistoryStore::recordVisit(QString const& url, QString const& title)
     emit changed();
 }
 
+void HistoryStore::removeUrl(QString const& url)
+{
+    if (url.isEmpty())
+        return;
+
+    for (int i = 0; i < m_entries.size(); ++i) {
+        if (m_entries[i].url == url) {
+            m_entries.removeAt(i);
+            break;
+        }
+    }
+    // Drop any not-yet-flushed writes for this URL so a pending visit can't
+    // resurrect the row after the synchronous delete below.
+    m_pending_writes.erase(
+        std::remove_if(m_pending_writes.begin(), m_pending_writes.end(),
+            [&url](PendingWrite const& w) { return w.url == url; }),
+        m_pending_writes.end());
+
+    // Synchronous, like clearHistory: deleting history is an explicit, rare
+    // privacy action, not navigation-event traffic.
+    if (m_db.isOpen()) {
+        QSqlQuery select_id(m_db);
+        select_id.prepare(QStringLiteral("SELECT id FROM urls WHERE url = ?"));
+        select_id.addBindValue(url);
+        if (select_id.exec() && select_id.next()) {
+            auto id = select_id.value(0).toLongLong();
+            QSqlQuery del_visits(m_db);
+            del_visits.prepare(QStringLiteral("DELETE FROM visits WHERE url_id = ?"));
+            del_visits.addBindValue(id);
+            del_visits.exec();
+            QSqlQuery del_url(m_db);
+            del_url.prepare(QStringLiteral("DELETE FROM urls WHERE id = ?"));
+            del_url.addBindValue(id);
+            del_url.exec();
+        }
+    }
+    emit changed();
+}
+
 void HistoryStore::clearHistory()
 {
     m_entries.clear();

@@ -16,6 +16,7 @@ class QAction;
 class QLabel;
 class QMenu;
 class QSpacerItem;
+class QStackedWidget;
 class QTimer;
 class QToolButton;
 
@@ -24,6 +25,7 @@ namespace ServoQ {
 class BookmarksBar;
 class BrowserWindow;
 class FindInPageWidget;
+class InternalPageView;
 class LocationEdit;
 class WebContentView;
 
@@ -53,6 +55,8 @@ public:
     void setHomeButtonVisible(bool visible);
     void setActive(bool active);
     void showEmptyNewTab();
+    void showInternalPage(QString const& url);
+    bool isInternalPage() const { return m_is_internal_page; }
     void restoreSessionUrl(QString const& url);
     void attachExistingWebView(QString const& initial_url = {});
     void updateToggleVerticalTabsIcon();
@@ -98,7 +102,9 @@ private:
     QWidget* m_toolbar { nullptr };
     BookmarksBar* m_bookmarks_bar { nullptr };
     LocationEdit* m_location_edit { nullptr };
+    QStackedWidget* m_content_stack { nullptr };
     WebContentView* m_view { nullptr };
+    InternalPageView* m_internal_page { nullptr };
     FindInPageWidget* m_find_in_page { nullptr };
     QLabel* m_hover_label { nullptr };
     QToolButton* m_hamburger_button { nullptr };
@@ -121,6 +127,7 @@ private:
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };
     bool m_is_empty_new_tab { true };
+    bool m_is_internal_page { false };
     bool m_pinned { false };
     int m_loading_animation_frame { 0 };
 };

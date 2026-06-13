@@ -23,6 +23,7 @@
 #include "ChromeStyle.h"
 #include "FindInPageWidget.h"
 #include "Icon.h"
+#include "InternalPageView.h"
 #include "LocationEdit.h"
 #include "Settings.h"
 #include "WebContentView.h"
@@ -38,6 +39,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QShortcut>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -111,8 +113,16 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     buildToolbar();
 
     m_find_in_page->hide();
+    // Content area is a stack: the Servo WebContentView (index 0) and, lazily,
+    // a native internal-page view for servoq:// pages (M4.4). The WebContentView
+    // stays parented through this stack inside the Tab; the shared Wayland
+    // subsurface is parented to the page-column widget (not this stack), so
+    // switching the stack never maps/unmaps that surface — only
+    // WebContentView::setInternalPageActive does.
+    m_content_stack = new QStackedWidget(this);
+    m_content_stack->addWidget(m_view);
     tab_layout->addWidget(m_toolbar_container);
-    tab_layout->addWidget(m_view, 1);
+    tab_layout->addWidget(m_content_stack, 1);
     tab_layout->addWidget(m_find_in_page);
 
     m_hover_label->setContentsMargins(4, 2, 4, 2);
@@ -201,8 +211,51 @@ void Tab::setActive(bool active)
     servoq::set_webview_active(m_controller_id, active);
 }
 
+void Tab::showInternalPage(QString const& url)
+{
+    m_is_empty_new_tab = false;
+    m_is_internal_page = true;
+    m_url = url;
+    m_title = InternalPageView::titleForUrl(url);
+
+    if (!m_internal_page) {
+        m_internal_page = new InternalPageView(m_content_stack);
+        m_internal_page->onNavigate = [this](QString const& target) { navigate(target); };
+        m_internal_page->onOpenInNewTab = [this](QString const& target) {
+            if (m_window)
+                m_window->createNewTab(target);
+        };
+        m_internal_page->onSettingsChanged = [this] {
+            if (m_window)
+                m_window->onSettingsChangedFromPage();
+        };
+        m_content_stack->addWidget(m_internal_page);
+    }
+
+    // Release the shared Servo surface (unmap) so the native page is visible,
+    // then swap the content stack to it.
+    m_view->setInternalPageActive(true);
+    m_internal_page->showUrl(url);
+    m_content_stack->setCurrentWidget(m_internal_page);
+
+    m_favicon = {};
+    m_has_page_favicon = false;
+    m_location_edit->setUrl(url);
+    m_find_in_page->hide();
+    set_loading(false);
+    refreshBookmarkIcon();
+    update_tab_title();
+    m_internal_page->setFocus();
+}
+
 void Tab::showEmptyNewTab()
 {
+    if (m_is_internal_page) {
+        m_is_internal_page = false;
+        m_view->setInternalPageActive(false);
+        if (m_content_stack)
+            m_content_stack->setCurrentWidget(m_view);
+    }
     m_is_empty_new_tab = true;
     m_url = QStringLiteral("about:blank");
     m_title = QStringLiteral("New Tab");
@@ -252,7 +305,23 @@ void Tab::attachExistingWebView(QString const& initial_url)
 void Tab::navigate(QString const& url)
 {
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
+
+    // servoq:// internal pages are native Qt views, not Servo navigations.
+    if (InternalPageView::isInternalUrl(normalized_url)) {
+        showInternalPage(normalized_url);
+        return;
+    }
+
+    bool leaving_internal = m_is_internal_page;
+    m_is_internal_page = false;
     m_is_empty_new_tab = false;
+    if (leaving_internal) {
+        // Returning to web content: re-show the WebContentView and re-claim the
+        // shared Servo surface that the internal page released.
+        m_view->setInternalPageActive(false);
+        if (m_content_stack)
+            m_content_stack->setCurrentWidget(m_view);
+    }
     // Queue URL so create_webview (called from showEvent) uses it if the engine
     // WebView has not been created yet.
     auto is_active = m_window && m_window->currentTab() == this;
@@ -265,6 +334,10 @@ void Tab::navigate(QString const& url)
         servoq::load_url(m_controller_id, normalized_url.toStdString());
     applyControllerState();
     on_load_finish();
+    // When the engine already existed, ensureEngineStarted does not re-attach
+    // the surface that the internal page unmapped — drive a full re-activation.
+    if (leaving_internal && is_active)
+        m_view->onBecomeActiveTab();
 }
 
 void Tab::location_edit_return_pressed()
@@ -272,6 +345,15 @@ void Tab::location_edit_return_pressed()
     auto text = m_location_edit->text();
     if (text.isEmpty())
         return;
+
+    // servoq:// internal pages bypass URL sanitization (which would otherwise
+    // treat the unknown scheme as a search query).
+    auto trimmed = text.trimmed();
+    if (InternalPageView::isInternalUrl(trimmed)) {
+        m_location_edit->setUrl(trimmed);
+        navigate(trimmed);
+        return;
+    }
 
     auto ctrl_held = QApplication::keyboardModifiers() & Qt::ControlModifier;
     auto append_tld = ctrl_held ? WebViewURL::AppendTLD::Yes : WebViewURL::AppendTLD::No;
@@ -390,6 +472,18 @@ QString Tab::faviconBase64Png() const
 
 void Tab::applyControllerState()
 {
+    if (m_is_internal_page) {
+        // Internal pages (servoq://) are native Qt views, not Servo
+        // navigations: keep their URL/title and don't read controller state.
+        m_location_edit->setUrl(m_url);
+        set_loading(false);
+        m_back_action->setEnabled(false);
+        m_forward_action->setEnabled(false);
+        m_find_in_page->setVisible(false);
+        m_bookmarks_bar->setVisible(Settings::the()->show_bookmarks_bar());
+        refreshBookmarkIcon();
+        return;
+    }
     if (m_is_empty_new_tab) {
         m_location_edit->setUrl(m_url);
         m_view->setUrl(m_url);
@@ -575,8 +669,8 @@ void Tab::buildToolbar()
     m_reload_action->setIcon(create_chrome_icon(ChromeIcon::Reload, palette()));
     m_bookmark_action->setIcon(create_chrome_icon(ChromeIcon::Star, palette()));
 
-    connect(m_back_action, &QAction::triggered, this, [this] { servoq::go_back(m_controller_id); applyControllerState(); });
-    connect(m_forward_action, &QAction::triggered, this, [this] { servoq::go_forward(m_controller_id); applyControllerState(); });
+    connect(m_back_action, &QAction::triggered, this, [this] { if (m_is_internal_page) return; servoq::go_back(m_controller_id); applyControllerState(); });
+    connect(m_forward_action, &QAction::triggered, this, [this] { if (m_is_internal_page) return; servoq::go_forward(m_controller_id); applyControllerState(); });
     connect(m_home_action, &QAction::triggered, this, [this] { navigate(Settings::the()->homepage_url()); });
     connect(m_reload_action, &QAction::triggered, this, [this] {
         on_load_start(m_url);
@@ -708,7 +802,8 @@ void Tab::set_loading(bool is_loading)
 
 void Tab::refreshBookmarkIcon()
 {
-    auto is_internal_page = m_url == QStringLiteral("about:blank");
+    auto is_internal_page = m_is_internal_page || m_url == QStringLiteral("about:blank")
+        || m_url.startsWith(QStringLiteral("servoq://"), Qt::CaseInsensitive);
     m_bookmark_action->setEnabled(!is_internal_page);
     m_bookmark_action->setIcon(create_chrome_icon(
         !is_internal_page && BookmarkStore::the()->hasBookmark(m_url) ? ChromeIcon::StarFilled : ChromeIcon::Star,

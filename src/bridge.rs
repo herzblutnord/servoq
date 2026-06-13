@@ -122,6 +122,25 @@ pub mod ffi {
         fn notify_screenshot_taken(tab_id: i32, data: &[u8], width: i32, height: i32);
         // JS evaluation result: success carries JSON text, failure the error.
         fn notify_javascript_result(tab_id: i32, request_id: u64, success: bool, result: &str);
+        // Media Session API event (W3C mediasession) for MPRIS integration.
+        // kind: 0 = SetMetadata, 1 = PlaybackStateChange, 2 = SetPositionState.
+        // playback_state: 1 = none, 2 = playing, 3 = paused (only for kind 1).
+        // Metadata fields populated only for kind 0; position fields for kind 2.
+        fn notify_media_session_event(
+            tab_id: i32,
+            kind: i32,
+            playback_state: i32,
+            title: &str,
+            artist: &str,
+            album: &str,
+            duration: f64,
+            position: f64,
+            playback_rate: f64,
+        );
+        // Page console message (console.log/warn/error…) for the servoq://debug
+        // console panel. Only forwarded while console capture is enabled
+        // (set_console_capture_enabled) so loop-heavy pages don't flood the FFI.
+        fn notify_console_message(tab_id: i32, level: i32, message: &str);
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
@@ -204,6 +223,24 @@ pub mod ffi {
         fn reload_blocklists() -> bool;
         fn user_blocklist_path() -> String;
 
+        // Site data / cookies management (M4.5). list_site_data returns
+        // newline-separated "site\tstorage_type_bits" rows (eTLD+1 sites);
+        // clear_site_data_for takes newline-separated site names. clear_all_cookies
+        // wipes the whole jar; clear_http_cache empties the network cache (M4.6).
+        fn list_site_data() -> String;
+        fn clear_site_data_for(sites: &str);
+        fn clear_all_cookies();
+        fn clear_http_cache();
+
+        // Media Session (M5.6): forward an MPRIS control action to the page's
+        // media session. action: 0 Play, 1 Pause, 2 SeekBackward, 3 SeekForward,
+        // 4 PreviousTrack, 5 NextTrack, 6 SkipAd, 7 Stop, 8 SeekTo.
+        fn media_session_action(tab_id: i32, action: i32);
+
+        // Toggles console-message forwarding (notify_console_message). Off by
+        // default; the servoq://debug page turns it on while open.
+        fn set_console_capture_enabled(enabled: bool);
+
         // Experimental web platform features toggle (mirrors servoshell EXPERIMENTAL_PREFS).
         fn set_experimental_features_enabled(enabled: bool);
         fn experimental_features_enabled() -> bool;
@@ -247,3 +284,10 @@ pub use crate::servo_engine::{evaluate_javascript, take_screenshot};
 
 pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
 pub use crate::servo_engine::{experimental_features_enabled, set_experimental_features_enabled};
+
+// Site data / cookies / cache management and media session control — always
+// present; no-ops (or empty results) when the servo-engine feature is off.
+pub use crate::servo_engine::{
+    clear_all_cookies, clear_http_cache, clear_site_data_for, list_site_data,
+    media_session_action, set_console_capture_enabled,
+};

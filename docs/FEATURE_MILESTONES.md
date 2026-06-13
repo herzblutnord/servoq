@@ -49,9 +49,9 @@ grouped by related work. Status was determined by auditing the codebase
 |---|---|---|---|
 | Clipboard support | ✅ | resolved by M3.1: QClipboard-backed `ClipboardDelegate`; JS/async clipboard and Servo-initiated copy reach the system clipboard | — |
 | Notifications | ✅ | resolved by M3.3: gated by the permission prompt + per-origin persistence | — |
-| Console messages | ◐ | stderr behind `SERVOQ_DEBUG`; no debug-page panel | M4 |
-| Settings page | ◐ | menu-based settings only; no dedicated page | M4 |
-| History page/search | ◐ | menu + autocomplete only; no full searchable view | M4 |
+| Console messages | ✅ | resolved by M4.4: servoq://debug console panel (capture-gated) + stderr behind `SERVOQ_DEBUG` | — |
+| Settings page | ✅ | resolved by M4.3: servoq://settings consolidates the menu settings | — |
+| History page/search | ✅ | resolved by M4.1: servoq://history searchable view with deletion | — |
 | Private-window shell behavior | ◐→L | nothing yet; true private storage needs Servo-side isolation | M5 |
 
 ## Milestone 1 — Content dialogs & form controls  ✅ **implemented (June 2026)**
@@ -98,12 +98,12 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 4.1 | History page with search | ◐ | native Qt view, deletion, search |
+| 4.1 | History page with search | ✅ | `servoq://history`: native Qt list, date sections, favicons, search filter, per-row delete + clear-all (`InternalPageView`) |
 | 4.2 | Bookmark manager + import/export | ✗ | add/edit/remove/search + Netscape-HTML import/export |
-| 4.3 | Settings page | ◐ | consolidate menu settings into a page |
-| 4.4 | Internal pages scheme (`servoq://`) + debug page | ✗ | shell-state debug page; console-message panel |
-| 4.5 | Site data / cookies clearing UI | ✗ | Persistent cookies are implemented; still needs UI around `SiteDataManager` listing/clearing |
-| 4.6 | HTTP cache clearing | ✗ | `NetworkManager::clear_cache` |
+| 4.3 | Settings page | ✅ | `servoq://settings`: consolidates home/new-tab, appearance, search, privacy settings into a page; applied live via `BrowserWindow::onSettingsChangedFromPage` |
+| 4.4 | Internal pages scheme (`servoq://`) + debug page | ✅ | `InternalPageView` hosted per-tab in a content `QStackedWidget`; `servoq://settings/history/downloads/debug`; debug page shows shell state + a console-message panel (capture-gated). Surface handling: see DEVIATIONS.md §0h |
+| 4.5 | Site data / cookies clearing UI | ✅ | Settings → Privacy: "Manage site data" lists eTLD+1 sites from `SiteDataManager::site_data` with per-site/all removal; "Clear browsing data" clears history/cookies/cache |
+| 4.6 | HTTP cache clearing | ✅ | wired via `NetworkManager::clear_cache` from the Clear browsing data dialog (servoq::clear_http_cache) |
 | 4.7 | External PDF handoff | ✗ | MIME/extension detect via `load_web_resource`, open externally |
 | 4.8 | Qt chrome accessibility pass | ✗ | accessible names, tab order, focus rings |
 
@@ -116,7 +116,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 5.3 | Profiles | ✗ | separate config/cache dirs; Servo storage paths |
 | 5.4 | Private windows | ✗ | blocked on Servo-side storage isolation |
 | 5.5 | Multi-window | ✗ | conflicts with single shared Wayland surface (DEVIATIONS.md); needs per-window surface rework |
-| 5.6 | Media session integration | ✗ | MPRIS + `notify_media_session_event` |
+| 5.6 | Media session integration | ✅ | MPRIS via QtDBus (`MprisManager`): `notify_media_session_event` → `org.mpris.MediaPlayer2.servoq` metadata/playback state; desktop controls drive `media_session_action` → `WebView::notify_media_session_action_event` |
 | 5.7 | Accessibility tree bridge (AccessKit) | ✗ | hardest item in the table |
 | 5.8 | DevTools connection prompt | ✗ | with devtools server toggle |
 | 5.9 | Local sync architecture | ✗ | out of scope until storage stabilizes |

@@ -55,6 +55,9 @@ mod engine {
     use servo::{CreateNewWebViewRequest, EmbedderControl};
     use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
     use servo::UserContentManager;
+    use servo::{
+        MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState, StorageType,
+    };
     use raw_window_handle::{
         DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
         WaylandWindowHandle, WindowHandle,
@@ -93,6 +96,10 @@ mod engine {
 
     static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
     static GL_INFO_LOGGED: AtomicBool = AtomicBool::new(false);
+    // Console-message capture for servoq://debug. Off by default: pages can
+    // console.log in rAF/scroll loops, so per-message FFI traffic only happens
+    // while a debug page has explicitly turned capture on.
+    static CONSOLE_CAPTURE: AtomicBool = AtomicBool::new(false);
 
     type EGLDisplay = *mut c_void;
 
@@ -1219,20 +1226,56 @@ mod engine {
 
         fn show_console_message(&self, _webview: WebView, level: ConsoleLogLevel, message: String) {
             // Page console output is opt-in: pages can console.log in rAF/scroll
-            // loops, and an unconditional synchronous stderr write per message
-            // stalls the main thread on such sites.
-            if !debug_enabled() {
+            // loops, and an unconditional synchronous stderr write (or FFI hop)
+            // per message stalls the main thread on such sites. Only do work when
+            // SERVOQ_DEBUG is on (stderr) or the servoq://debug console panel has
+            // turned capture on (FFI to the C++ ring buffer).
+            let capture = CONSOLE_CAPTURE.load(Ordering::Relaxed);
+            if !debug_enabled() && !capture {
                 return;
             }
-            let level_str = match level {
-                ConsoleLogLevel::Log => "LOG",
-                ConsoleLogLevel::Debug => "DEBUG",
-                ConsoleLogLevel::Info => "INFO",
-                ConsoleLogLevel::Warn => "WARN",
-                ConsoleLogLevel::Error => "ERROR",
-                ConsoleLogLevel::Trace => "TRACE",
+            let level_code = match level {
+                ConsoleLogLevel::Log => 0,
+                ConsoleLogLevel::Debug => 1,
+                ConsoleLogLevel::Info => 2,
+                ConsoleLogLevel::Warn => 3,
+                ConsoleLogLevel::Error => 4,
+                ConsoleLogLevel::Trace => 5,
             };
-            eprintln!("[servoq console][tab={}][{}] {}", self.tab_id, level_str, message);
+            if debug_enabled() {
+                const NAMES: [&str; 6] = ["LOG", "DEBUG", "INFO", "WARN", "ERROR", "TRACE"];
+                eprintln!("[servoq console][tab={}][{}] {}", self.tab_id, NAMES[level_code as usize], message);
+            }
+            if capture && tab_exists(self.tab_id) {
+                crate::bridge::ffi::notify_console_message(self.tab_id, level_code, &message);
+            }
+        }
+
+        fn notify_media_session_event(&self, _webview: WebView, event: MediaSessionEvent) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if !tab_exists(self.tab_id) { return; }
+            match event {
+                MediaSessionEvent::SetMetadata(m) => {
+                    crate::bridge::ffi::notify_media_session_event(
+                        self.tab_id, 0, 0, &m.title, &m.artist, &m.album, 0.0, 0.0, 0.0,
+                    );
+                }
+                MediaSessionEvent::PlaybackStateChange(state) => {
+                    let code = match state {
+                        MediaSessionPlaybackState::None_ => 1,
+                        MediaSessionPlaybackState::Playing => 2,
+                        MediaSessionPlaybackState::Paused => 3,
+                    };
+                    crate::bridge::ffi::notify_media_session_event(
+                        self.tab_id, 1, code, "", "", "", 0.0, 0.0, 0.0,
+                    );
+                }
+                MediaSessionEvent::SetPositionState(p) => {
+                    crate::bridge::ffi::notify_media_session_event(
+                        self.tab_id, 2, 0, "", "", "", p.duration, p.position, p.playback_rate,
+                    );
+                }
+            }
         }
 
         fn request_create_new(&self, _parent_webview: WebView, request: CreateNewWebViewRequest) {
@@ -2878,6 +2921,82 @@ mod engine {
         }
         result
     }
+
+    // ---- site data / cookies / cache (M4.5, M4.6) ----------------------
+
+    // Newline-separated "site\tstorage_bits" rows, one per eTLD+1 site that has
+    // cookies, localStorage, or sessionStorage. storage_bits is the StorageType
+    // bitflags value (1=Cookies, 2=Local, 4=Session).
+    pub fn list_site_data() -> String {
+        ENGINE.with(|s| {
+            let s = s.borrow();
+            let Some(e) = s.as_ref() else { return String::new() };
+            let sites = e.servo.site_data_manager().site_data(StorageType::all());
+            sites
+                .iter()
+                .map(|sd| format!("{}\t{}", sd.name(), sd.storage_types().bits()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
+    pub fn clear_site_data_for(sites_joined: &str) {
+        let sites: Vec<&str> = sites_joined
+            .split('\n')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if sites.is_empty() {
+            return;
+        }
+        ENGINE.with(|s| {
+            if let Some(e) = s.borrow().as_ref() {
+                e.servo
+                    .site_data_manager()
+                    .clear_site_data(&sites, StorageType::all());
+            }
+        });
+    }
+
+    pub fn clear_all_cookies() {
+        ENGINE.with(|s| {
+            if let Some(e) = s.borrow().as_ref() {
+                e.servo.site_data_manager().clear_cookies();
+            }
+        });
+    }
+
+    pub fn clear_http_cache() {
+        ENGINE.with(|s| {
+            if let Some(e) = s.borrow().as_ref() {
+                e.servo.network_manager().clear_cache();
+            }
+        });
+    }
+
+    // ---- media session (M5.6) ------------------------------------------
+
+    pub fn media_session_action(id: i32, action: i32) {
+        let action_type = match action {
+            0 => MediaSessionActionType::Play,
+            1 => MediaSessionActionType::Pause,
+            2 => MediaSessionActionType::SeekBackward,
+            3 => MediaSessionActionType::SeekForward,
+            4 => MediaSessionActionType::PreviousTrack,
+            5 => MediaSessionActionType::NextTrack,
+            6 => MediaSessionActionType::SkipAd,
+            7 => MediaSessionActionType::Stop,
+            8 => MediaSessionActionType::SeekTo,
+            _ => return,
+        };
+        if let Some(wv) = clone_webview(id) {
+            wv.notify_media_session_action_event(action_type);
+        }
+    }
+
+    pub fn set_console_capture_enabled(enabled: bool) {
+        CONSOLE_CAPTURE.store(enabled, Ordering::Relaxed);
+    }
 } // mod engine
 
 // ============================================================
@@ -3045,4 +3164,36 @@ pub fn experimental_features_enabled() -> bool {
     // The authoritative persisted value lives in Qt Settings on the C++ side.
     // This stub satisfies the CXX bridge; the real default is set in applySettings().
     true
+}
+
+pub fn list_site_data() -> String {
+    #[cfg(feature = "servo-engine")]
+    return engine::list_site_data();
+    #[allow(unreachable_code)]
+    String::new()
+}
+
+pub fn clear_site_data_for(_sites: &str) {
+    #[cfg(feature = "servo-engine")]
+    engine::clear_site_data_for(_sites);
+}
+
+pub fn clear_all_cookies() {
+    #[cfg(feature = "servo-engine")]
+    engine::clear_all_cookies();
+}
+
+pub fn clear_http_cache() {
+    #[cfg(feature = "servo-engine")]
+    engine::clear_http_cache();
+}
+
+pub fn media_session_action(_id: i32, _action: i32) {
+    #[cfg(feature = "servo-engine")]
+    engine::media_session_action(_id, _action);
+}
+
+pub fn set_console_capture_enabled(_enabled: bool) {
+    #[cfg(feature = "servo-engine")]
+    engine::set_console_capture_enabled(_enabled);
 }

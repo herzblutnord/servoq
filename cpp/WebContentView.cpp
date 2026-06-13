@@ -935,6 +935,27 @@ void WebContentView::setEmptyNewTab(bool empty_new_tab)
     update();
 }
 
+void WebContentView::setInternalPageActive(bool active)
+{
+    m_internal_page_active = active;
+    if (!active)
+        return;
+    // Release ownership of the shared surface (if we hold it), park the
+    // container off-screen, and unmap the subsurface — the same teardown an
+    // empty tab does on activation. The native internal page widget then owns
+    // the page-column area visually.
+    m_engine_tick_timer->stop();
+    if (m_wayland_container && g_wayland_owner() == this) {
+        g_wayland_owner() = nullptr;
+        ++g_wayland_owner_generation();
+        if (g_wayland_window())
+            g_wayland_window()->setOwner(nullptr);
+        park_shared_wayland_container();
+    }
+    if (g_wayland_container())
+        unmap_shared_servo_subsurface("internal_page_servo_subsurface_unmapped");
+}
+
 bool WebContentView::ensureEngineStarted()
 {
     auto started = startEngineIfNeeded();
@@ -1253,6 +1274,10 @@ void WebContentView::requestWaylandRepaint(PresentRequestReason reason)
         case PresentRequestReason::Retry: stats.present_req_retry++; break;
         case PresentRequestReason::Shutdown: break;
         }
+    }
+    if (m_internal_page_active) {
+        debug_log("wayland_present_skipped_internal_page", m_tab_id);
+        return;
     }
     if (!m_webview_created) {
         debug_log("wayland_present_skipped_request_no_webview", m_tab_id);
@@ -1835,6 +1860,16 @@ void WebContentView::onBecomeActiveTab()
                             ? qobject_cast<QStackedWidget*>(m_tab->parentWidget())->currentIndex()
                             : -1)
                     : QStringLiteral("no_parent")));
+        return;
+    }
+
+    // Internal page (servoq://) is showing: keep the shared Servo surface
+    // released and unmapped so the native Qt page stays visible. Do not attach
+    // or present, regardless of whether this tab's webview was previously
+    // created. Cleared by setInternalPageActive(false) on navigation away.
+    if (m_internal_page_active) {
+        setInternalPageActive(true);
+        debug_log("become_active_tab_internal_page", m_tab_id);
         return;
     }
 
