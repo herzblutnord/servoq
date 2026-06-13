@@ -32,6 +32,8 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
+#include <QNetworkCookie>
+#include <QNetworkCookieJar>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPdfDocument>
@@ -77,6 +79,28 @@ QString source_url_for_internal_pdf_url(QString const& url)
     QUrl parsed(url);
     QUrlQuery query(parsed);
     return query.queryItemValue(QStringLiteral("url"), QUrl::FullyDecoded);
+}
+
+// Parse the bridge's serialized cookies ("name\tvalue\tdomain\tpath\tsecure"
+// per line) into QNetworkCookies. Domain/path default to the request URL so a
+// host-only cookie is scoped to exactly the PDF's host.
+QList<QNetworkCookie> parse_pdf_cookies(QString const& serialized, QUrl const& request_url)
+{
+    QList<QNetworkCookie> cookies;
+    auto const rows = serialized.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (auto const& row : rows) {
+        auto const fields = row.split(QLatin1Char('\t'));
+        if (fields.size() < 2 || fields[0].isEmpty())
+            continue;
+        QNetworkCookie cookie(fields[0].toUtf8(), fields[1].toUtf8());
+        auto const domain = fields.size() > 2 ? fields[2] : QString();
+        cookie.setDomain(domain.isEmpty() ? request_url.host() : domain);
+        auto const path = fields.size() > 3 ? fields[3] : QString();
+        cookie.setPath(path.isEmpty() ? QStringLiteral("/") : path);
+        cookie.setSecure(fields.size() > 4 && fields[4] == QLatin1Char('1'));
+        cookies.append(cookie);
+    }
+    return cookies;
 }
 
 QString pdf_error_text(QPdfDocument::Error error)
@@ -439,7 +463,20 @@ void InternalPageView::startPdfDownload(QString const& source_url)
         return;
     }
 
-    QNetworkRequest request { QUrl(source_url) };
+    // Share the page's live session with this out-of-engine fetch: Servo
+    // computes the cookies (session + HttpOnly) it would attach for this URL,
+    // and we load them into a cookie jar so authenticated PDFs download as the
+    // page would have. Using a jar (not a raw Cookie header) lets Qt match by
+    // domain and recompute on redirect, so cookies never leak cross-origin.
+    QUrl const request_url(source_url);
+    auto cookies = parse_pdf_cookies(QString::fromStdString(std::string(servoq::cookies_for_url(source_url.toStdString()))), request_url);
+    if (!cookies.isEmpty()) {
+        auto* jar = new QNetworkCookieJar(m_pdf_network);
+        jar->setCookiesFromUrl(cookies, request_url);
+        m_pdf_network->setCookieJar(jar);
+    }
+
+    QNetworkRequest request { request_url };
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("ServoQ"));
     auto* reply = m_pdf_network->get(request);
@@ -476,9 +513,17 @@ void InternalPageView::finishPdfDownload(QNetworkReply* reply)
         return;
     }
 
-    auto content_type = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-    if (!content_type.isEmpty() && !content_type.startsWith(QStringLiteral("application/pdf"), Qt::CaseInsensitive)
-        && !content_type.startsWith(QStringLiteral("text/pdf"), Qt::CaseInsensitive)) {
+    // Accept anything that is actually a PDF. Many servers send a valid PDF as
+    // application/octet-stream (or with no/garbled Content-Type), so trust the
+    // file's magic bytes ("%PDF-") over the header, and only reject when the
+    // header clearly says non-PDF AND the bytes don't look like one. A file
+    // that still isn't a real PDF is caught by QPdfDocument::load below.
+    m_pdf_temp_file->seek(0);
+    auto const header = m_pdf_temp_file->read(5);
+    auto const content_type = reply->header(QNetworkRequest::ContentTypeHeader).toString();
+    bool const looks_like_pdf = header.startsWith("%PDF-");
+    bool const content_type_claims_pdf = content_type.contains(QStringLiteral("pdf"), Qt::CaseInsensitive);
+    if (!looks_like_pdf && !content_type_claims_pdf && !content_type.isEmpty()) {
         showPdfError(QStringLiteral("The server did not return a PDF document."));
         return;
     }

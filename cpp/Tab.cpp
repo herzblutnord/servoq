@@ -241,6 +241,13 @@ void Tab::showInternalPage(QString const& url)
     m_is_empty_new_tab = false;
     m_is_internal_page = true;
     m_url = url;
+    // For the PDF viewer, show the real document URL in the address bar (and on
+    // copy) rather than the internal servoq://pdf?url=… wrapper, like Chrome.
+    // m_url stays the internal URL so bookmarks/session keep reopening the viewer.
+    if (InternalPageView::kindForUrl(url) == InternalPageView::Kind::Pdf)
+        m_pdf_display_url = QUrlQuery(QUrl(url)).queryItemValue(QStringLiteral("url"), QUrl::FullyDecoded);
+    else
+        m_pdf_display_url.clear();
     m_title = InternalPageView::titleForUrl(url);
 
     if (!m_internal_page) {
@@ -268,7 +275,7 @@ void Tab::showInternalPage(QString const& url)
         m_favicon = source_icon.isNull() ? QIcon() : source_icon;
         m_has_page_favicon = !source_icon.isNull();
     }
-    m_location_edit->setUrl(url);
+    m_location_edit->setUrl(m_pdf_display_url.isEmpty() ? url : m_pdf_display_url);
     m_back_action->setEnabled(m_internal_page_can_return_to_web);
     m_forward_action->setEnabled(false);
     m_find_in_page->hide();
@@ -285,6 +292,7 @@ void Tab::returnToWebContentFromInternalPage()
 
     m_is_internal_page = false;
     m_internal_page_can_return_to_web = false;
+    m_pdf_display_url.clear();
     m_view->setInternalPageActive(false);
     if (m_content_stack)
         m_content_stack->setCurrentWidget(m_view);
@@ -311,6 +319,7 @@ void Tab::showEmptyNewTab()
     if (m_is_internal_page) {
         m_is_internal_page = false;
         m_internal_page_can_return_to_web = false;
+        m_pdf_display_url.clear();
         m_return_web_favicon = {};
         m_return_web_has_page_favicon = false;
         m_view->setInternalPageActive(false);
@@ -384,6 +393,7 @@ void Tab::navigate(QString const& url)
         // Returning to web content: re-show the WebContentView and re-claim the
         // shared Servo surface that the internal page released.
         m_internal_page_can_return_to_web = false;
+        m_pdf_display_url.clear();
         m_view->setInternalPageActive(false);
         if (m_content_stack)
             m_content_stack->setCurrentWidget(m_view);
@@ -541,7 +551,8 @@ void Tab::applyControllerState()
     if (m_is_internal_page) {
         // Internal pages (servoq://) are native Qt views, not Servo
         // navigations: keep their URL/title and don't read controller state.
-        m_location_edit->setUrl(m_url);
+        // The PDF viewer shows the real document URL (see showInternalPage).
+        m_location_edit->setUrl(m_pdf_display_url.isEmpty() ? m_url : m_pdf_display_url);
         set_loading(false);
         m_back_action->setEnabled(m_internal_page_can_return_to_web);
         m_forward_action->setEnabled(false);

@@ -126,6 +126,9 @@ private:
     bool m_has_page_favicon { false };
     bool m_return_web_has_page_favicon { false };
     QString m_url { QStringLiteral("about:blank") };
+    // For the PDF viewer: the real document URL shown in the address bar, while
+    // m_url stays the internal servoq://pdf?url=… wrapper. Empty otherwise.
+    QString m_pdf_display_url;
     QString m_hovered_link_url;
     QString m_title { QStringLiteral("New Tab") };
     bool m_is_loading { false };

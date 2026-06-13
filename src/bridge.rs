@@ -239,6 +239,12 @@ pub mod ffi {
         fn clear_all_cookies();
         fn clear_http_cache();
 
+        // Cookies Servo would send for an HTTP request to `url` (session +
+        // HttpOnly included), so the native PDF viewer fetches authenticated
+        // PDFs with the page's session. Newline-separated rows of
+        // "name\tvalue\tdomain\tpath\tsecure". See InternalPageView PDF fetch.
+        fn cookies_for_url(url: &str) -> String;
+
         // Media Session (M5.6): forward an MPRIS control action to the page's
         // media session. action: 0 Play, 1 Pause, 2 SeekBackward, 3 SeekForward,
         // 4 PreviousTrack, 5 NextTrack, 6 SkipAd, 7 Stop, 8 SeekTo.
@@ -295,6 +301,6 @@ pub use crate::servo_engine::{experimental_features_enabled, set_experimental_fe
 // Site data / cookies / cache management and media session control — always
 // present; no-ops (or empty results) when the servo-engine feature is off.
 pub use crate::servo_engine::{
-    clear_all_cookies, clear_http_cache, clear_site_data_for, list_site_data,
+    clear_all_cookies, clear_http_cache, clear_site_data_for, cookies_for_url, list_site_data,
     media_session_action, set_console_capture_enabled,
 };

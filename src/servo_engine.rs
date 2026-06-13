@@ -58,6 +58,7 @@ mod engine {
     use servo::{
         MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState, StorageType,
     };
+    use servo::CookieSource;
     use raw_window_handle::{
         DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
         WaylandWindowHandle, WindowHandle,
@@ -3012,6 +3013,43 @@ mod engine {
         });
     }
 
+    // Live cookies Servo would attach to an HTTP request for `url`, so the
+    // native PDF viewer's out-of-engine fetch carries the same session as the
+    // page (session/HttpOnly cookies included). Servo owns the matching; we
+    // only serialize. One row per cookie: "name\tvalue\tdomain\tpath\tsecure",
+    // newline-separated. Empty when the engine is down or there are none.
+    pub fn cookies_for_url(url: &str) -> String {
+        let Ok(parsed) = Url::parse(url) else {
+            return String::new();
+        };
+        ENGINE.with(|s| {
+            let s = s.borrow();
+            let Some(e) = s.as_ref() else {
+                return String::new();
+            };
+            // CookieSource::HTTP mirrors a real network fetch: it includes
+            // HttpOnly cookies (which auth sessions usually are).
+            let cookies = e
+                .servo
+                .site_data_manager()
+                .cookies_for_url(parsed, CookieSource::HTTP);
+            cookies
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        c.name(),
+                        c.value(),
+                        c.domain().unwrap_or(""),
+                        c.path().unwrap_or(""),
+                        if c.secure().unwrap_or(false) { "1" } else { "0" },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
     // ---- media session (M5.6) ------------------------------------------
 
     pub fn media_session_action(id: i32, action: i32) {
@@ -3224,6 +3262,13 @@ pub fn clear_all_cookies() {
 pub fn clear_http_cache() {
     #[cfg(feature = "servo-engine")]
     engine::clear_http_cache();
+}
+
+pub fn cookies_for_url(_url: &str) -> String {
+    #[cfg(feature = "servo-engine")]
+    return engine::cookies_for_url(_url);
+    #[allow(unreachable_code)]
+    String::new()
 }
 
 pub fn media_session_action(_id: i32, _action: i32) {
