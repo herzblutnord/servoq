@@ -297,12 +297,24 @@ void Tab::returnToWebContentFromInternalPage()
     if (!m_is_internal_page || !m_internal_page_can_return_to_web)
         return;
 
+    // A PDF reached via a link click commits in Servo as a real top-level
+    // history entry (routed from notify_url_changed), so the webview is sitting
+    // on the PDF URL — leaving the viewer means a real go_back to the source
+    // page. A PDF reached by typing/Open File never navigated Servo (handled in
+    // Tab::navigate), so the webview still shows the source page and we just
+    // re-show it. Distinguish by whether the webview committed the PDF URL.
+    bool const webview_committed_pdf = !m_pdf_display_url.isEmpty()
+        && QString::fromStdString(std::string(servoq::current_url(m_controller_id))) == m_pdf_display_url
+        && servoq::can_go_back(m_controller_id);
+
     m_is_internal_page = false;
     m_internal_page_can_return_to_web = false;
     m_pdf_display_url.clear();
     m_view->setInternalPageActive(false);
     if (m_content_stack)
         m_content_stack->setCurrentWidget(m_view);
+    if (webview_committed_pdf)
+        servoq::go_back(m_controller_id);
     applyControllerState();
     if (m_return_web_has_page_favicon && !m_return_web_favicon.isNull()) {
         m_favicon = m_return_web_favicon;

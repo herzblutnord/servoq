@@ -1024,6 +1024,17 @@ mod engine {
                     }
                 }
             });
+            // notify_url_changed fires ONLY for top-level document URL changes
+            // (subframe navigations don't trigger it), so this is the one place
+            // we can route a PDF into the inline viewer without hijacking
+            // iframe/embedded PDFs. The webview has committed the PDF as a real
+            // history entry; the viewer's Back does a real go_back. We suppress
+            // the normal URL change so chrome doesn't briefly show the PDF as a
+            // failed web page before the viewer takes over.
+            if is_probably_pdf_navigation_url(&url) {
+                crate::bridge::ffi::notify_pdf_navigation_requested(self.tab_id, url.as_str());
+                return;
+            }
             crate::bridge::ffi::notify_url_changed(self.tab_id, url.as_str());
         }
 
@@ -1160,14 +1171,11 @@ mod engine {
                 navigation_request.deny();
                 return;
             }
-            if is_probably_pdf_navigation_url(&navigation_request.url) {
-                crate::bridge::ffi::notify_pdf_navigation_requested(
-                    self.tab_id,
-                    navigation_request.url.as_str(),
-                );
-                navigation_request.deny();
-                return;
-            }
+            // NOTE: PDF navigations are NOT intercepted here. request_navigation
+            // fires for subframe navigations too and exposes no top-level signal
+            // (is_for_main_frame just means destination==Document, true for
+            // iframes), so intercepting here hijacks iframe/embedded PDFs. PDFs
+            // are routed from notify_url_changed instead (top-level only).
             if content_blocking_allowed_for_url(&navigation_request.url)
                 && should_block_request(&navigation_request.url, &navigation_request.url, "document")
             {
@@ -1187,12 +1195,8 @@ mod engine {
             let source_url = request.referrer_url.as_ref().unwrap_or(&url);
             let destination = format!("{:?}", request.destination);
             let request_type = resource_type_for_destination(&destination, request.is_for_main_frame);
-            if request.is_for_main_frame && is_probably_pdf_navigation_url(&url) {
-                crate::bridge::ffi::notify_pdf_navigation_requested(self.tab_id, url.as_str());
-                let intercepted = load.intercept(WebResourceResponse::new(url));
-                intercepted.finish();
-                return;
-            }
+            // PDFs are not intercepted here either (this hook can't distinguish
+            // a top-level document load from a subframe one). See notify_url_changed.
             if content_blocking_allowed_for_url(source_url)
                 && should_block_request(&url, source_url, request_type)
             {
