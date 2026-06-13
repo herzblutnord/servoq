@@ -103,7 +103,6 @@ private:
     void loadPersistedClosedTabs();
     void persistClosedTabs();
     void showTabSearch();
-    void showHomeAndNewTabSettingsDialog();
     void showJavaScriptConsole();
     bool shouldDrawWindowBorder() const;
     void updateWindowBorder();

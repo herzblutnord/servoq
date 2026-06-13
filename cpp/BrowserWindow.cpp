@@ -183,18 +183,6 @@ bool is_location_completion_popup(QObject const* object)
     return false;
 }
 
-std::optional<QString> normalize_configured_page_url(QString const& raw_url)
-{
-    auto trimmed = raw_url.trimmed();
-    if (trimmed.isEmpty() || trimmed.compare(QStringLiteral("about:blank"), Qt::CaseInsensitive) == 0)
-        return QStringLiteral("about:blank");
-    auto sanitized = WebViewURL::sanitize_url(trimmed);
-    if (!sanitized.has_value())
-        return std::nullopt;
-    if (*sanitized == Settings::the()->search_url_for_query(trimmed))
-        return std::nullopt;
-    return sanitized;
-}
 
 }
 
@@ -740,195 +728,18 @@ void BrowserWindow::createMenus()
     }
     m_hamburger_menu->addMenu(view_menu);
 
-    auto* settings_menu = menuBar()->addMenu("&Settings");
-    auto* open_settings_page_action = new QAction(QStringLiteral("Settings"), this);
+    // All browser settings now live on the servoq://settings page (M4.3); the
+    // menu only offers a quick entry point to it. Everything that used to be in
+    // a "Settings" submenu (search engines, content blocking + per-site
+    // exceptions, custom filter list, restore session, clear site data, etc.)
+    // moved onto the page and is applied live via onSettingsChangedFromPage().
+    auto* open_settings_page_action = new QAction(QStringLiteral("&Settings"), this);
     open_settings_page_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
+    open_settings_page_action->setMenuRole(QAction::PreferencesRole);
     connect(open_settings_page_action, &QAction::triggered, this,
         [this] { openInternalPage(QStringLiteral("servoq://settings")); });
-    settings_menu->addAction(open_settings_page_action);
+    menuBar()->addAction(open_settings_page_action);
     m_hamburger_menu->addAction(open_settings_page_action);
-    settings_menu->addSeparator();
-    auto* experimental_action = new QWidgetAction(this);
-    auto* experimental_checkbox = new QCheckBox("Experimental Web Platform Features", this);
-    experimental_checkbox->setChecked(Settings::the()->experimental_features_enabled());
-    connect(experimental_checkbox, &QCheckBox::toggled, this, [](bool enabled) {
-        Settings::the()->set_experimental_features_enabled(enabled);
-        servoq::set_experimental_features_enabled(enabled);
-    });
-    experimental_action->setDefaultWidget(experimental_checkbox);
-    settings_menu->addAction(experimental_action);
-
-    auto* content_blocking_action = new QWidgetAction(this);
-    auto* content_blocking_checkbox = new QCheckBox("Block trackers and ads", this);
-    content_blocking_checkbox->setChecked(Settings::the()->content_blocking_enabled());
-    connect(content_blocking_checkbox, &QCheckBox::toggled, this, [](bool enabled) {
-        Settings::the()->set_content_blocking_enabled(enabled);
-    });
-    content_blocking_action->setDefaultWidget(content_blocking_checkbox);
-    settings_menu->addAction(content_blocking_action);
-
-    auto current_content_blocking_host = [this] {
-        auto* tab = currentTab();
-        if (!tab)
-            return QString {};
-        return QUrl(tab->url()).host().toLower();
-    };
-
-    auto* site_blocking_action = new QAction(this);
-    connect(settings_menu, &QMenu::aboutToShow, this, [site_blocking_action, current_content_blocking_host] {
-        auto host = current_content_blocking_host();
-        site_blocking_action->setEnabled(!host.isEmpty());
-        if (host.isEmpty()) {
-            site_blocking_action->setText(QStringLiteral("Content Blocking for This Site"));
-            return;
-        }
-        bool disabled = Settings::the()->content_blocking_disabled_for_host(host);
-        site_blocking_action->setText(disabled
-            ? QStringLiteral("Enable Blocking for %1").arg(host)
-            : QStringLiteral("Disable Blocking for %1").arg(host));
-    });
-    connect(site_blocking_action, &QAction::triggered, this, [current_content_blocking_host] {
-        auto host = current_content_blocking_host();
-        if (host.isEmpty())
-            return;
-        bool disabled = Settings::the()->content_blocking_disabled_for_host(host);
-        Settings::the()->set_content_blocking_disabled_for_host(host, !disabled);
-    });
-    settings_menu->addAction(site_blocking_action);
-
-    settings_menu->addSeparator();
-
-    auto* home_and_new_tab_action = new QAction(QStringLiteral("Home and New Tab…"), this);
-    connect(home_and_new_tab_action, &QAction::triggered, this, &BrowserWindow::showHomeAndNewTabSettingsDialog);
-    settings_menu->addAction(home_and_new_tab_action);
-
-    auto* restore_session_action = new QWidgetAction(this);
-    auto* restore_session_checkbox = new QCheckBox(QStringLiteral("Continue where you left off"), this);
-    restore_session_checkbox->setChecked(Settings::the()->restore_session_on_startup());
-    connect(restore_session_checkbox, &QCheckBox::toggled, this, [this](bool enabled) {
-        Settings::the()->set_restore_session_on_startup(enabled);
-        if (enabled)
-            saveSessionState();
-        else
-            SessionStore::the()->clearTabs();
-    });
-    restore_session_action->setDefaultWidget(restore_session_checkbox);
-    settings_menu->addAction(restore_session_action);
-
-    settings_menu->addSeparator();
-
-    // Search engine selector
-    auto* search_engine_action = new QWidgetAction(this);
-    auto* search_engine_widget = new QWidget(this);
-    auto* search_engine_layout = new QHBoxLayout(search_engine_widget);
-    search_engine_layout->setContentsMargins(16, 4, 8, 4);
-    search_engine_layout->addWidget(new QLabel("Search engine:", search_engine_widget));
-    auto* search_combo = new QComboBox(search_engine_widget);
-    auto refresh_search_combo = [search_combo] {
-        auto selected = Settings::the()->search_engine_name();
-        search_combo->blockSignals(true);
-        search_combo->clear();
-        search_combo->addItems(Settings::the()->search_engine_names());
-        auto index = search_combo->findText(selected);
-        search_combo->setCurrentIndex(index >= 0 ? index : search_combo->findText(QStringLiteral("DuckDuckGo")));
-        search_combo->blockSignals(false);
-    };
-    refresh_search_combo();
-    search_combo->setCurrentText(Settings::the()->search_engine_name());
-    connect(search_combo, &QComboBox::currentTextChanged, this, [](QString const& name) {
-        Settings::the()->set_search_engine_name(name);
-    });
-    search_engine_layout->addWidget(search_combo);
-    search_engine_action->setDefaultWidget(search_engine_widget);
-    settings_menu->addAction(search_engine_action);
-
-    auto* add_search_engine_action = new QAction(QStringLiteral("Add Custom Search Engine…"), this);
-    connect(add_search_engine_action, &QAction::triggered, this, [this, search_combo, refresh_search_combo] {
-        auto* dialog = new QDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->setWindowTitle(QStringLiteral("Add Search Engine"));
-        auto* layout = new QFormLayout(dialog);
-        auto* name_edit = new QLineEdit(dialog);
-        auto* template_edit = new QLineEdit(dialog);
-        template_edit->setPlaceholderText(QStringLiteral("https://example.com/search?q=%s"));
-        layout->addRow(QStringLiteral("Name:"), name_edit);
-        layout->addRow(QStringLiteral("Query URL:"), template_edit);
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
-        layout->addRow(buttons);
-        connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-        connect(dialog, &QDialog::accepted, this, [this, dialog, name_edit, template_edit, search_combo, refresh_search_combo] {
-            if (!Settings::the()->add_custom_search_engine(name_edit->text(), template_edit->text())) {
-                QMessageBox::warning(this, QStringLiteral("Search Engine"),
-                    QStringLiteral("Custom search engines need a unique name and a query URL containing %s."));
-                return;
-            }
-            Settings::the()->set_search_engine_name(name_edit->text().trimmed());
-            refresh_search_combo();
-            search_combo->setCurrentText(name_edit->text().trimmed());
-        });
-        dialog->open();
-    });
-    settings_menu->addAction(add_search_engine_action);
-
-    auto* remove_search_engine_action = new QAction(QStringLiteral("Remove Current Custom Search Engine"), this);
-    connect(settings_menu, &QMenu::aboutToShow, this, [search_combo, remove_search_engine_action] {
-        remove_search_engine_action->setEnabled(Settings::the()->is_custom_search_engine(search_combo->currentText()));
-    });
-    connect(remove_search_engine_action, &QAction::triggered, this, [search_combo, refresh_search_combo] {
-        auto name = search_combo->currentText();
-        if (!Settings::the()->is_custom_search_engine(name))
-            return;
-        Settings::the()->remove_custom_search_engine(name);
-        refresh_search_combo();
-    });
-    settings_menu->addAction(remove_search_engine_action);
-
-    settings_menu->addSeparator();
-
-    auto* blocklist_action = new QAction(QStringLiteral("Custom filter list…"), this);
-    connect(blocklist_action, &QAction::triggered, this, [] {
-        auto blocklist_path = QString::fromStdString(std::string(servoq::user_blocklist_path()));
-        QFileInfo info(blocklist_path);
-        QDir().mkpath(info.absolutePath());
-        if (!info.exists()) {
-            QFile file(blocklist_path);
-            if (file.open(QIODevice::WriteOnly))
-                file.close();
-        }
-        QDesktopServices::openUrl(QUrl::fromLocalFile(blocklist_path));
-        QMessageBox::information(nullptr,
-            QStringLiteral("Custom filter list"),
-            QStringLiteral("Place EasyList-compatible rules in:\n%1\n\nUse Reload Filter Lists to apply changes.").arg(blocklist_path));
-    });
-    settings_menu->addAction(blocklist_action);
-
-    auto* reload_filter_lists_action = new QAction(QStringLiteral("Reload Filter Lists"), this);
-    connect(reload_filter_lists_action, &QAction::triggered, this, [this] {
-        bool ok = servoq::reload_blocklists();
-        QMessageBox::information(this, QStringLiteral("Filter Lists"),
-            ok ? QStringLiteral("Filter lists reloaded.") : QStringLiteral("Filter lists could not be reloaded."));
-    });
-    settings_menu->addAction(reload_filter_lists_action);
-
-    settings_menu->addSeparator();
-
-    // Per-origin Allow/Block decisions from the web permission prompt
-    // (notifications, geolocation, …). A full per-site management page is
-    // M4.5; until then this offers the Firefox-style "clear all exceptions".
-    auto* clear_permissions_action = new QAction(QStringLiteral("Clear Site Permissions"), this);
-    connect(settings_menu, &QMenu::aboutToShow, this, [clear_permissions_action] {
-        clear_permissions_action->setEnabled(!PermissionStore::the()->isEmpty());
-    });
-    connect(clear_permissions_action, &QAction::triggered, this, [this] {
-        if (QMessageBox::question(this, QStringLiteral("Clear Site Permissions"),
-                QStringLiteral("Forget all Allow/Block permission decisions for all sites?"))
-            == QMessageBox::Yes)
-            PermissionStore::the()->clearAll();
-    });
-    settings_menu->addAction(clear_permissions_action);
-
-    m_hamburger_menu->addMenu(settings_menu);
 
     auto* help_menu = menuBar()->addMenu("&Help");
     auto* about_action = new QAction("About ServoQ", this);
@@ -1420,12 +1231,19 @@ void BrowserWindow::onSettingsChangedFromPage()
 {
     // The servoq://settings page wrote a value directly to Settings; re-apply
     // everything chrome-side so the change is reflected live (tab layout,
-    // toolbar buttons, bookmarks bar, menu bar).
+    // toolbar buttons, bookmarks bar, menu bar, home button).
     applySettings();
     if (m_show_menu_bar_action)
         m_show_menu_bar_action->setChecked(Settings::the()->show_menu_bar());
     updateMenuBarVisibility();
     refreshBookmarksBars();
+    // Keep the persisted session in sync with the "continue where you left off"
+    // toggle: enabling it snapshots the current tabs, disabling it clears the
+    // stored session (the side effect the old menu checkbox had).
+    if (Settings::the()->restore_session_on_startup())
+        saveSessionState();
+    else
+        SessionStore::the()->clearTabs();
 }
 
 void BrowserWindow::openInternalPage(QString const& url)
@@ -1489,71 +1307,6 @@ void BrowserWindow::showJavaScriptConsole()
     dialog->show();
 }
 
-void BrowserWindow::showHomeAndNewTabSettingsDialog()
-{
-    auto* dialog = new QDialog(this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle(QStringLiteral("Home and New Tab"));
-
-    auto* layout = new QFormLayout(dialog);
-
-    auto* homepage_edit = new QLineEdit(dialog);
-    homepage_edit->setText(Settings::the()->homepage_url());
-    homepage_edit->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
-    layout->addRow(QStringLiteral("Homepage:"), homepage_edit);
-
-    auto* show_home_button_checkbox = new QCheckBox(QStringLiteral("Show Home button"), dialog);
-    show_home_button_checkbox->setChecked(Settings::the()->show_home_button());
-    layout->addRow(QString {}, show_home_button_checkbox);
-
-    auto* new_tab_combo = new QComboBox(dialog);
-    new_tab_combo->addItem(QStringLiteral("Blank page"), static_cast<int>(NewTabPageBehavior::Blank));
-    new_tab_combo->addItem(QStringLiteral("Homepage"), static_cast<int>(NewTabPageBehavior::Homepage));
-    new_tab_combo->addItem(QStringLiteral("Custom URL"), static_cast<int>(NewTabPageBehavior::CustomUrl));
-    auto behavior = Settings::the()->new_tab_page_behavior();
-    auto behavior_index = new_tab_combo->findData(static_cast<int>(behavior));
-    new_tab_combo->setCurrentIndex(behavior_index >= 0 ? behavior_index : 0);
-    layout->addRow(QStringLiteral("New tabs open:"), new_tab_combo);
-
-    auto* custom_new_tab_edit = new QLineEdit(dialog);
-    custom_new_tab_edit->setText(Settings::the()->custom_new_tab_url());
-    custom_new_tab_edit->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
-    custom_new_tab_edit->setEnabled(behavior == NewTabPageBehavior::CustomUrl);
-    connect(new_tab_combo, &QComboBox::currentIndexChanged, this, [new_tab_combo, custom_new_tab_edit](int) {
-        custom_new_tab_edit->setEnabled(static_cast<NewTabPageBehavior>(new_tab_combo->currentData().toInt()) == NewTabPageBehavior::CustomUrl);
-    });
-    layout->addRow(QStringLiteral("Custom new-tab URL:"), custom_new_tab_edit);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
-    layout->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, this, [this, dialog, homepage_edit, show_home_button_checkbox, new_tab_combo, custom_new_tab_edit] {
-        auto homepage = normalize_configured_page_url(homepage_edit->text());
-        if (!homepage.has_value()) {
-            QMessageBox::warning(this, QStringLiteral("Home and New Tab"),
-                QStringLiteral("Enter a valid homepage URL, such as about:blank or https://example.com/."));
-            return;
-        }
-
-        auto custom_new_tab = normalize_configured_page_url(custom_new_tab_edit->text());
-        if (!custom_new_tab.has_value()) {
-            QMessageBox::warning(this, QStringLiteral("Home and New Tab"),
-                QStringLiteral("Enter a valid custom new-tab URL, such as about:blank or https://example.com/."));
-            return;
-        }
-
-        Settings::the()->set_homepage_url(*homepage);
-        Settings::the()->set_show_home_button(show_home_button_checkbox->isChecked());
-        Settings::the()->set_new_tab_page_behavior(static_cast<NewTabPageBehavior>(new_tab_combo->currentData().toInt()));
-        Settings::the()->set_custom_new_tab_url(*custom_new_tab);
-        refreshHomeButtons();
-        dialog->accept();
-    });
-
-    auto size_hint = dialog->sizeHint();
-    dialog->resize(qMax(size_hint.width(), 680), size_hint.height());
-    dialog->open();
-}
 
 void BrowserWindow::refreshHomeButtons()
 {

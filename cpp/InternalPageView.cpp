@@ -8,6 +8,7 @@
 #include "Icon.h"
 #include "PermissionStore.h"
 #include "Settings.h"
+#include "WebViewURL.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QAbstractItemView>
@@ -15,8 +16,12 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -36,6 +41,27 @@
 #include <QVBoxLayout>
 
 namespace ServoQ {
+
+namespace {
+
+// Normalize a configured homepage / new-tab URL the same way the old Home & New
+// Tab dialog did: blank stays about:blank, otherwise run it through the address
+// bar's sanitizer (so "example.com" becomes "https://example.com/"). Falls back
+// to the raw trimmed text if it can't be made into a URL, so the field is never
+// silently emptied.
+QString normalize_configured_url(QString const& raw)
+{
+    auto trimmed = raw.trimmed();
+    if (trimmed.isEmpty() || trimmed.compare(QStringLiteral("about:blank"), Qt::CaseInsensitive) == 0)
+        return QStringLiteral("about:blank");
+    auto sanitized = WebViewURL::sanitize_url(trimmed);
+    // Reject inputs that only sanitize into a search query (not a real URL).
+    if (sanitized.has_value() && *sanitized != Settings::the()->search_url_for_query(trimmed))
+        return *sanitized;
+    return trimmed;
+}
+
+}
 
 // ---- ConsoleLog ---------------------------------------------------------
 
@@ -220,18 +246,40 @@ void InternalPageView::buildSettingsPage()
             onSettingsChanged();
     };
 
-    // --- On startup / new tab ---
+    // Adds a checkbox row to a form, wired to a setter + live re-apply.
+    auto add_check = [this, notify_changed](QFormLayout* form, QWidget* parent, QString const& label,
+                         bool checked, std::function<void(bool)> setter) {
+        auto* box = new QCheckBox(label, parent);
+        box->setChecked(checked);
+        connect(box, &QCheckBox::toggled, this, [setter, notify_changed](bool on) {
+            setter(on);
+            notify_changed();
+        });
+        form->addRow(box);
+        return box;
+    };
+
+    // --- Home and startup ---
     {
-        auto* group = new QGroupBox(QStringLiteral("Home and new tab"), host);
+        auto* group = new QGroupBox(QStringLiteral("Home and startup"), host);
         auto* form = new QFormLayout(group);
 
         auto* homepage = new QLineEdit(settings->homepage_url(), group);
-        homepage->setPlaceholderText(QStringLiteral("https://…"));
+        homepage->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
         connect(homepage, &QLineEdit::editingFinished, this, [homepage, settings, notify_changed] {
-            settings->set_homepage_url(homepage->text().trimmed());
+            auto normalized = normalize_configured_url(homepage->text());
+            settings->set_homepage_url(normalized);
+            if (homepage->text().trimmed() != normalized) {
+                QSignalBlocker block(homepage);
+                homepage->setText(normalized);
+            }
             notify_changed();
         });
         form->addRow(QStringLiteral("Homepage:"), homepage);
+
+        // Home-button toggle sits next to the homepage it controls.
+        add_check(form, group, QStringLiteral("Show home button in the toolbar"),
+            settings->show_home_button(), [settings](bool on) { settings->set_show_home_button(on); });
 
         auto* new_tab_combo = new QComboBox(group);
         new_tab_combo->addItem(QStringLiteral("Blank page"));
@@ -245,7 +293,7 @@ void InternalPageView::buildSettingsPage()
         form->addRow(QStringLiteral("New tab opens:"), new_tab_combo);
 
         auto* custom_new_tab = new QLineEdit(settings->custom_new_tab_url(), group);
-        custom_new_tab->setPlaceholderText(QStringLiteral("https://…"));
+        custom_new_tab->setPlaceholderText(QStringLiteral("about:blank or https://example.com/"));
         custom_new_tab->setVisible(settings->new_tab_page_behavior() == NewTabPageBehavior::CustomUrl);
         form->addRow(QStringLiteral("Custom new-tab URL:"), custom_new_tab);
 
@@ -260,17 +308,18 @@ void InternalPageView::buildSettingsPage()
             });
         connect(custom_new_tab, &QLineEdit::editingFinished, this,
             [custom_new_tab, settings, notify_changed] {
-                settings->set_custom_new_tab_url(custom_new_tab->text().trimmed());
+                auto normalized = normalize_configured_url(custom_new_tab->text());
+                settings->set_custom_new_tab_url(normalized);
+                if (custom_new_tab->text().trimmed() != normalized) {
+                    QSignalBlocker block(custom_new_tab);
+                    custom_new_tab->setText(normalized);
+                }
                 notify_changed();
             });
 
-        auto* restore = new QCheckBox(QStringLiteral("Continue where you left off (restore tabs on startup)"), group);
-        restore->setChecked(settings->restore_session_on_startup());
-        connect(restore, &QCheckBox::toggled, this, [settings, notify_changed](bool on) {
-            settings->set_restore_session_on_startup(on);
-            notify_changed();
-        });
-        form->addRow(restore);
+        add_check(form, group, QStringLiteral("Continue where you left off (restore tabs on startup)"),
+            settings->restore_session_on_startup(),
+            [settings](bool on) { settings->set_restore_session_on_startup(on); });
 
         layout->addWidget(group);
     }
@@ -307,20 +356,9 @@ void InternalPageView::buildSettingsPage()
         form->addRow(QStringLiteral("Tab layout:"), tab_layout);
         form->addRow(hover_expand);
 
-        auto add_check = [&](QString const& label, bool checked, std::function<void(bool)> setter) {
-            auto* box = new QCheckBox(label, group);
-            box->setChecked(checked);
-            connect(box, &QCheckBox::toggled, this, [setter, notify_changed](bool on) {
-                setter(on);
-                notify_changed();
-            });
-            form->addRow(box);
-        };
-        add_check(QStringLiteral("Show bookmarks bar"), settings->show_bookmarks_bar(),
+        add_check(form, group, QStringLiteral("Show bookmarks bar"), settings->show_bookmarks_bar(),
             [settings](bool on) { settings->set_show_bookmarks_bar(on); });
-        add_check(QStringLiteral("Show home button"), settings->show_home_button(),
-            [settings](bool on) { settings->set_show_home_button(on); });
-        add_check(QStringLiteral("Show menu bar"), settings->show_menu_bar(),
+        add_check(form, group, QStringLiteral("Show menu bar"), settings->show_menu_bar(),
             [settings](bool on) { settings->set_show_menu_bar(on); });
 
         layout->addWidget(group);
@@ -390,9 +428,9 @@ void InternalPageView::buildSettingsPage()
         layout->addWidget(group);
     }
 
-    // --- Privacy and security (content blocking, experimental, site data) ---
+    // --- Content blocking and filters ---
     {
-        auto* group = new QGroupBox(QStringLiteral("Privacy and security"), host);
+        auto* group = new QGroupBox(QStringLiteral("Content blocking and filters"), host);
         auto* vbox = new QVBoxLayout(group);
 
         auto* content_blocking = new QCheckBox(QStringLiteral("Block ads and trackers (content blocking)"), group);
@@ -403,17 +441,104 @@ void InternalPageView::buildSettingsPage()
         });
         vbox->addWidget(content_blocking);
 
-        auto* experimental = new QCheckBox(QStringLiteral("Enable experimental web platform features"), group);
-        experimental->setChecked(settings->experimental_features_enabled());
-        connect(experimental, &QCheckBox::toggled, this, [settings, notify_changed](bool on) {
-            settings->set_experimental_features_enabled(on);
-            notify_changed();
+        auto* buttons = new QWidget(group);
+        auto* row = new QHBoxLayout(buttons);
+        row->setContentsMargins(0, 8, 0, 0);
+        auto* exceptions = new QPushButton(QStringLiteral("Blocking exceptions…"), buttons);
+        auto* edit_list = new QPushButton(QStringLiteral("Edit custom filter list…"), buttons);
+        auto* reload_lists = new QPushButton(QStringLiteral("Reload filter lists"), buttons);
+        row->addWidget(exceptions);
+        row->addWidget(edit_list);
+        row->addWidget(reload_lists);
+        row->addStretch(1);
+        vbox->addWidget(buttons);
+
+        // Per-site content-blocking exceptions (was the menu's "Disable Blocking
+        // for <host>" toggle; now a managed list of hosts where blocking is off).
+        connect(exceptions, &QPushButton::clicked, this, [this, settings] {
+            QDialog dialog(this);
+            dialog.setWindowTitle(QStringLiteral("Content blocking exceptions"));
+            dialog.resize(440, 360);
+            auto* dl = new QVBoxLayout(&dialog);
+            dl->addWidget(new QLabel(QStringLiteral("Sites where content blocking is turned off:"), &dialog));
+            auto* list = new QListWidget(&dialog);
+            list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+            dl->addWidget(list, 1);
+
+            auto reload = [list, settings] {
+                list->clear();
+                for (auto const& host : settings->content_blocking_allowlist_hosts())
+                    list->addItem(host);
+                if (list->count() == 0)
+                    list->addItem(new QListWidgetItem(QStringLiteral("No exceptions.")));
+            };
+            reload();
+
+            auto* btns = new QHBoxLayout;
+            auto* add_site = new QPushButton(QStringLiteral("Add site…"), &dialog);
+            auto* remove_selected = new QPushButton(QStringLiteral("Remove selected"), &dialog);
+            auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+            btns->addWidget(add_site);
+            btns->addWidget(remove_selected);
+            btns->addStretch(1);
+            btns->addWidget(close);
+            dl->addLayout(btns);
+
+            connect(add_site, &QPushButton::clicked, &dialog, [this, &dialog, settings, reload] {
+                bool ok = false;
+                auto host = QInputDialog::getText(&dialog, QStringLiteral("Add exception"),
+                    QStringLiteral("Host (e.g. example.com):"), QLineEdit::Normal, QString(), &ok);
+                host = host.trimmed().toLower();
+                if (!ok || host.isEmpty())
+                    return;
+                settings->set_content_blocking_disabled_for_host(host, true);
+                reload();
+            });
+            connect(remove_selected, &QPushButton::clicked, &dialog, [list, settings, reload] {
+                for (auto* item : list->selectedItems()) {
+                    auto host = item->text();
+                    if (!host.isEmpty())
+                        settings->set_content_blocking_disabled_for_host(host, false);
+                }
+                reload();
+            });
+            connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+            dialog.exec();
         });
-        vbox->addWidget(experimental);
+
+        connect(edit_list, &QPushButton::clicked, this, [this] {
+            auto blocklist_path = QString::fromStdString(std::string(servoq::user_blocklist_path()));
+            QFileInfo info(blocklist_path);
+            QDir().mkpath(info.absolutePath());
+            if (!info.exists()) {
+                QFile file(blocklist_path);
+                if (file.open(QIODevice::WriteOnly))
+                    file.close();
+            }
+            QDesktopServices::openUrl(QUrl::fromLocalFile(blocklist_path));
+            QMessageBox::information(this, QStringLiteral("Custom filter list"),
+                QStringLiteral("Place EasyList-compatible rules in:\n%1\n\nUse \"Reload filter lists\" to apply changes.")
+                    .arg(blocklist_path));
+        });
+
+        connect(reload_lists, &QPushButton::clicked, this, [this] {
+            bool ok = servoq::reload_blocklists();
+            QMessageBox::information(this, QStringLiteral("Filter lists"),
+                ok ? QStringLiteral("Filter lists reloaded.")
+                   : QStringLiteral("Filter lists could not be reloaded."));
+        });
+
+        layout->addWidget(group);
+    }
+
+    // --- Privacy and data ---
+    {
+        auto* group = new QGroupBox(QStringLiteral("Privacy and data"), host);
+        auto* vbox = new QVBoxLayout(group);
 
         auto* buttons = new QWidget(group);
         auto* btn_layout = new QHBoxLayout(buttons);
-        btn_layout->setContentsMargins(0, 8, 0, 0);
+        btn_layout->setContentsMargins(0, 0, 0, 0);
         auto* clear_data = new QPushButton(QStringLiteral("Clear browsing data…"), buttons);
         auto* manage_sites = new QPushButton(QStringLiteral("Manage site data…"), buttons);
         auto* clear_perms = new QPushButton(QStringLiteral("Clear site permissions"), buttons);
@@ -534,6 +659,16 @@ void InternalPageView::buildSettingsPage()
         });
 
         vbox->addWidget(buttons);
+        layout->addWidget(group);
+    }
+
+    // --- Advanced ---
+    {
+        auto* group = new QGroupBox(QStringLiteral("Advanced"), host);
+        auto* form = new QFormLayout(group);
+        add_check(form, group, QStringLiteral("Enable experimental web platform features"),
+            settings->experimental_features_enabled(),
+            [settings](bool on) { settings->set_experimental_features_enabled(on); });
         layout->addWidget(group);
     }
 
