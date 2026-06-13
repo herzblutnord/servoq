@@ -62,6 +62,7 @@ protected:
     QSize tabSizeHint(int index) const override;
     void resizeEvent(QResizeEvent* event) override;
     void tabLayoutChange() override;
+    void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;

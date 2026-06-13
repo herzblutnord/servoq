@@ -542,6 +542,19 @@ void TabBar::paintEvent(QPaintEvent*)
     }
 }
 
+void TabBar::showEvent(QShowEvent* event)
+{
+    QTabBar::showEvent(event);
+    // Close-button visibility computed during construction (before the window's
+    // first polish/layout) does not stick: QTabBar lays out and shows the
+    // default per-tab close buttons on its first post-show layout, leaving a
+    // stray ✕ on the initial single empty tab — which makes it look hovered —
+    // until the first real hover's leaveEvent re-runs the update. Re-assert
+    // after the event loop has run (post first show/polish), mirroring the
+    // chrome-style re-assertion in Tab.cpp (DEVIATIONS §0f).
+    QTimer::singleShot(0, this, [this] { updateTabButtonGeometry(); });
+}
+
 void TabBar::leaveEvent(QEvent* event)
 {
     setHoveredTabIndex(-1);
