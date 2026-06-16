@@ -13,6 +13,8 @@ mod media_stream_source;
 pub mod player;
 mod registry_scanner;
 mod render;
+/// ServoQ patch: audio sink selection + codec capability check (docs/DEVIATIONS.md §0l).
+pub mod servoq_audio;
 mod source;
 pub mod webrtc;
 
@@ -73,6 +75,9 @@ impl GStreamerBackend {
         plugins: &'a [T],
     ) -> Result<Box<dyn Backend>, ErrorLoadingPlugins<'a>> {
         gstreamer::init().unwrap();
+
+        // ServoQ patch: warn once if a web codec's decoder is missing.
+        servoq_audio::log_codec_capabilities();
 
         // GStreamer between 1.19.1 and 1.22.7 will not send messages like "end of stream"
         // to GstPlayer unless there is a GLib main loop running somewhere. We should remove

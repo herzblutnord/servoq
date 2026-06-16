@@ -42,7 +42,7 @@ grouped by related work. Status was determined by auditing the codebase
 | Animation/event-loop driving | ✅ | wake-event architecture; see DEVIATIONS.md |
 | Window management UI (single window) | ✅ | geometry/maximized persistence (multi-window is L, see M5) |
 | Session restore | ✅ | opt-in URL-level open tabs + active tab restore |
-| Audio / video playback (`<audio>`/`<video>`) | ✅ | `servo/media-gstreamer` backend (system GStreamer); H.264/AAC + VP9/Opus verified, audio → PulseAudio. Software frame-upload path; GL zero-copy video is gated by init order (see DEVIATIONS.md §0j) |
+| Audio / video playback (`<audio>`/`<video>`) | ✅ | `servo/media-gstreamer` backend (system GStreamer), vendored + hardened: panic-proofed audio paths, native PipeWire output with pulse/alsa fallback, startup codec-capability warning (DEVIATIONS.md §0l). H.264/AAC + VP9/Opus verified. Software frame-upload path; GL zero-copy video is gated by init order (see DEVIATIONS.md §0j). True crash isolation (out-of-process media) is blocked by Servo's in-process model — see §0l |
 
 ## Partially implemented
 

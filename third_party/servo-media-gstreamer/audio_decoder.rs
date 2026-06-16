@@ -18,7 +18,9 @@ pub struct GStreamerAudioDecoderProgress(
 
 impl AsRef<[f32]> for GStreamerAudioDecoderProgress {
     fn as_ref(&self) -> &[f32] {
-        self.0.as_ref().as_slice_of::<f32>().unwrap()
+        // ServoQ patch: a buffer whose length is not a multiple of 4 bytes
+        // would panic here. Return an empty slice instead of aborting.
+        self.0.as_ref().as_slice_of::<f32>().unwrap_or(&[])
     }
 }
 
@@ -70,7 +72,14 @@ impl AudioDecoder for GStreamerAudioDecoder {
             return callbacks.error(AudioDecoderError::Backend(e.to_string()));
         }
 
-        let appsrc = appsrc.downcast::<gstreamer_app::AppSrc>().unwrap();
+        let appsrc = match appsrc.downcast::<gstreamer_app::AppSrc>() {
+            Ok(appsrc) => appsrc,
+            Err(_) => {
+                return callbacks.error(AudioDecoderError::Backend(
+                    "appsrc is not an AppSrc element".to_owned(),
+                ));
+            },
+        };
 
         let options = options.unwrap_or_default();
 
@@ -107,7 +116,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
                     callbacks.error(AudioDecoderError::Backend(
                         "Pipeline failed upgrade".to_owned(),
                     ));
-                    let _ = sender.lock().unwrap().send(());
+                    if let Ok(s) = sender.lock() {
+                        let _ = s.send(());
+                    }
                     return;
                 },
             };
@@ -125,7 +136,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
                         callbacks.error(AudioDecoderError::Backend(
                             "Failed to get media type from pad".to_owned(),
                         ));
-                        let _ = sender.lock().unwrap().send(());
+                        if let Ok(s) = sender.lock() {
+                        let _ = s.send(());
+                    }
                         return;
                     },
                     Some(media_type) => media_type,
@@ -134,7 +147,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
 
             if !is_audio {
                 callbacks.error(AudioDecoderError::InvalidMediaFormat);
-                let _ = sender.lock().unwrap().send(());
+                if let Ok(s) = sender.lock() {
+                    let _ = s.send(());
+                }
                 return;
             }
 
@@ -142,7 +157,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
                 Ok(sample_audio_info) => sample_audio_info,
                 _ => {
                     callbacks.error(AudioDecoderError::Backend("AudioInfo failed".to_owned()));
-                    let _ = sender.lock().unwrap().send(());
+                    if let Ok(s) = sender.lock() {
+                        let _ = s.send(());
+                    }
                     return;
                 },
             };
@@ -216,55 +233,69 @@ impl AudioDecoder for GStreamerAudioDecoder {
                         let appsink = sink
                             .clone()
                             .dynamic_cast::<gstreamer_app::AppSink>()
-                            .unwrap();
+                            .map_err(|_| {
+                                AudioDecoderError::Backend("appsink is not an AppSink".to_owned())
+                            })?;
                         sink.set_property("sync", false);
 
                         let callbacks_ = callbacks.clone();
                         appsink.set_callbacks(
                             gstreamer_app::AppSinkCallbacks::builder()
                                 .new_sample(move |appsink| {
-                                    let sample = appsink
-                                        .pull_sample()
-                                        .map_err(|_| gstreamer::FlowError::Eos)?;
-                                    let buffer = sample.buffer_owned().ok_or_else(|| {
-                                        callbacks_.error(AudioDecoderError::InvalidSample);
-                                        gstreamer::FlowError::Error
-                                    })?;
+                                    // ServoQ patch: this runs on a GStreamer streaming thread;
+                                    // never let a panic unwind into C. See servoq_audio::guard.
+                                    crate::servoq_audio::guard(
+                                        "audio decoder appsink callback",
+                                        || {
+                                            let sample = appsink
+                                                .pull_sample()
+                                                .map_err(|_| gstreamer::FlowError::Eos)?;
+                                            let buffer = sample.buffer_owned().ok_or_else(|| {
+                                                callbacks_.error(AudioDecoderError::InvalidSample);
+                                                gstreamer::FlowError::Error
+                                            })?;
 
-                                    let audio_info = sample
-                                        .caps()
-                                        .and_then(|caps| {
-                                            gstreamer_audio::AudioInfo::from_caps(caps).ok()
-                                        })
-                                        .ok_or_else(|| {
-                                            callbacks_.error(AudioDecoderError::Backend(
-                                                "Could not get caps from sample".to_owned(),
-                                            ));
-                                            gstreamer::FlowError::Error
-                                        })?;
-                                    let positions = audio_info.positions().ok_or_else(|| {
-                                        callbacks_.error(AudioDecoderError::Backend(
-                                            "AudioInfo failed".to_owned(),
-                                        ));
-                                        gstreamer::FlowError::Error
-                                    })?;
+                                            let audio_info = sample
+                                                .caps()
+                                                .and_then(|caps| {
+                                                    gstreamer_audio::AudioInfo::from_caps(caps).ok()
+                                                })
+                                                .ok_or_else(|| {
+                                                    callbacks_.error(AudioDecoderError::Backend(
+                                                        "Could not get caps from sample".to_owned(),
+                                                    ));
+                                                    gstreamer::FlowError::Error
+                                                })?;
+                                            let positions =
+                                                audio_info.positions().ok_or_else(|| {
+                                                    callbacks_.error(AudioDecoderError::Backend(
+                                                        "AudioInfo failed".to_owned(),
+                                                    ));
+                                                    gstreamer::FlowError::Error
+                                                })?;
 
-                                    for position in positions.iter() {
-                                        let buffer = buffer.clone();
-                                        let map = match buffer.into_mapped_buffer_readable() {
-                                            Ok(map) => map,
-                                            _ => {
-                                                callbacks_
-                                                    .error(AudioDecoderError::BufferReadFailed);
-                                                return Err(gstreamer::FlowError::Error);
-                                            },
-                                        };
-                                        let progress = Box::new(GStreamerAudioDecoderProgress(map));
-                                        let channel = position.to_mask() as u32;
-                                        callbacks_.progress(progress, channel);
-                                    }
+                                            for position in positions.iter() {
+                                                let buffer = buffer.clone();
+                                                let map = match buffer.into_mapped_buffer_readable()
+                                                {
+                                                    Ok(map) => map,
+                                                    _ => {
+                                                        callbacks_.error(
+                                                            AudioDecoderError::BufferReadFailed,
+                                                        );
+                                                        return Err(gstreamer::FlowError::Error);
+                                                    },
+                                                };
+                                                let progress =
+                                                    Box::new(GStreamerAudioDecoderProgress(map));
+                                                let channel = position.to_mask() as u32;
+                                                callbacks_.progress(progress, channel);
+                                            }
 
-                                    Ok(gstreamer::FlowSuccess::Ok)
+                                            Ok(gstreamer::FlowSuccess::Ok)
+                                        },
+                                        Err(gstreamer::FlowError::Error),
+                                    )
                                 })
                                 .build(),
                         );
@@ -335,7 +366,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
 
             if let Err(e) = insert_deinterleave() {
                 callbacks.error(e);
-                let _ = sender.lock().unwrap().send(());
+                if let Ok(s) = sender.lock() {
+                    let _ = s.send(());
+                }
             }
         });
 
@@ -348,7 +381,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
                 callbacks.error(AudioDecoderError::Backend(
                     "Pipeline without bus. Shouldn't happen!".to_owned(),
                 ));
-                let _ = sender.lock().unwrap().send(());
+                if let Ok(s) = sender.lock() {
+                    let _ = s.send(());
+                }
                 return;
             },
         };
@@ -364,11 +399,15 @@ impl AudioDecoder for GStreamerAudioDecoder {
                             .map(|d| d.to_string())
                             .unwrap_or_else(|| "Unknown".to_owned()),
                     ));
-                    let _ = sender.lock().unwrap().send(());
+                    if let Ok(s) = sender.lock() {
+                        let _ = s.send(());
+                    }
                 },
                 MessageView::Eos(_) => {
                     callbacks_.eos();
-                    let _ = sender.lock().unwrap().send(());
+                    if let Ok(s) = sender.lock() {
+                        let _ = s.send(());
+                    }
                 },
                 _ => (),
             }
@@ -390,10 +429,33 @@ impl AudioDecoder for GStreamerAudioDecoder {
             } else {
                 max_bytes
             };
-            let mut buffer = gstreamer::Buffer::with_size(buffer_size).unwrap();
+            // ServoQ patch: buffer allocation/mapping failures end the feed
+            // cleanly instead of panicking the decode thread.
+            let mut buffer = match gstreamer::Buffer::with_size(buffer_size) {
+                Ok(buffer) => buffer,
+                Err(_) => {
+                    callbacks.error(AudioDecoderError::Backend(
+                        "decode buffer allocation failed".to_owned(),
+                    ));
+                    break;
+                },
+            };
             {
-                let buffer = buffer.get_mut().unwrap();
-                let mut map = buffer.map_writable().unwrap();
+                let Some(buffer) = buffer.get_mut() else {
+                    callbacks.error(AudioDecoderError::Backend(
+                        "decode buffer is not uniquely owned".to_owned(),
+                    ));
+                    break;
+                };
+                let mut map = match buffer.map_writable() {
+                    Ok(map) => map,
+                    Err(_) => {
+                        callbacks.error(AudioDecoderError::Backend(
+                            "decode buffer map failed".to_owned(),
+                        ));
+                        break;
+                    },
+                };
                 let buffer = map.as_mut_slice();
                 let _ = reader.read(buffer);
             }
@@ -401,8 +463,9 @@ impl AudioDecoder for GStreamerAudioDecoder {
         }
         let _ = appsrc.end_of_stream();
 
-        // Wait until we get an error or EOS.
-        receiver.recv().unwrap();
+        // Wait until we get an error or EOS. ServoQ patch: a dropped sender (no
+        // message) must not panic the decode thread.
+        let _ = receiver.recv();
         let _ = pipeline.set_state(gstreamer::State::Null);
     }
 }

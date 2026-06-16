@@ -533,7 +533,10 @@ impl GStreamerPlayer {
 
             pipeline.set_property("audio-sink", &audio_sink);
 
-            let audio_sink = audio_sink.dynamic_cast::<gstreamer_app::AppSink>().unwrap();
+            // ServoQ patch: do not panic if the appsink cast fails.
+            let audio_sink = audio_sink
+                .dynamic_cast::<gstreamer_app::AppSink>()
+                .map_err(|_| PlayerError::Backend("audio sink is not an AppSink".to_owned()))?;
 
             let weak_audio_renderer = Arc::downgrade(audio_renderer);
 
@@ -541,38 +544,63 @@ impl GStreamerPlayer {
                 gstreamer_app::AppSinkCallbacks::builder()
                     .new_preroll(|_| Ok(gstreamer::FlowSuccess::Ok))
                     .new_sample(move |audio_sink| {
-                        let sample = audio_sink
-                            .pull_sample()
-                            .map_err(|_| gstreamer::FlowError::Eos)?;
-                        let buffer = sample.buffer_owned().ok_or(gstreamer::FlowError::Error)?;
-                        let audio_info = sample
-                            .caps()
-                            .and_then(|caps| gstreamer_audio::AudioInfo::from_caps(caps).ok())
-                            .ok_or(gstreamer::FlowError::Error)?;
-                        let positions =
-                            audio_info.positions().ok_or(gstreamer::FlowError::Error)?;
+                        // ServoQ patch: runs on a GStreamer streaming thread —
+                        // catch panics so they cannot abort the process, and
+                        // never `.unwrap()` a poisoned renderer lock.
+                        crate::servoq_audio::guard(
+                            "media player audio appsink callback",
+                            || {
+                                let sample = audio_sink
+                                    .pull_sample()
+                                    .map_err(|_| gstreamer::FlowError::Eos)?;
+                                let buffer =
+                                    sample.buffer_owned().ok_or(gstreamer::FlowError::Error)?;
+                                let audio_info = sample
+                                    .caps()
+                                    .and_then(|caps| {
+                                        gstreamer_audio::AudioInfo::from_caps(caps).ok()
+                                    })
+                                    .ok_or(gstreamer::FlowError::Error)?;
+                                let positions =
+                                    audio_info.positions().ok_or(gstreamer::FlowError::Error)?;
 
-                        let Some(audio_renderer) = weak_audio_renderer.upgrade() else {
-                            return Err(gstreamer::FlowError::Flushing);
-                        };
+                                let Some(audio_renderer) = weak_audio_renderer.upgrade() else {
+                                    return Err(gstreamer::FlowError::Flushing);
+                                };
 
-                        for position in positions.iter() {
-                            let buffer = buffer.clone();
-                            let map = match buffer.into_mapped_buffer_readable() {
-                                Ok(map) => map,
-                                _ => {
-                                    return Err(gstreamer::FlowError::Error);
-                                },
-                            };
-                            let chunk = Box::new(GStreamerAudioChunk(map));
-                            let channel = position.to_mask() as u32;
+                                for position in positions.iter() {
+                                    let buffer = buffer.clone();
+                                    let map = match buffer.into_mapped_buffer_readable() {
+                                        Ok(map) => map,
+                                        _ => {
+                                            return Err(gstreamer::FlowError::Error);
+                                        },
+                                    };
+                                    let chunk = Box::new(GStreamerAudioChunk(map));
+                                    let channel = position.to_mask() as u32;
 
-                            audio_renderer.lock().unwrap().render(chunk, channel);
-                        }
-                        Ok(gstreamer::FlowSuccess::Ok)
+                                    if let Ok(mut renderer) = audio_renderer.lock() {
+                                        renderer.render(chunk, channel);
+                                    }
+                                }
+                                Ok(gstreamer::FlowSuccess::Ok)
+                            },
+                            Err(gstreamer::FlowError::Error),
+                        )
                     })
                     .build(),
             );
+        } else {
+            // ServoQ patch: plain media-element playback (no Web Audio renderer)
+            // would otherwise use Play's built-in autoaudiosink. Force ServoQ's
+            // preferred output (native PipeWire when available) with graceful
+            // fallback; if even that fails, leave Play's default in place.
+            match crate::servoq_audio::pick_audio_sink() {
+                Ok(sink) => pipeline.set_property("audio-sink", &sink),
+                Err(err) => {
+                    log::warn!("[servoq] using Play's default audio sink: {err}")
+                },
+            }
         }
 
         let video_sink = self.render.lock().unwrap().setup_video_sink(&pipeline)?;

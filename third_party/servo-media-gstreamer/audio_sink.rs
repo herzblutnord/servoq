@@ -42,7 +42,9 @@ impl GStreamerAudioSink {
             .map_err(|error| {
                 AudioSinkError::Backend(format!("appsrc creation failed: {error:?}"))
             })?;
-        let appsrc = appsrc.downcast::<AppSrc>().unwrap();
+        let appsrc = appsrc
+            .downcast::<AppSrc>()
+            .map_err(|_| AudioSinkError::Backend("appsrc is not an AppSrc element".to_owned()))?;
 
         Ok(Self {
             pipeline: gstreamer::Pipeline::new(),
@@ -95,18 +97,41 @@ impl AudioSink for GStreamerAudioSink {
         // Allow only a single chunk.
         self.appsrc.set_max_bytes(1);
 
-        let appsrc = self.appsrc.clone();
-        Builder::new()
+        // ServoQ patch: do not `.unwrap()` the thread spawn. If the OS refuses a
+        // new thread we wire the `need-data` callback synchronously on this
+        // thread instead of aborting the process. (`Sender` is `Clone`, so the
+        // fallback keeps the original channel while the thread gets a clone.)
+        let appsrc_for_thread = self.appsrc.clone();
+        let sender_for_thread = graph_thread_channel.clone();
+        let spawn_result = Builder::new()
             .name("GstAppSrcCallbacks".to_owned())
             .spawn(move || {
-                let need_data = move |_: &AppSrc, _: u32| {
-                    if let Err(e) = graph_thread_channel.send(AudioRenderThreadMsg::SinkNeedData) {
-                        log::warn!("Error sending need data event: {:?}", e);
-                    }
-                };
-                appsrc.set_callbacks(AppSrcCallbacks::builder().need_data(need_data).build());
-            })
-            .unwrap();
+                appsrc_for_thread.set_callbacks(
+                    AppSrcCallbacks::builder()
+                        .need_data(move |_: &AppSrc, _: u32| {
+                            if let Err(e) =
+                                sender_for_thread.send(AudioRenderThreadMsg::SinkNeedData)
+                            {
+                                log::warn!("Error sending need data event: {:?}", e);
+                            }
+                        })
+                        .build(),
+                );
+            });
+        if spawn_result.is_err() {
+            log::warn!("[servoq] GstAppSrcCallbacks thread spawn failed; wiring callback inline");
+            let appsrc_inline = self.appsrc.clone();
+            appsrc_inline.set_callbacks(
+                AppSrcCallbacks::builder()
+                    .need_data(move |_: &AppSrc, _: u32| {
+                        if let Err(e) = graph_thread_channel.send(AudioRenderThreadMsg::SinkNeedData)
+                        {
+                            log::warn!("Error sending need data event: {:?}", e);
+                        }
+                    })
+                    .build(),
+            );
+        }
 
         let appsrc = self.appsrc.as_ref().clone().upcast();
         let resample = gstreamer::ElementFactory::make("audioresample")
@@ -119,11 +144,9 @@ impl AudioSink for GStreamerAudioSink {
             .map_err(|error| {
                 AudioSinkError::Backend(format!("audioconvert creation failed: {error:?}"))
             })?;
-        let sink = gstreamer::ElementFactory::make("autoaudiosink")
-            .build()
-            .map_err(|error| {
-                AudioSinkError::Backend(format!("autoaudiosink creation failed: {error:?}"))
-            })?;
+        // ServoQ patch: prefer native pipewiresink with graceful fallback
+        // instead of always using autoaudiosink (see servoq_audio.rs).
+        let sink = crate::servoq_audio::pick_audio_sink().map_err(AudioSinkError::Backend)?;
         self.pipeline
             .add_many([&appsrc, &resample, &convert, &sink])
             .map_err(|error| AudioSinkError::Backend(error.to_string()))?;
@@ -154,7 +177,9 @@ impl AudioSink for GStreamerAudioSink {
         let sink = socket
             .as_any()
             .downcast_ref::<GstreamerMediaSocket>()
-            .unwrap()
+            .ok_or_else(|| {
+                AudioSinkError::Backend("media socket is not a GstreamerMediaSocket".to_owned())
+            })?
             .proxy_sink()
             .clone();
 
@@ -190,33 +215,51 @@ impl AudioSink for GStreamerAudioSink {
             self.set_channels_if_changed(block.chan_count())?;
         }
 
+        // ServoQ patch: this runs on servo-media's audio render thread for every
+        // block. None of the steps below may panic — a panic here would either
+        // poison the render thread (killing all audio) or, with panic=abort,
+        // take down the whole browser. Every former unwrap/expect/assert now
+        // returns an AudioSinkError, which servo-media handles as a soft failure.
         let sample_rate = self.sample_rate.get() as u64;
-        let audio_info = self.audio_info.borrow();
-        let audio_info = audio_info.as_ref().unwrap();
+        let audio_info_ref = self.audio_info.borrow();
+        let Some(audio_info) = audio_info_ref.as_ref() else {
+            return Err(AudioSinkError::Backend(
+                "push_data called before audio info was set".to_owned(),
+            ));
+        };
         let channels = audio_info.channels();
         let bpf = audio_info.bpf() as usize;
-        assert_eq!(bpf, 4 * channels as usize);
+        if bpf != 4 * channels as usize {
+            return Err(AudioSinkError::Backend(format!(
+                "unexpected bytes-per-frame {bpf} for {channels} f32 channels"
+            )));
+        }
         let n_samples = FRAMES_PER_BLOCK.0;
         let buf_size = (n_samples as usize) * (bpf);
-        let mut buffer = gstreamer::Buffer::with_size(buf_size).unwrap();
+        let mut buffer = gstreamer::Buffer::with_size(buf_size)
+            .map_err(|_| AudioSinkError::Backend("audio buffer allocation failed".to_owned()))?;
         {
-            let buffer = buffer.get_mut().unwrap();
+            let Some(buffer) = buffer.get_mut() else {
+                return Err(AudioSinkError::BufferPushFailed);
+            };
             let mut sample_offset = self.sample_offset.get();
             // Calculate the current timestamp (PTS) and the next one,
             // and calculate the duration from the difference instead of
-            // simply the number of samples to prevent rounding errors
+            // simply the number of samples to prevent rounding errors.
+            // `mul_div_floor` returns None on overflow or a zero sample rate;
+            // fall back to 0 rather than panicking.
             let pts = gstreamer::ClockTime::from_nseconds(
                 sample_offset
                     .mul_div_floor(gstreamer::ClockTime::SECOND.nseconds(), sample_rate)
-                    .unwrap(),
+                    .unwrap_or(0),
             );
             let next_pts: gstreamer::ClockTime = gstreamer::ClockTime::from_nseconds(
                 (sample_offset + n_samples)
                     .mul_div_floor(gstreamer::ClockTime::SECOND.nseconds(), sample_rate)
-                    .unwrap(),
+                    .unwrap_or(0),
             );
             buffer.set_pts(Some(pts));
-            buffer.set_duration(next_pts - pts);
+            buffer.set_duration(next_pts.checked_sub(pts).unwrap_or(gstreamer::ClockTime::ZERO));
 
             // sometimes nothing reaches the output
             if chunk.is_empty() {
@@ -224,13 +267,18 @@ impl AudioSink for GStreamerAudioSink {
                 chunk.blocks[0].repeat(channels as u8);
             }
             debug_assert!(chunk.len() == 1);
-            let mut data = chunk.blocks[0].interleave();
+            let Some(block) = chunk.blocks.first_mut() else {
+                return Err(AudioSinkError::BufferPushFailed);
+            };
+            let mut data = block.interleave();
             let data = data.as_mut_byte_slice();
 
             // XXXManishearth if we have a safe way to convert
             // from Box<[f32]> to Box<[u8]> (similarly for Vec)
             // we can use Buffer::from_slice instead
-            buffer.copy_from_slice(0, data).expect("copying failed");
+            buffer
+                .copy_from_slice(0, data)
+                .map_err(|_| AudioSinkError::BufferPushFailed)?;
 
             sample_offset += n_samples;
             self.sample_offset.set(sample_offset);
