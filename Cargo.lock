@@ -7194,6 +7194,7 @@ dependencies = [
  "euclid",
  "glow",
  "keyboard-types 0.7.0",
+ "libc",
  "pkg-config",
  "raw-window-handle",
  "servo",

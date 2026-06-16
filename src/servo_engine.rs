@@ -30,7 +30,7 @@ mod engine {
     use std::rc::Rc;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        Once,
+        Arc, Once,
     };
     use std::time::{Duration, Instant};
 
@@ -2085,6 +2085,52 @@ mod engine {
             return;
         }
         debug_log("shutdown_servo", 0);
+
+        // Freeze-on-close guard. Dropping the engine runs Servo's
+        // `Drop for ServoInner`, which blocks this (Qt UI) thread in
+        // `while spin_event_loop() { sleep(500us) }` until the constellation
+        // reports `FinishedShuttingDown`. If any component blocks its own
+        // teardown — most likely a GStreamer/PipeWire media-pipeline thread now
+        // that media is enabled — that state is never reached and the UI thread
+        // spins forever (the window "freezes instead of closing"). Servo 0.2
+        // exposes no timeout on that drop and we do not fork Servo, so we bound
+        // it from the outside: a detached watchdog force-exits the process if
+        // graceful teardown overruns the deadline. The fast path still saves
+        // cookies/profile (written during the drop); only a genuinely stuck
+        // teardown falls back to a hard exit. Deadline: SERVOQ_SHUTDOWN_TIMEOUT_MS
+        // (default 4000; 0 disables the watchdog).
+        let timeout_ms = std::env::var("SERVOQ_SHUTDOWN_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(4000);
+        let shutdown_done = Arc::new(AtomicBool::new(false));
+        if timeout_ms > 0 {
+            let shutdown_done = shutdown_done.clone();
+            let _ = std::thread::Builder::new()
+                .name("servoq-shutdown-watchdog".to_owned())
+                .spawn(move || {
+                    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                    while Instant::now() < deadline {
+                        if shutdown_done.load(Ordering::Acquire) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    if !shutdown_done.load(Ordering::Acquire) {
+                        eprintln!(
+                            "[servoq] graceful shutdown exceeded {timeout_ms}ms (blocked engine \
+                             or media-pipeline teardown); forcing process exit"
+                        );
+                        // _exit(0): immediate termination that bypasses atexit /
+                        // global destructors, which could themselves deadlock on a
+                        // lock held by the stuck thread. The OS reclaims the rest.
+                        // Exit 0 because the user asked to close — a stuck teardown
+                        // is not a user-facing failure.
+                        unsafe { libc::_exit(0) };
+                    }
+                });
+        }
+
         ENGINE.with(|s| {
             if let Some(engine) = s.borrow().as_ref() {
                 engine.servo.site_data_manager().clear_session_cookies();
@@ -2102,6 +2148,8 @@ mod engine {
             remove_persisted_http_auth_cache(&profile_dir);
         }
         SPINNING.with(|s| s.set(false));
+        // Graceful teardown finished within the deadline — disarm the watchdog.
+        shutdown_done.store(true, Ordering::Release);
     }
 
     // Global tick: called by the Qt EventLoopWaker event handler (BrowserWindow::eventFilter).
