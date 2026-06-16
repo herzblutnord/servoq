@@ -67,11 +67,8 @@ mod engine {
 
     // ---- per-tab state stored in our engine registry ---------
 
-    // These gate env vars are read ONCE and cached. std::env::var_os takes a
-    // process-global lock (shared with every Servo worker thread) and scans the
-    // environment, so calling it per-event on hot paths (e.g. forward_mouse_move
-    // at ~1 kHz) caused lock contention that stalled both the UI and Servo's
-    // compositing. Cached behind a OnceLock it is a single atomic load thereafter.
+    // Gate env vars are read once and cached; per-event reads contend a
+    // process-global lock on hot paths (see docs/DEVIATIONS.md §0c).
     fn debug_enabled() -> bool {
         static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *V.get_or_init(|| std::env::var_os("SERVOQ_DEBUG").is_some())
@@ -82,8 +79,7 @@ mod engine {
         *V.get_or_init(|| std::env::var_os("SERVOQ_PERF").is_some())
     }
 
-    // TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — opt-in, low-noise tracing for the
-    // text-input and second-tab-crash investigation. Remove once root-caused.
+    // Opt-in low-noise tracing (SERVOQ_DIAG).
     fn diag_enabled() -> bool {
         static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *V.get_or_init(|| std::env::var_os("SERVOQ_DIAG").is_some())
@@ -112,16 +108,9 @@ mod engine {
         fn eglSwapInterval(display: EGLDisplay, interval: i32) -> u32;
     }
 
-    // Disable vsync-blocking on the buffer swap for the currently-current EGL
-    // context. surfman's present_bound_surface() calls eglSwapBuffers(), which
-    // with the default swap interval (1) BLOCKS the Qt main thread until the
-    // Wayland compositor returns a wl_surface.frame callback. Right after the
-    // shared subsurface is re-attached on a tab switch that callback is withheld
-    // for seconds, freezing the entire UI (measured up to ~13 s/swap via
-    // SERVOQ_PERF wl_swap_ms). Servo's RefreshDriver and our own present
-    // coalescing already pace frames, so interval=0 (swap returns immediately) is
-    // both safe and what we want. Must be called while the context is current
-    // (i.e. after RenderingContext::make_current()).
+    // Set swap interval 0 on the current EGL context: with vsync the swap blocks
+    // the UI thread for seconds after a tab-switch re-attach (docs/DEVIATIONS.md
+    // §0). Must run while the context is current (after make_current()).
     fn disable_swap_vsync_for_current_context() {
         unsafe {
             let display = eglGetCurrentDisplay();
@@ -409,10 +398,8 @@ mod engine {
         });
     }
 
-    // Qt-compatible EventLoopWaker: posts a custom QEvent to the Qt main thread.
-    // QCoreApplication::postEvent() is thread-safe and wakes the Qt event loop
-    // from Servo's background threads (paint, layout, font loading, etc.).
-    // BrowserWindow::eventFilter() intercepts the event and calls tick_servo().
+    // Wakes the Qt event loop from Servo's background threads by posting a QEvent
+    // (thread-safe); BrowserWindow::eventFilter() intercepts it and ticks Servo.
     struct QtEventLoopWaker;
 
     impl EventLoopWaker for QtEventLoopWaker {
@@ -430,21 +417,9 @@ mod engine {
     unsafe impl Send for QtEventLoopWaker {}
     unsafe impl Sync for QtEventLoopWaker {}
 
-    // Mirrors servoshell EXPERIMENTAL_PREFS — all enabled by default.
-    // The user can disable them via Settings → Experimental Web Platform Features.
-    // ServoQ additions beyond the servoshell list:
-    // - dom_cookiestore_enabled — the async CookieStore API is a thin layer
-    //   over the same engine cookie jar that ServoQ now persists
-    //   (docs/STORAGE.md), and its core surface (get/getAll/set/delete +
-    //   change events) is implemented in Servo 0.2.
-    // - dom_geolocation_enabled, dom_wakelock_enabled,
-    //   dom_credential_management_enabled — permission-gated features that
-    //   were kept off until the M3.3 permission prompts landed; requests now
-    //   go through request_permission + the per-origin PermissionStore.
-    // The remaining default-off prefs stay off: WebRTC and Media Capture need
-    // more than prompts (no capture backend), and ServiceWorker/SharedWorker/
-    // Web Animations/AdoptedStyleSheets are partial enough that
-    // feature-detecting sites break.
+    // Experimental Web Platform Features enabled by default (toggle in Settings).
+    // Mirrors servoshell's list plus ServoQ's permission-gated/CookieStore prefs;
+    // prefs that break feature-detecting sites or need a backend stay off.
     pub(super) const EXPERIMENTAL_PREFS: &[&str] = &[
         "dom_async_clipboard_enabled",
         "dom_cookiestore_enabled",
@@ -472,30 +447,12 @@ mod engine {
     fn servo_preferences() -> Preferences {
         let mut preferences = Preferences::default();
         preferences.viewport_meta_enabled = true;
-        // Experimental features are enabled at startup via set_experimental_features_enabled
-        // (called from applySettings after init_servo). Listed here for clarity only.
+        // Experimental features are enabled at startup via applySettings, not here.
+        // media_glvideo_enabled stays off (no GL context at our early init time) —
+        // see docs/DEVIATIONS.md §0j.
 
-        // media_glvideo_enabled (GL-accelerated <video>) stays OFF. It would gate
-        // servo-media's GL player thread + WebRender external-image handler, but that
-        // only helps if Servo::initialize_gl_accelerated_media has already shared a
-        // GL/EGL context — and that call must run *before* Servo::new. ServoQ builds
-        // Servo eagerly at startup (init_servo, a font-cache-crash safeguard) with a
-        // SoftwareRenderingContext, before any Wayland EGL surface exists, so there is
-        // no GL context to share at the required time. Video therefore decodes through
-        // servo-media's software upload path (GStreamer → image frames → WebRender),
-        // which is verified working for H.264/AAC and VP9/Opus. Audio is independent
-        // of this pref. Wiring true zero-copy GL video would require building Servo
-        // lazily against the Wayland context, which conflicts with the early-init
-        // design — a deliberate, isolated follow-up, not a one-liner.
-
-        // CJK coverage for the generic font families. Servo's built-in fallback
-        // list (servo-fonts) misses the CJK Symbols & Punctuation block (「」『』
-        // 、。 etc.) on common Linux setups — e.g. the family "Droid Sans Fallback"
-        // it relies on resolves via fontconfig to a non-CJK font — so those
-        // characters render as tofu. Point the generic families at an installed,
-        // locale-appropriate CJK font (Latin glyphs are unchanged: Noto Sans/Serif
-        // CJK carry the same Latin design as Noto Sans/Serif). Empty when no CJK
-        // font is installed, leaving Servo's platform default in place.
+        // Give the generic font families CJK coverage; Servo's built-in fallback
+        // misses CJK punctuation on common Linux setups (docs/DEVIATIONS.md §0i).
         let sans = crate::bridge::ffi::system_cjk_font_family("sans-serif");
         if !sans.is_empty() {
             preferences.fonts_sans_serif = sans.clone();
@@ -532,10 +489,8 @@ mod engine {
         Some(path)
     }
 
-    // Browser profiles are private per OS user (Firefox creates profile
-    // directories 0700); Qt's mkpath and create_dir_all honor the umask and
-    // typically leave 0755, which would let other local users read
-    // cookie_jar.json, history.db, and the rest of the profile.
+    // Keep the profile private per OS user (0700, like Firefox); create_dir_all
+    // honors the umask and typically leaves it 0755.
     fn restrict_profile_dir_permissions(path: &Path) {
         #[cfg(unix)]
         {
@@ -553,11 +508,9 @@ mod engine {
         let _ = path;
     }
 
-    // Servo's resource thread persists auth_cache.json (plaintext HTTP
-    // Basic/Digest usernames and passwords) next to the cookie jar whenever a
-    // config_dir is set. Chrome and Firefox keep HTTP auth session-only, so
-    // remove the file before Servo can load it and again after the shutdown
-    // write — credentials must not outlive the session on disk.
+    // Keep HTTP auth session-only (like Chrome/Firefox): delete the plaintext
+    // auth_cache.json Servo persists next to the cookie jar, before load and after
+    // the shutdown write.
     fn remove_persisted_http_auth_cache(profile_dir: &Path) {
         let path = profile_dir.join("auth_cache.json");
         if let Err(error) = std::fs::remove_file(&path) {
@@ -769,22 +722,8 @@ mod engine {
         hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     }
 
-    // Navigation paint holding (the Chrome behavior: keep showing the old page
-    // until the new one can paint content). At navigation commit Servo swaps
-    // the frame tree to the new pipeline before that pipeline has any display
-    // list, so webrender paints pure `shell_background_color_rgba` (white)
-    // until the new document's first styled layout — a full-white flash
-    // between clicking a link and the page rendering. The embedder gets no
-    // first-contentful-paint signal, so detect content from the pixels: while
-    // a hold is active, every painted frame is read back and a uniformly
-    // white frame is not presented — visually identical to not presenting at
-    // all, so nothing is lost — while the first frame with any non-white
-    // pixel is presented immediately and ends the hold. The hold is armed at
-    // `LoadStatus::Started` (emitted from the NEW document's
-    // set_ready_state(Loading), i.e. at commit, exactly when blank frames
-    // begin) and at webview creation (a fresh webview never fires Started for
-    // its initial load), and released by content, `LoadStatus::Complete`
-    // (a genuinely blank page must still appear), a crash, or the timeout.
+    // Suppresses the white flash at navigation commit by not presenting blank
+    // frames until the new document paints content (docs/DEVIATIONS.md §0g).
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum NavPaintHold {
         /// No top-level navigation in flight; frames present normally.
@@ -878,15 +817,8 @@ mod engine {
         rendering_context: EngineRenderingContext,
     }
 
-    // System clipboard backed by QClipboard instead of Servo's default arboard
-    // delegate. Servo routes every engine-side clipboard operation here: the
-    // async clipboard API (navigator.clipboard), execCommand copy/cut/paste,
-    // and the EditingAction events ServoQ dispatches for Ctrl+C/X/V. Going
-    // through Qt keeps one clipboard connection per process (arboard would
-    // open a second Wayland data-control connection) and makes Servo-initiated
-    // copies visible to the rest of the Qt chrome immediately. All delegate
-    // methods are invoked on the main thread from spin_event_loop, which is
-    // the thread QClipboard requires.
+    // Routes Servo's clipboard operations through QClipboard (one connection per
+    // process; copies visible to the Qt chrome). Invoked on the main thread.
     struct QtClipboardDelegate;
 
     impl ClipboardDelegate for QtClipboardDelegate {
@@ -909,10 +841,8 @@ mod engine {
         tab_id: i32,
         rendering_context: EngineRenderingContext,
         animating: Cell<bool>,
-        // G1: resize() before the first spin_event_loop() is silently discarded
-        // because the paint thread hasn't started processing messages yet. On the
-        // first notify_new_frame_ready (compositor is live), re-send the stored
-        // physical size so the layout thread relays with the correct viewport.
+        // resize() before the first spin_event_loop() is dropped; re-send the
+        // stored size on the first notify_new_frame_ready (compositor live).
         initial_resize_done: Cell<bool>,
     }
 
@@ -1037,13 +967,9 @@ mod engine {
                     }
                 }
             });
-            // notify_url_changed fires ONLY for top-level document URL changes
-            // (subframe navigations don't trigger it), so this is the one place
-            // we can route a PDF into the inline viewer without hijacking
-            // iframe/embedded PDFs. The webview has committed the PDF as a real
-            // history entry; the viewer's Back does a real go_back. We suppress
-            // the normal URL change so chrome doesn't briefly show the PDF as a
-            // failed web page before the viewer takes over.
+            // notify_url_changed fires only for top-level URL changes, so it's the
+            // one safe place to route a PDF into the inline viewer without hijacking
+            // iframe/embedded PDFs.
             if is_probably_pdf_navigation_url(&url) {
                 crate::bridge::ffi::notify_pdf_navigation_requested(self.tab_id, url.as_str());
                 return;
@@ -1184,11 +1110,8 @@ mod engine {
                 navigation_request.deny();
                 return;
             }
-            // NOTE: PDF navigations are NOT intercepted here. request_navigation
-            // fires for subframe navigations too and exposes no top-level signal
-            // (is_for_main_frame just means destination==Document, true for
-            // iframes), so intercepting here hijacks iframe/embedded PDFs. PDFs
-            // are routed from notify_url_changed instead (top-level only).
+            // PDFs are NOT intercepted here: request_navigation fires for subframes
+            // too with no top-level signal, so it's routed from notify_url_changed.
             if content_blocking_allowed_for_url(&navigation_request.url)
                 && should_block_request(&navigation_request.url, &navigation_request.url, "document")
             {
@@ -1280,11 +1203,8 @@ mod engine {
         }
 
         fn show_console_message(&self, _webview: WebView, level: ConsoleLogLevel, message: String) {
-            // Page console output is opt-in: pages can console.log in rAF/scroll
-            // loops, and an unconditional synchronous stderr write (or FFI hop)
-            // per message stalls the main thread on such sites. Only do work when
-            // SERVOQ_DEBUG is on (stderr) or the servoq://debug console panel has
-            // turned capture on (FFI to the C++ ring buffer).
+            // Console output is opt-in: pages can console.log in tight loops, so
+            // only do work when SERVOQ_DEBUG or servoq://debug capture is on.
             let capture = CONSOLE_CAPTURE.load(Ordering::Relaxed);
             if !debug_enabled() && !capture {
                 return;
@@ -1551,10 +1471,8 @@ mod engine {
             })
         }
 
-        // window.moveTo / window.resizeTo from page content. C++ applies the
-        // popup-window policy (only honored for a single-tab window, like
-        // Firefox/Chrome) and defers the actual move/resize off the delegate
-        // callback.
+        // window.moveTo / window.resizeTo; C++ applies the popup-window policy and
+        // defers the actual move/resize off the delegate callback.
         fn request_move_to(&self, _webview: WebView, point: DeviceIntPoint) {
             if SHUTTING_DOWN.load(Ordering::Acquire) || !tab_exists(self.tab_id) {
                 return;
@@ -1569,13 +1487,9 @@ mod engine {
             crate::bridge::ffi::request_window_resize_to(self.tab_id, size.width, size.height);
         }
 
-        // Permissions API / permission-gated features (notifications,
-        // geolocation, wake lock, …). The script thread blocks on its own
-        // channel awaiting the answer, so the synchronous modal-dialog FFI
-        // pattern applies. C++ owns the per-origin persistence
-        // (PermissionStore): a stored Allow/Block answers without UI, an
-        // explicit Allow/Block in the prompt is persisted, and dismissing
-        // denies once without persisting — Chrome's semantics.
+        // Permission prompts: synchronous modal-dialog FFI (the script thread
+        // blocks awaiting the answer). C++ owns per-origin persistence and Chrome's
+        // stored/prompt/dismiss semantics.
         fn request_permission(&self, _webview: WebView, request: PermissionRequest) {
             if SHUTTING_DOWN.load(Ordering::Acquire) {
                 request.deny();
@@ -1607,14 +1521,9 @@ mod engine {
             }
         }
 
-        // HTTP Basic/Digest authentication (401/407). Synchronous modal dialog
-        // like the other embedder controls: the fetch blocks on its own
-        // (network) thread awaiting the oneshot response, and the SPINNING
-        // guard makes the nested Qt event loop safe. Dropping the request
-        // without responding continues the load without credentials, which
-        // surfaces the server's 401 page — the same behavior as Cancel in
-        // Chrome and Firefox. Credentials are forwarded to Servo only; ServoQ
-        // never logs or stores them (see remove_persisted_http_auth_cache).
+        // HTTP Basic/Digest auth (401/407): synchronous modal dialog; dropping the
+        // request continues without credentials (Cancel = server's 401 page).
+        // Credentials go to Servo only, never logged/stored (see auth-cache delete).
         fn request_authentication(
             &self,
             _webview: WebView,
@@ -1650,17 +1559,12 @@ mod engine {
 
     thread_local! {
         static ENGINE: RefCell<Option<EngineState>> = const { RefCell::new(None) };
-        // Re-entrancy guard: prevents spin_event_loop() from being called while
-        // it is already on the call stack. In Qt's single-threaded event model
-        // this cannot happen via concurrent threads, but it CAN happen if a
-        // delegate callback triggers further Qt event processing (e.g. a modal
-        // dialog or explicit processEvents()). The guard is cheap and defensive.
+        // Re-entrancy guard: a delegate callback can trigger nested Qt event
+        // processing (modal dialog/processEvents) while spin_event_loop is on stack.
         static SPINNING: Cell<bool> = const { Cell::new(false) };
-        // Which tab's pixels the shared Wayland subsurface currently shows:
-        // Some(id) after a successful swap, None after C++ unmaps the
-        // subsurface (empty-tab activation). Navigation paint holding uses it
-        // to decide whether skipping a blank frame would leave another tab's
-        // stale content visible.
+        // Which tab's pixels the shared Wayland subsurface shows: Some(id) after a
+        // swap, None after C++ unmaps it. Paint holding uses it to avoid leaving
+        // another tab's stale content visible when skipping a blank frame.
         static WAYLAND_SURFACE_CONTENT_TAB: Cell<Option<i32>> = const { Cell::new(None) };
     }
 
@@ -1714,20 +1618,9 @@ mod engine {
 
     // ---- public functions -----------------------------------
 
-    // Initialize the Servo engine at application startup, before the main window
-    // is shown and before any Qt show/resize/paint events can reach WebContentView.
-    //
-    // Hypothesis A (lazy-init timing): Servo is currently initialized lazily in
-    // create_webview(), which is called from WebContentView::showEvent(). At that
-    // point Qt is already delivering show/resize/paint events concurrently with
-    // Servo's internal thread-pool and font-system startup. If layout requests a
-    // fallback font while the font cache is still being populated, the fallback
-    // cache can return a stale or uninitialized FontRef whose high bits contain
-    // codepoint data — exactly the pattern seen in the crash dumps.
-    //
-    // Calling init_servo() from run_qt_application() before window.show() gives
-    // Servo's internal subsystems (constellation, script, layout, font cache) time
-    // to fully initialize before any web content or font shaping is requested.
+    // Initialize Servo eagerly at startup, before window.show() and any Qt
+    // show/resize/paint reaches WebContentView, to avoid the lazy-init font-cache
+    // crash (docs/DEVIATIONS.md §0o).
     pub fn init_servo() {
         SHUTTING_DOWN.store(false, Ordering::Release);
         ENGINE.with(|state| {
@@ -1830,19 +1723,9 @@ mod engine {
             size.width, size.height
         );
 
-        // Root-cause fix: Surfman's Adapter::Software::set_environment_variables(), called
-        // during SoftwareRenderingContext creation in init_servo(), sets LIBGL_ALWAYS_SOFTWARE=1
-        // in the process environment. Mesa reads this env var inside eglInitialize() — not at
-        // eglCreateContext time — to decide which GL driver to load. If it is set at that point,
-        // Mesa loads LLVMpipe instead of the hardware driver (AMD/radeonsi).
-        //
-        // Surfman's HardwarePrime adapter clears LIBGL_ALWAYS_SOFTWARE later, in
-        // create_context_descriptor(), but that runs after eglInitialize() — too late.
-        //
-        // Clearing it here, before Connection::from_display_handle() triggers eglInitialize(),
-        // ensures Mesa selects the hardware driver for this Wayland window EGL display.
-        // The SoftwareRenderingContext's own EGL display was already initialised before the
-        // env var was set, so clearing it here does not affect software-mode operation.
+        // Clear LIBGL_ALWAYS_SOFTWARE (set by surfman during software-context
+        // creation) before eglInitialize() for the Wayland display, so Mesa picks
+        // the hardware driver instead of LLVMpipe (docs/DEVIATIONS.md §0n).
         if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() {
             std::env::remove_var("LIBGL_ALWAYS_SOFTWARE");
             eprintln!(
@@ -2086,19 +1969,9 @@ mod engine {
         }
         debug_log("shutdown_servo", 0);
 
-        // Freeze-on-close guard. Dropping the engine runs Servo's
-        // `Drop for ServoInner`, which blocks this (Qt UI) thread in
-        // `while spin_event_loop() { sleep(500us) }` until the constellation
-        // reports `FinishedShuttingDown`. If any component blocks its own
-        // teardown — most likely a GStreamer/PipeWire media-pipeline thread now
-        // that media is enabled — that state is never reached and the UI thread
-        // spins forever (the window "freezes instead of closing"). Servo 0.2
-        // exposes no timeout on that drop and we do not fork Servo, so we bound
-        // it from the outside: a detached watchdog force-exits the process if
-        // graceful teardown overruns the deadline. The fast path still saves
-        // cookies/profile (written during the drop); only a genuinely stuck
-        // teardown falls back to a hard exit. Deadline: SERVOQ_SHUTDOWN_TIMEOUT_MS
-        // (default 4000; 0 disables the watchdog).
+        // Bound the blocking engine drop below: a detached watchdog force-exits if
+        // teardown overruns the deadline, so a stuck media thread can't freeze the
+        // close (docs/DEVIATIONS.md §0m). SERVOQ_SHUTDOWN_TIMEOUT_MS: 0 disables.
         let timeout_ms = std::env::var("SERVOQ_SHUTDOWN_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -2121,11 +1994,8 @@ mod engine {
                             "[servoq] graceful shutdown exceeded {timeout_ms}ms (blocked engine \
                              or media-pipeline teardown); forcing process exit"
                         );
-                        // _exit(0): immediate termination that bypasses atexit /
-                        // global destructors, which could themselves deadlock on a
-                        // lock held by the stuck thread. The OS reclaims the rest.
-                        // Exit 0 because the user asked to close — a stuck teardown
-                        // is not a user-facing failure.
+                        // _exit(0): bypass atexit/global destructors (which could
+                        // deadlock on the stuck thread's lock); the user asked to close.
                         unsafe { libc::_exit(0) };
                     }
                 });
@@ -2135,15 +2005,12 @@ mod engine {
             if let Some(engine) = s.borrow().as_ref() {
                 engine.servo.site_data_manager().clear_session_cookies();
             }
-            // Drop WebViews, Servo, and WindowRenderingContext deterministically.
-            // In Wayland mode this must happen while Qt still owns a valid QWindow
-            // and wl_surface; otherwise Surfman/EGL can destroy a surface whose
-            // Wayland proxy has already been torn down by Qt.
+            // Drop deterministically while Qt still owns a valid QWindow/wl_surface,
+            // or Surfman/EGL can destroy a surface whose Wayland proxy is already gone.
             *s.borrow_mut() = None;
         });
-        // Servo's resource thread has now written its profile files (the drop
-        // above completes the engine shutdown); delete the plaintext HTTP auth
-        // cache it persisted alongside the cookie jar.
+        // The drop above flushed Servo's profile files; delete the plaintext HTTP
+        // auth cache it persisted.
         if let Some(profile_dir) = servo_profile_dir() {
             remove_persisted_http_auth_cache(&profile_dir);
         }
@@ -2152,9 +2019,8 @@ mod engine {
         shutdown_done.store(true, Ordering::Release);
     }
 
-    // Global tick: called by the Qt EventLoopWaker event handler (BrowserWindow::eventFilter).
-    // No tab ID — panics are logged to stderr; per-tab crash notification is handled
-    // by tick_webview (timer path) which retains the tab ID for crash reporting.
+    // Global tick from the Qt EventLoopWaker; no tab ID, so panics are only logged
+    // (per-tab crash reporting is tick_webview's job).
     pub fn tick_servo_global() {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return;
@@ -2185,10 +2051,8 @@ mod engine {
         }
     }
 
-    // spin_event_loop() is called after dropping the ENGINE borrow (clone_servo()).
-    // This allows delegate callbacks fired inside spin_event_loop to borrow ENGINE.
-    // catch_unwind guards against Servo panicking during font loading or similar
-    // background operations — a Rust panic must NOT cross the FFI boundary into C++.
+    // spin_event_loop runs after dropping the ENGINE borrow so delegate callbacks
+    // can re-borrow it; catch_unwind keeps a Servo panic from crossing into C++.
     pub fn tick_webview(id: i32) {
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             return;
@@ -2261,21 +2125,16 @@ mod engine {
             eprintln!("[servoq] Wayland window renderer present failed: make_current: {error:?}");
             return;
         }
-        // The shared surface can be recreated on tab re-attach (set_window), which
-        // resets the swap interval, so re-assert interval=0 each present while the
-        // context is current. Cheap EGL call; prevents eglSwapBuffers from blocking
-        // the main thread on a withheld frame callback.
+        // Re-assert interval=0 each present: tab re-attach (set_window) recreates
+        // the surface and resets it (docs/DEVIATIONS.md §0).
         disable_swap_vsync_for_current_context();
         let make_current_time = make_current_started.elapsed();
         let paint_started = Instant::now();
         webview.paint();
         let paint_time = paint_started.elapsed();
-        // Navigation paint hold: while the new document has nothing to show,
-        // don't swap — the shared subsurface keeps showing this tab's previous
-        // page (or stays unmapped behind the new-tab placeholder). The swap is
-        // still required when the surface currently shows ANOTHER tab's pixels
-        // (tab switch onto a mid-load tab): blank is correct there, stale
-        // foreign content is not. Read failures fail open and present.
+        // Paint hold: don't swap a blank frame while the new document has nothing
+        // to show, unless the surface currently shows another tab's pixels (then
+        // blank is correct). Read failures fail open and present (§0g).
         if paint_hold_active(id) {
             let surface_size = context.size2d().to_i32();
             let rect: Box2D<i32, DevicePixel> =
@@ -2470,12 +2329,8 @@ mod engine {
         }
     }
 
-    // Touchpad pinch gesture (Qt::ZoomNativeGesture). `scale` is the final
-    // multiplicative factor for this gesture step (1.0 + Qt's incremental
-    // value, matching servoshell's `delta + 1.0` for winit's PinchGesture);
-    // Servo multiplies the current pinch zoom by it and clamps to [1, 10].
-    // Pinch zoom magnifies the viewport without relayout — page zoom
-    // (Ctrl+wheel / Ctrl+±) stays a separate mechanism.
+    // Touchpad pinch (Qt::ZoomNativeGesture). `scale` is the step's multiplicative
+    // factor; Servo magnifies the viewport without relayout (clamped [1, 10]).
     pub fn forward_pinch_zoom(id: i32, scale: f32, x: f32, y: f32) {
         if let Some(wv) = clone_webview(id) {
             if diag_enabled() {
@@ -2485,21 +2340,8 @@ mod engine {
         }
     }
 
-    // key_char: Unicode code point from Qt event.text()[0], 0 for non-printable.
-    // qt_key:   Qt::Key enum value.
-    // mods:     Qt::KeyboardModifiers flags.
-    // Ctrl chord -> Servo editing action. Servo does NOT perform copy/cut/paste
-    // from a raw Ctrl+<key> keyboard event: servoshell intercepts these chords and
-    // dispatches an InputEvent::EditingAction instead (see
-    // vendor/reference-servo/ports/servoshell/desktop/headed_window.rs ~360-372).
-    // We do the same. Routed here because forward_key is only ever called from
-    // focused web content — the URL bar, find box and other Qt chrome widgets keep
-    // their native Qt clipboard handling and never reach this path. Ctrl+A is NOT
-    // turned into an editing action (Servo has no SelectAll action) — it stays a
-    // keyboard event, but with a corrected logical key (see forward_key below).
-    // True for a Control chord that is not AltGr. On Linux AltGr reports as
-    // Ctrl+Alt and is used to type characters on international layouts, so it must
-    // be excluded — a genuine Ctrl shortcut never holds Alt.
+    // Ctrl+C/X/V from web content become Servo EditingActions (§4); Ctrl+A stays a
+    // keyboard event with a corrected key (§5b). ctrl_chord_active excludes AltGr.
     const QT_SHIFT_MODIFIER: u32 = 0x0200_0000;
     const QT_CONTROL_MODIFIER: u32 = 0x0400_0000;
     const QT_ALT_MODIFIER: u32 = 0x0800_0000;
@@ -2531,11 +2373,9 @@ mod engine {
         })?;
 
         if force || previous != normalized {
-            // Servo's constellation applies its last keyboard modifier state to
-            // subsequent mouse events. Browser-level shortcuts can move focus
-            // into Qt chrome after Servo saw Ctrl/Shift/Alt/Meta go down, so the
-            // matching key-up never reaches Servo. Sync the stored modifier mask
-            // before a mouse click so ordinary links do not become Ctrl-clicks.
+            // Servo applies its last keyboard modifier state to mouse events; a
+            // key-up can be lost to Qt chrome, so resync before a click or ordinary
+            // links become Ctrl-clicks.
             let kb_event = ServoKeyboardEvent::new_without_event(
                 KeyState::Up,
                 Key::Named(NamedKey::Unidentified),
@@ -2597,14 +2437,8 @@ mod engine {
         let state = if down { KeyState::Down } else { KeyState::Up };
         const QT_KEY_A: i32 = 0x41;
         let key = if ctrl_chord_active(mods) && qt_key == QT_KEY_A {
-            // Ctrl+A select-all. Servo exposes no EditingActionEvent::SelectAll
-            // (the enum is only Copy/Cut/Paste), so — like servoshell — we forward
-            // a keyboard event. But under Ctrl, Qt's event.text() is the SOH
-            // control char, so qt_key_to_key() yields Key::Named(Unidentified) and
-            // Servo's TextInput select-all shortcut (keyboard-types ShortcutMatcher,
-            // which matches the *logical* key 'a' case-insensitively) never fires.
-            // Forward the corrected logical key so Servo can match it. Only the
-            // keydown triggers select_all in Servo; the keyup is harmless.
+            // Ctrl+A: forward the corrected logical key 'a' so Servo's select-all
+            // shortcut matches (under Ctrl, Qt's text() is SOH) — see §5b.
             diag(format!("select_all id={id} down={down} via=keyboard Key::Character(\"a\")"));
             Key::Character("a".to_string().into())
         } else {
@@ -2717,12 +2551,8 @@ mod engine {
         })
     }
 
-    // Asynchronous full-viewport screenshot. Servo waits for the page to be
-    // ready (load events fired, render-blocking resources done, fonts/images
-    // loaded, no pending frames) and then calls back with the pixels; the
-    // result is pushed to C++ as RGBA8 via notify_screenshot_taken, with an
-    // empty slice signalling failure. The callback fires inside a later
-    // spin_event_loop on the main thread.
+    // Async full-viewport screenshot: Servo waits for the page to be ready, then
+    // pushes RGBA8 to C++ via notify_screenshot_taken (empty slice = failure).
     pub fn take_screenshot(id: i32) {
         let Some(wv) = clone_webview(id) else {
             crate::bridge::ffi::notify_screenshot_taken(id, &[], 0, 0);
@@ -2742,11 +2572,8 @@ mod engine {
         });
     }
 
-    // Debug tooling (M3.7): evaluate JavaScript in the tab's page context.
-    // Results are serialized to JSON-ish text and pushed back through
-    // notify_javascript_result with the caller-chosen request_id; this is the
-    // engine half of the future servoq://debug page (M4.4). The callback
-    // fires inside a later spin_event_loop on the main thread.
+    // Evaluate JS in the tab's page context; result pushed back via
+    // notify_javascript_result with the caller's request_id.
     pub fn evaluate_javascript(id: i32, request_id: u64, script: &str) {
         let Some(wv) = clone_webview(id) else {
             crate::bridge::ffi::notify_javascript_result(
@@ -2832,10 +2659,8 @@ mod engine {
     pub fn set_experimental_features_enabled(enabled: bool) {
         if let Some(servo) = clone_servo() {
             for pref in EXPERIMENTAL_PREFS {
-                // Servo::set_preference -> Preferences::set_value PANICS on an
-                // unknown preference name. Guard every name with the generated
-                // Preferences::exists() so a pref Servo has renamed/removed in a
-                // future version is skipped with a log line instead of aborting.
+                // set_preference panics on an unknown name; guard with exists() so a
+                // renamed/removed pref is skipped, not fatal (docs/DEVIATIONS.md §6).
                 if Preferences::exists(pref) {
                     servo.set_preference(pref, PrefValue::Bool(enabled));
                     diag(format!("experimental_pref applied name={pref} value={enabled}"));
@@ -3078,11 +2903,9 @@ mod engine {
         });
     }
 
-    // Live cookies Servo would attach to an HTTP request for `url`, so the
-    // native PDF viewer's out-of-engine fetch carries the same session as the
-    // page (session/HttpOnly cookies included). Servo owns the matching; we
-    // only serialize. One row per cookie: "name\tvalue\tdomain\tpath\tsecure",
-    // newline-separated. Empty when the engine is down or there are none.
+    // Cookies Servo would send for `url` (session/HttpOnly included), so the PDF
+    // viewer's out-of-engine fetch shares the page's session. Newline-separated
+    // "name\tvalue\tdomain\tpath\tsecure" rows.
     pub fn cookies_for_url(url: &str) -> String {
         let Ok(parsed) = Url::parse(url) else {
             return String::new();
