@@ -9,15 +9,9 @@
 
 namespace ServoQ {
 
-// Persistent favicon cache, modeled on Chromium's Favicons database: PNG
-// bitmaps in SQLite, mapped from the page's host. Serves icons for restored
-// session tabs, the bookmarks bar, history/recently-closed menus, and the
-// URL-bar autocomplete — anywhere an icon is needed before (or without) the
-// page being loaded in a live tab.
-//
-// Mapping is per host rather than per page URL: ServoQ re-probes the favicon
-// on every page load anyway, so the cache only needs to answer "what does
-// this site's icon look like" for chrome UI.
+// Persistent favicon cache: PNG bitmaps in SQLite, keyed per host (re-probed on
+// every load anyway). Serves icons for chrome UI (session tabs, bookmarks bar,
+// history menus, URL-bar autocomplete) before/without a live tab.
 class FaviconStore : public QObject {
     Q_OBJECT
 public:

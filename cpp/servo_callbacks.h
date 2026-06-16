@@ -1,9 +1,5 @@
-// servo_callbacks.h
-//
-// C++ free functions in namespace servoq that Rust calls (via CXX unsafe extern "C++")
-// to push frame data and delegate notifications into the Qt widget layer.
-// This header is included by the CXX bridge and by WebContentView.cpp; it must
-// NOT be included from files that lack rust/cxx.h in their include path.
+// servoq:: free functions Rust calls (via CXX) to push frames and notifications
+// into the Qt layer. Needs rust/cxx.h in the include path.
 
 #pragma once
 
@@ -18,11 +14,8 @@
 
 namespace servoq {
 
-// Mirror of the CXX shared struct from src/bridge.rs. The generated
-// bridge.rs.h includes this header first (so it cannot be included from
-// here), but CXX guards every struct definition with this exact macro, so
-// defining it here with the same guard and layout is the supported pattern —
-// whichever copy is parsed first wins.
+// Mirror of the CXX shared struct from src/bridge.rs, defined under CXX's own
+// include guard so whichever copy is parsed first wins.
 #ifndef CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
 #define CXXBRIDGE1_STRUCT_servoq$PromptDialogResult
 struct PromptDialogResult final {
@@ -110,10 +103,8 @@ void request_open_tab_for_id(::std::int32_t tab_id);
 // Web Notification API: show a desktop notification via QSystemTrayIcon.
 void show_notification(::std::int32_t tab_id, ::rust::Str title, ::rust::Str body);
 
-// Embedder controls (web form controls & script dialogs), implemented in
-// WebDialogs.cpp. Synchronous like show_context_menu_sync: each call opens a
-// modal Qt dialog/menu on the main thread and returns the user's choice.
-// PromptDialogResult is the CXX shared struct defined in src/bridge.rs.
+// Embedder controls (form controls & script dialogs), in WebDialogs.cpp: each
+// opens a modal Qt dialog on the main thread and returns the user's choice.
 void show_alert_dialog_sync(::std::int32_t tab_id, ::rust::Str message);
 bool show_confirm_dialog_sync(::std::int32_t tab_id, ::rust::Str message);
 PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str message, ::rust::Str default_value);

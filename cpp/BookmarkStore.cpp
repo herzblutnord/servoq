@@ -64,10 +64,8 @@ void BookmarkStore::load()
     m_folders.clear();
     m_root_items.clear();
 
-    // Earlier builds embedded each bookmark's favicon as a base64 PNG in this
-    // file, which bloated it and forced a full rewrite per favicon refresh.
-    // Icons now live in FaviconStore; embedded ones are imported once and the
-    // field is dropped on the next save.
+    // Legacy: favicons used to be embedded as base64 here. Import any once into
+    // FaviconStore; the field is dropped on the next save.
     auto import_legacy_favicon = [](QJsonObject const& object) {
         auto favicon = object[QStringLiteral("favicon")].toString();
         if (!favicon.isEmpty())

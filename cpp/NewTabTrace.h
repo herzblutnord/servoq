@@ -1,25 +1,10 @@
-// NewTabTrace.h
-//
-// Targeted instrumentation for the "+ new tab freezes the browser" bug.
-//
-// Two cooperating mechanisms, both cheap enough to leave compiled in:
-//
-//  * SERVOQ_NEWTAB_TRACE=1 — timestamped ENTER/LEAVE lines (monotonic ms since
-//    app start) for every major step of the new-tab / tab-activation path, so
-//    a multi-second freeze can be attributed to one exact synchronous section.
-//
-//  * SERVOQ_JANK — two detectors that work even without the trace env:
-//      - every traced scope measures itself and warns if it took >200 ms
-//        ("slow_phase"), naming the blocking section directly;
-//      - a 50 ms heartbeat timer (started by BrowserWindow under SERVOQ_PERF
-//        or SERVOQ_NEWTAB_TRACE) warns when the event loop itself stalled
-//        >200 ms ("main_thread_gap_ms"), catching blocks outside traced scopes
-//        (Qt-internal paint/flush, compositor waits). It reports the most
-//        recently entered phase as the likely culprit.
-//
-// This exists because the per-second SERVOQ_PERF flush is invisible while the
-// main thread is blocked: a 6 s synchronous stall produces *no* PERF lines
-// until it ends, which is exactly when the counters look innocent again.
+// Opt-in instrumentation for tab-activation stalls (cheap enough to leave in):
+//  * SERVOQ_NEWTAB_TRACE — timestamped ENTER/LEAVE lines per step, so a freeze
+//    can be pinned to one synchronous section.
+//  * SERVOQ_JANK — traced scopes warn at >200 ms ("slow_phase"), and a 50 ms
+//    heartbeat warns on event-loop stalls outside traced scopes ("main_thread_gap_ms").
+// Needed because the per-second SERVOQ_PERF flush is invisible while the main
+// thread is blocked.
 
 #pragma once
 

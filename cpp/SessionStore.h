@@ -18,14 +18,9 @@ struct ClosedTabState {
     bool was_pinned { false };
 };
 
-// Session persistence in its own file (session.json), like Firefox's
-// sessionstore and Chromium's Sessions/ directory — NOT inside QSettings:
-// session state changes on every navigation/tab event, and storing it in the
-// settings INI rewrote the whole config file once per debounce window.
-//
-// Open tabs are only written while "continue where you left off" is enabled
-// (and cleared when it is turned off); the recently-closed list is always
-// persisted so Ctrl+Shift+T works across restarts, as in Chrome/Firefox.
+// Session persistence in its own session.json (not QSettings, which would rewrite
+// the whole INI per debounce window). Open tabs are saved only while "continue
+// where you left off" is on; the recently-closed list is always saved (Ctrl+Shift+T).
 class SessionStore {
 public:
     static SessionStore* the();

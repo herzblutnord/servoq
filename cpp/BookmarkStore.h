@@ -31,10 +31,8 @@ struct BookmarkRootEntry {
     QString type; // "bookmark" or "folder"
 };
 
-// Root-level bookmark store: a flat list of root BookmarkItems plus BookmarkFolders,
-// with a separate mixed root order so folders/bookmarks persist in one toolbar list.
-// Each folder contains its own BookmarkItems. One level of nesting only.
-// Storage: QStandardPaths::AppDataLocation + "/bookmarks.json", written with QSaveFile.
+// Bookmark store: root BookmarkItems + BookmarkFolders in one mixed toolbar order,
+// one level of nesting. Stored in bookmarks.json (QSaveFile).
 class BookmarkStore : public QObject {
     Q_OBJECT
 public:

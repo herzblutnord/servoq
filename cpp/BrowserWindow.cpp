@@ -105,23 +105,10 @@ void debug_log(char const* event, int tab_id, QString const& detail)
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
 }
 
-// Rate-limited wake-driven Servo ticking.
-//
-// During a page load Servo's background threads can wake the Qt loop ~25k times a
-// second. Because the wake-pending flag was cleared *before* each tick, every wake
-// posted a fresh event and span the event loop again — and since
-// servo.spin_event_loop() drains ALL pending work in a single call, the 2nd..Nth
-// spins of a burst are near-no-ops that still burned ~50% of a core (measured via
-// SERVOQ_PERF: ticks≈25k/s, tick_ms≈500/s) and starved Qt's own paint/input.
-//
-// Here we tick at most once per kServoTickIntervalMs. If a wake arrives sooner we
-// leave the wake-pending flag SET — so further background wakes coalesce instead of
-// posting new events — and schedule exactly one catch-up tick at the interval
-// boundary. Because spin drains everything, this is correctness-preserving: no wake
-// is ever dropped, it is at most delayed by kServoTickIntervalMs (well under one
-// frame). All state is touched only on the Qt main thread (eventFilter + the
-// singleShot callback). servoq::tick_servo() is itself a no-op once shutdown has
-// started, so the catch-up timer needs no extra guard.
+// Rate-limit wake-driven ticking to once per kServoTickIntervalMs: Servo can wake
+// the loop ~25k×/s and each spin drains everything, so coalesce extra wakes (leave
+// the pending flag set) and run one catch-up tick at the interval boundary. No wake
+// is dropped, only delayed <1 frame. See docs/DEVIATIONS.md §0.
 constexpr qint64 kServoTickIntervalMs = 4;
 
 qint64 servo_tick_clock_ms()
@@ -196,10 +183,8 @@ BrowserWindow::BrowserWindow(QWidget* parent)
     // QtEventLoopWaker wake event (QEvent::User+1) posted from Servo's threads.
     qApp->installEventFilter(this);
 
-    // Main-thread jank detector (SERVOQ_PERF or SERVOQ_NEWTAB_TRACE): a 50 ms
-    // heartbeat whose gap reveals event-loop stalls that the per-second PERF
-    // flush cannot show (a blocked thread prints nothing until it unblocks).
-    // newtab_last_phase() names the section that was running when it stalled.
+    // Main-thread jank detector: a 50 ms heartbeat whose gap reveals event-loop
+    // stalls the per-second PERF flush can't show (SERVOQ_PERF/SERVOQ_NEWTAB_TRACE).
     if (qEnvironmentVariableIsSet("SERVOQ_PERF") || newtab_trace_enabled()) {
         auto* heartbeat = new QTimer(this);
         heartbeat->setInterval(50);
@@ -271,10 +256,9 @@ BrowserWindow::BrowserWindow(QWidget* parent)
         }
         updateCurrentTabState();
         scheduleSessionSave();
-        // Defer activateTab so any mouse event that triggered the tab switch
-        // fully unwinds before we show/hide/reposition the native Wayland
-        // wl_subsurface. Doing this synchronously corrupts Qt/Wayland event
-        // delivery and leaves the container in an unmapped state.
+        // Defer activateTab so the triggering mouse event unwinds before we
+        // reposition the wl_subsurface; doing it synchronously corrupts Qt/Wayland
+        // event delivery (§0d).
         QPointer<Tab> target_tab = next_tab;
         QPointer<TabWidget> tabs = m_tabs;
         int serial = ++m_activation_serial;
@@ -297,11 +281,9 @@ BrowserWindow::BrowserWindow(QWidget* parent)
             tabs->activateTab(idx);
         });
     };
-    // Defer tab close to the next event-loop spin via QPointer so the close-button's
-    // mouseReleaseEvent fully unwinds before we remove anything. Capturing a QPointer
-    // rather than the raw index prevents a stale-index crash if another tab is
-    // inserted (e.g. via request_open_tab_for_id during a nested servo tick) between
-    // the moment the close button is clicked and when the deferred lambda runs.
+    // Defer the close (via QPointer, not raw index) so the close button's
+    // mouseReleaseEvent unwinds first and a tab inserted in between can't cause a
+    // stale-index crash.
     m_tabs->onTabCloseRequested = [this](int index) {
         QPointer<Tab> tab = m_tabs->tab(index);
         QTimer::singleShot(0, this, [this, tab] {
@@ -691,10 +673,7 @@ void BrowserWindow::createMenus()
         view_menu->addAction(reset_zoom_action);
     }
 
-    // Developer tooling: the JS console rides the M3.7 evaluate_javascript
-    // bridge and is the manual test surface for it until the servoq://debug
-    // page (M4.4) exists. Hidden unless SERVOQ_DEBUG is set so normal chrome
-    // stays clean.
+    // Developer JS console, hidden unless SERVOQ_DEBUG is set.
     if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
         view_menu->addSeparator();
         auto* js_console_action = new QAction(QStringLiteral("Evaluate &JavaScript…"), this);
@@ -731,11 +710,8 @@ void BrowserWindow::createMenus()
     }
     m_hamburger_menu->addMenu(view_menu);
 
-    // All browser settings now live on the servoq://settings page (M4.3); the
-    // menu only offers a quick entry point to it. Everything that used to be in
-    // a "Settings" submenu (search engines, content blocking + per-site
-    // exceptions, custom filter list, restore session, clear site data, etc.)
-    // moved onto the page and is applied live via onSettingsChangedFromPage().
+    // Browser settings live on the servoq://settings page; this is just a quick
+    // entry point to it.
     auto* open_settings_page_action = new QAction(QStringLiteral("&Settings"), this);
     open_settings_page_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
     open_settings_page_action->setMenuRole(QAction::PreferencesRole);

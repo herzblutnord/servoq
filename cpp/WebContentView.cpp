@@ -7,11 +7,8 @@
  * Derived from Ladybird:
  *   UI/Qt/WebContentView.cpp
  */
-// WebContentView.cpp
-//
-// Implements the Qt widget that hosts the Servo engine (or shows a placeholder
-// when the engine is disabled / before the first frame arrives).
-// Specific line citations appear inline below.
+// Qt widget that hosts the Servo engine (or a placeholder before the first
+// frame / when the engine is disabled).
 
 #include "BrowserWindow.h"
 #include "BookmarkStore.h"
@@ -90,11 +87,8 @@ static std::atomic_bool& g_servo_shutting_down()
     return s_shutting_down;
 }
 
-// Cached: qEnvironmentVariableIsSet takes a process-global env lock. perf_enabled()
-// is reached from maybe_log_qt_perf() on the wake path (~25k/sec on Servo's
-// threads) and debug_enabled() from per-frame/per-present logging, so reading the
-// env every call contended that lock with the main thread. C++11 guarantees the
-// function-local static is initialised once, thread-safely; afterwards it's a load.
+// Cached once: qEnvironmentVariableIsSet takes a process-global lock contended on
+// hot paths (docs/DEVIATIONS.md §0c).
 static bool debug_enabled()
 {
     static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
@@ -107,10 +101,7 @@ static bool perf_enabled()
     return v;
 }
 
-// ─── TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) ────────────────────────────────────
-// Low-noise, opt-in tracing for the text-input and second-tab-crash
-// investigation. Gated behind SERVOQ_DIAG so it never fires in normal runs.
-// Remove once both bugs are root-caused.
+// Opt-in low-noise tracing (SERVOQ_DIAG).
 bool servoq_diag_enabled()
 {
     static int cached = -1;
@@ -201,10 +192,7 @@ static qint64 present_clock_ms()
     return timer.elapsed();
 }
 
-// Cap = one frame at the display's refresh rate. Presenting faster than the
-// screen refreshes is wasted work that only steals the main thread from the Qt
-// chrome; capping at the refresh rate removes the waste without costing any
-// visible smoothness.
+// Cap presents at the display refresh rate; faster is wasted main-thread work.
 static qint64 min_present_interval_ms()
 {
     qreal hz = 60.0;
@@ -239,25 +227,10 @@ static int& g_wayland_owner_generation()
     return s_generation;
 }
 
-// Commit the TOPLEVEL wl_surface directly, bypassing Qt's repaint pipeline.
-//
-// Why this exists (WAYLAND_DEBUG-proven): every container move becomes
-// wl_subsurface.set_position — PARENT surface state the compositor applies
-// only on the next toplevel wl_surface.commit. Qt 6 gates widget repaints on
-// the toplevel's wl_surface.frame callback, and the compositor starves that
-// callback while the desync Servo subsurface commits at 60 fps (traces show
-// the callback 'done' arriving 0.5 s late, then not at all for seconds). So a
-// queued QWidget::update() never reaches the wire exactly when the commit is
-// needed — the browser looks frozen until an incidental event (mapping the
-// hover panel's popup, the page load finishing) lets the compositor catch up.
-//
-// A bare commit is safe to issue from here: Qt stages and commits its own
-// toplevel state atomically within a flush on this same thread, so there is
-// never half-staged Qt state for our commit to latch. It applies pending
-// subsurface positions immediately and gives the compositor a present point
-// at which to fire Qt's pending frame callback, un-stalling chrome repaints.
-//
-// SERVOQ_NO_DIRECT_WL_COMMIT=1 disables this for diagnosis.
+// Commit the toplevel wl_surface directly so pending subsurface moves apply now
+// and Qt's frame callback fires, un-stalling chrome repaints (docs/DEVIATIONS.md
+// §0d). Safe from here: Qt stages/commits its own toplevel state on this thread.
+// SERVOQ_NO_DIRECT_WL_COMMIT=1 disables for diagnosis.
 static bool direct_wl_commit_disabled()
 {
     static bool const v = qEnvironmentVariableIsSet("SERVOQ_NO_DIRECT_WL_COMMIT");
@@ -291,23 +264,13 @@ static void park_shared_wayland_container()
     auto* container = g_wayland_container();
     if (!container)
         return;
-    // Move off-screen instead of hiding. Hiding a createWindowContainer widget
-    // unmaps the wl_surface; the first eglSwapBuffers() after remapping blocks
-    // waiting for a compositor frame callback that may never arrive, freezing
-    // the Qt main thread indefinitely. Keeping the surface mapped (just out of
-    // the visible area) avoids this race entirely.
-    // Move instead of hide (keep wl_surface mapped to avoid eglSwapBuffers block on remap).
-    // The offset must clear every realistic monitor to the left — a per-parent-width
-    // offset is not enough when that monitor is wider than the browser window.
-    // -16384 clears any real monitor (8K is 7680 px). Do NOT add container->lower()
-    // here: WAYLAND_DEBUG proved QtWayland emits no wl_subsurface.place_below for it.
+    // Move off-screen, don't hide: hiding unmaps the wl_surface and the next
+    // eglSwapBuffers after remap can block forever (docs/DEVIATIONS.md §0d).
+    // -16384 clears any real monitor (8K is 7680 px).
     container->move(-16384, 0);
-    // The subsurface position set by move() is PARENT surface state: the
-    // compositor applies it only on the next toplevel commit. Queue a toplevel
-    // repaint so the park takes effect now — otherwise the old tab's webview
-    // pixels stay visible over the new (e.g. empty) tab page until some
-    // incidental chrome repaint commits, which looks like a seconds-long
-    // freeze. (The attach path forces the same commit in onBecomeActiveTab.)
+    // move() is parent-surface state, applied only on the next toplevel commit;
+    // queue a repaint so the park takes effect now instead of after some
+    // incidental chrome repaint.
     if (auto* toplevel = container->window())
         toplevel->update();
     ServoQ::newtab_trace_point("park_shared_wayland_container_toplevel_update_queued");
@@ -607,13 +570,8 @@ protected:
                 }
                 qint64 const present_finished_ms = present_clock_ms();
                 m_owner->m_wayland_present_in_progress = false;
-                // Anti-starvation: while the subsurface commits at frame rate,
-                // the compositor can withhold the TOPLEVEL's frame callback,
-                // which stalls all Qt widget repaints (chrome frozen during
-                // page load). Committing the parent after each present applies
-                // any pending subsurface state and gives the compositor a
-                // present point to fire Qt's pending callback. One wire
-                // message per present; no-op when disabled or non-Wayland.
+                // Commit the parent after each present so the compositor fires
+                // Qt's frame callback and chrome repaints don't starve (§0d).
                 commit_toplevel_wl_surface(g_wayland_container(), "present_toplevel_wl_surface_committed");
                 // Feed the duty-cycle cap (admission is measured from completion).
                 m_owner->m_last_present_duration_ms = present_finished_ms - present_started_ms;
@@ -787,20 +745,10 @@ private:
     int m_present_generation_requested { 0 };
 };
 
-// Unmap the shared Servo subsurface while an EMPTY tab is active.
-//
-// A mapped-but-parked (off-screen) subsurface makes the compositor throttle
-// the toplevel's wl_surface.frame callbacks, which Qt 6 widget repaints are
-// gated on — chrome hover animations freeze in ~0.5 s steps even though the
-// main thread is completely idle (no JANK, zero presents in SERVOQ_PERF).
-// Loaded tabs don't show this because every present pulses the compositor.
-//
-// Empty tabs need no Servo rendering at all, so detach the buffer:
-// attach(NULL) + commit unmaps the subsurface at the protocol level while the
-// wl_surface object and all Qt/Servo state stay intact. This is NOT the same
-// as container->hide(), which makes QtWayland destroy the wl_surface and
-// triggers the historical remap freeze. The next activation present's
-// eglSwapBuffers attaches a real buffer again and remaps the subsurface.
+// Unmap the shared Servo subsurface for an empty tab via attach(NULL)+commit: a
+// parked-but-mapped subsurface throttles the toplevel frame callback and freezes
+// chrome animations (§0d). Keeps the wl_surface/Qt state intact (unlike hide()),
+// so the next activation present remaps it.
 static void unmap_shared_servo_subsurface(char const* trace_marker)
 {
     if (direct_wl_commit_disabled())
@@ -829,13 +777,11 @@ WebContentView::WebContentView(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
-    // No child placeholder widget. Empty new tabs and crash states are painted
-    // directly by this widget; real pages are handed to Servo on first navigation.
+    // Empty new tabs and crash states are painted directly by this widget; real
+    // pages are handed to Servo on first navigation.
 
-    // Fallback timer: spins servo.spin_event_loop() at 5 Hz when the tab is visible.
-    // With QtEventLoopWaker installed, Servo background threads (paint, font, layout)
-    // wake the Qt event loop immediately via QCoreApplication::postEvent(). This timer
-    // is kept only as a safety net in case a wake event is dropped or coalesced.
+    // Fallback tick timer: a safety net in case a Servo wake event is dropped or
+    // coalesced (QtEventLoopWaker normally wakes the loop immediately).
     m_engine_tick_timer->setInterval(200);
     m_engine_tick_timer->setSingleShot(false);
     connect(m_engine_tick_timer, &QTimer::timeout, this, [this] {
@@ -942,10 +888,9 @@ void WebContentView::setInternalPageActive(bool active)
     m_internal_page_active = active;
     if (!active)
         return;
-    // Release ownership of the shared surface (if we hold it), park the
-    // container off-screen, and unmap the subsurface — the same teardown an
-    // empty tab does on activation. The native internal page widget then owns
-    // the page-column area visually.
+    // Release the shared surface, park the container, and unmap the subsurface
+    // (same teardown as an empty tab) so the native internal page widget owns the
+    // page-column area.
     m_engine_tick_timer->stop();
     if (m_wayland_container && g_wayland_owner() == this) {
         g_wayland_owner() = nullptr;
@@ -972,9 +917,8 @@ bool WebContentView::waylandRendererRequested() const
     return mode == RendererMode::Auto || mode == RendererMode::WaylandWindow;
 }
 
-// Returns true only when this view's Tab is the QStackedWidget's current widget.
-// Unlike isVisible(), this queries tab-controller state directly and is reliable
-// during Qt show/hide transitions that occur inside tab switches.
+// True when this view's Tab is the stack's current widget; reliable during the
+// show/hide transitions of a tab switch (unlike isVisible()).
 bool WebContentView::isCurrentlyActiveTab() const
 {
     if (!m_tab)
@@ -1006,14 +950,9 @@ bool WebContentView::attachSharedWaylandWindow()
         return false;
     if (!g_wayland_window()) {
         g_wayland_window() = new ServoWaylandContentWindow(this);
-        // Parent the container to the page-column widget (parent of the
-        // QStackedWidget, grandparent of Tab) so it is never affected by the
-        // QStackedWidget hiding/showing Tab pages during tab switches.  The
-        // QStackedWidget's hide/show cycle for child pages maps/unmaps the
-        // wl_subsurface if the container is a child of m_stack, causing
-        // eglSwapBuffers to block indefinitely on the freshly-remapped surface.
-        // The page-column widget (m_page_column inside TabWidget) is stable for
-        // the lifetime of the browser window and is never hidden.
+        // Parent the container to the stable page-column widget, not the
+        // QStackedWidget: the stack's per-page hide/show would map/unmap the
+        // wl_subsurface and block eglSwapBuffers on remap (§0d).
         QWidget* stack = (m_tab && m_tab->parentWidget()) ? m_tab->parentWidget() : nullptr;
         QWidget* stable_parent = (stack && stack->parentWidget()) ? stack->parentWidget() : (stack ? stack : this);
         debug_log("wayland_container_created", m_tab_id,
@@ -1036,10 +975,8 @@ bool WebContentView::attachSharedWaylandWindow()
         return false;
 
     if (g_wayland_owner() != this) {
-        // Only the currently-active tab may claim the shared Wayland container.
-        // startEngineIfNeeded() defers engine creation for background tabs, so
-        // reaching this path from a non-active tab indicates an unexpected code
-        // path — fail loudly rather than silently corrupting the active tab.
+        // Only the active tab may claim the shared container; reaching here from a
+        // background tab is a bug, so fail loudly rather than corrupt the active tab.
         if (!isCurrentlyActiveTab()) {
             qWarning().nospace()
                 << "SERVOQ_WARN attachSharedWaylandWindow from non-active tab " << m_tab_id
@@ -1076,14 +1013,9 @@ bool WebContentView::attachSharedWaylandWindow()
         // Do NOT call setParent() — the container lives under the stable
         // page-column widget for the app lifetime. Just reposition it.
         updateContainerGeometry();
-        // The container move above becomes wl_subsurface.set_position — PARENT
-        // surface state that the compositor only applies on the next toplevel
-        // commit. This claim path is also reached from startEngineIfNeeded()
-        // when a (formerly empty) tab navigates, where nothing else repaints
-        // the chrome: without forcing a commit here, Servo presents at full
-        // rate into a subsurface still parked off-screen and the page does not
-        // appear for seconds (proven via WAYLAND_DEBUG: set_position with no
-        // parent wl_surface.commit until an incidental chrome repaint).
+        // The move above is parent-surface state; force a toplevel commit or a
+        // newly-navigated tab presents into a still-parked subsurface and the page
+        // doesn't appear for seconds (§0d).
         if (m_wayland_container) {
             if (auto* toplevel = m_wayland_container->window())
                 toplevel->update();
@@ -1330,14 +1262,9 @@ void WebContentView::requestWaylandRepaint(PresentRequestReason reason)
         maybe_log_qt_perf();
         return;
     }
-    // Duty-cycle cap for ordinary repeated frame traffic (FrameReady/Retry)
-    // only. Stamped at present COMPLETION; a slow (compositor-blocked) present
-    // stretches the required idle gap to its own duration so blocking swaps
-    // can't saturate the main thread (the post-tab-switch freeze). Deferred
-    // requests are never dropped — one coalesced, owner-generation-bound retry
-    // re-runs every guard above. Activation/Expose/Resize bypass the cap:
-    // they are the first visible paint of a new owner/geometry and must not
-    // queue behind frame throttling. See docs/DEVIATIONS.md.
+    // Duty-cycle cap for repeated frame traffic only (a slow present stretches the
+    // idle gap so blocking swaps can't saturate the main thread); deferred requests
+    // retry, and Activation/Expose/Resize bypass the cap (docs/DEVIATIONS.md §0).
     if (reason == PresentRequestReason::FrameReady || reason == PresentRequestReason::Retry) {
         constexpr qint64 kMaxAdaptivePresentIntervalMs = 250;
         qint64 const interval = qMax(min_present_interval_ms(),
@@ -1408,11 +1335,9 @@ bool WebContentView::startEngineIfNeeded()
     if (m_empty_new_tab)
         return false;
 
-    // On Wayland, a background tab must not create a WebView that targets the
-    // shared wl_surface — doing so corrupts the active tab's rendering context.
-    // Return true (not false) so Tab::navigate() skips its load_url call; the
-    // URL is already in m_initial_url and will be passed to create_webview when
-    // this tab becomes active and showEvent retries startEngineIfNeeded().
+    // A background tab must not create a WebView on the shared wl_surface (it
+    // corrupts the active tab). Return true so navigate() skips load_url; the URL
+    // waits in m_initial_url until this tab activates.
     if (QGuiApplication::platformName() == QStringLiteral("wayland")
         && waylandRendererRequested()
         && !isCurrentlyActiveTab()) {
@@ -1495,11 +1420,8 @@ void WebContentView::forwardResizeToEngine()
         update();
 }
 
-// paintEvent — mirrors Ladybird WebContentView::paintEvent (vendor line 676-708).
-// Use Qt's idiomatic HiDPI path: set devicePixelRatio on the image so Qt maps
-// physical-pixel image dimensions to the widget's logical rect automatically.
-// This avoids the painter.scale(1/dpr) trick which breaks when DPR changes
-// between frame delivery and the repaint.
+// Set devicePixelRatio on the image so Qt maps physical pixels to the widget's
+// logical rect (avoids a painter.scale trick that breaks on DPR changes).
 void WebContentView::paintEvent(QPaintEvent*)
 {
     if (m_wayland_renderer_active)
@@ -1539,11 +1461,8 @@ void WebContentView::paintEvent(QPaintEvent*)
 void WebContentView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    // Keep container in sync when the browser window is resized. Guard on
-    // ownership: inactive tabs don't own the container. Do NOT put this in
-    // forwardResizeToEngine() — that function is also called from
-    // ServoWaylandContentWindow::resizeEvent (triggered by container park/unpark),
-    // which would immediately un-park a just-parked container.
+    // Resync the container on window resize (owner-guarded). Not in
+    // forwardResizeToEngine(): that also runs on park/unpark and would un-park.
     if (m_wayland_container && g_wayland_owner() == this)
         updateContainerGeometry();
     forwardResizeToEngine();
@@ -1603,15 +1522,9 @@ void WebContentView::takeFocusFromContentClick()
         if (focus_widget != this && focus_widget != m_wayland_container)
             focus_widget->clearFocus();
     }
-    // Keep Qt keyboard focus on the WebContentView widget. Do NOT move it to
-    // m_wayland_container: the QWindowContainer wrapping the native Wayland
-    // subsurface is a keyboard dead-end here — on Wayland the embedded QWindow
-    // cannot be activated, so the container neither handles key events nor
-    // forwards focus to it. Focusing it caused every page keystroke to land on
-    // the container, go unhandled, bubble up to QMainWindow, and be dropped
-    // (proven via SERVOQ_DIAG: forward_key fired 0 times for page input).
-    // With focus on the widget, keys flow through a single path:
-    // WebContentView::event() -> keyPressEvent() -> servoq::forward_key().
+    // Keep Qt keyboard focus on this widget, not m_wayland_container: that
+    // container is a keyboard dead-end on Wayland and swallows page keystrokes
+    // (docs/DEVIATIONS.md §1).
     setFocus(Qt::MouseFocusReason);
     if (!g_servo_shutting_down().load(std::memory_order_acquire))
         servoq::forward_focus(m_tab_id, true);
@@ -1772,12 +1685,8 @@ void WebContentView::keyReleaseEvent(QKeyEvent* event)
                         static_cast<uint32_t>(event->modifiers()));
 }
 
-// showEvent / hideEvent — mirrors Ladybird (vendor lines 774-783).
-//
-// IMPORTANT: showEvent and hideEvent must NOT touch the shared Wayland container,
-// g_wayland_owner, or m_wayland_window.  Container ownership is managed exclusively
-// by TabWidget::activateTab, which runs deferred via QTimer::singleShot(0) from
-// BrowserWindow::onCurrentChanged.  See onBecomeActiveTab / onBecomeInactiveTab.
+// showEvent/hideEvent must NOT touch the shared Wayland container or ownership —
+// that's managed solely by the deferred onBecomeActiveTab/onBecomeInactiveTab.
 void WebContentView::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
@@ -1806,11 +1715,8 @@ void WebContentView::hideEvent(QHideEvent* event)
         servoq::set_webview_active(m_tab_id, false);
 }
 
-// ── Activation transaction ──────────────────────────────────────────────────
-// Called by TabWidget::activateTab (always deferred via QTimer::singleShot).
-// These are the only paths that change g_wayland_owner or reposition/show the
-// shared Wayland container during normal tab switching.
-
+// Activation transaction (deferred from TabWidget::activateTab): the only paths
+// that change g_wayland_owner or move/show the shared container on a tab switch.
 void WebContentView::onBecomeInactiveTab()
 {
     NewTabTraceScope trace_scope("WCV_onBecomeInactiveTab", m_tab_id);
@@ -1841,18 +1747,14 @@ void WebContentView::onBecomeInactiveTab()
         // never arrives, freezing the Qt main thread. See park_shared_wayland_container.
         park_shared_wayland_container();
     }
-    // m_wayland_renderer_active is intentionally NOT cleared. The Servo WebView
-    // stays ready to paint; only the container ownership transfers. Clearing
-    // it would force startWaylandRendererIfPossible (and create_webview_wayland_window)
-    // to run on every return-to-tab, which is both wasteful and causes the
-    // container to be shown fresh (triggering the remap/eglSwapBuffers race).
+    // Leave m_wayland_renderer_active set: only ownership transfers. Clearing it
+    // would re-run renderer setup on every return-to-tab and re-trigger the
+    // remap/eglSwapBuffers race (§0d).
 }
 
 void WebContentView::onBecomeActiveTab()
 {
-    // Coalescing guard: the deferred activation serial in BrowserWindow prevents
-    // most stale calls, but a second check here ensures correctness even if
-    // activateTab is called through other paths in the future.
+    // Guard against a stale deferred activation.
     if (!isCurrentlyActiveTab()) {
         debug_log("become_active_tab_stale_dropped", m_tab_id,
             QStringLiteral("stack_current=%1")
@@ -1865,10 +1767,8 @@ void WebContentView::onBecomeActiveTab()
         return;
     }
 
-    // Internal page (servoq://) is showing: keep the shared Servo surface
-    // released and unmapped so the native Qt page stays visible. Do not attach
-    // or present, regardless of whether this tab's webview was previously
-    // created. Cleared by setInternalPageActive(false) on navigation away.
+    // Internal page (servoq://) showing: keep the Servo surface released/unmapped
+    // so the native Qt page stays visible; don't attach or present.
     if (m_internal_page_active) {
         setInternalPageActive(true);
         debug_log("become_active_tab_internal_page", m_tab_id);
@@ -1921,11 +1821,9 @@ void WebContentView::onBecomeActiveTab()
                 m_wayland_window->create();
             }
         }
-        // Subsurface position/stacking is PARENT surface state on Wayland: the
-        // compositor only applies it (and resumes latching/releasing Servo's
-        // buffers) once the toplevel commits. The toplevel repaint MUST be
-        // queued before the first present — a present racing ahead of the
-        // commit can block on a buffer release only that commit unlocks.
+        // Queue the toplevel repaint before the first present: subsurface state is
+        // parent state, and a present racing ahead of the commit can block on a
+        // buffer release only that commit unlocks (§0d).
         {
             NewTabTraceScope scope("toplevel_update", m_tab_id);
             if (auto* toplevel = m_wayland_container->window())
@@ -1954,10 +1852,8 @@ void WebContentView::onBecomeActiveTab()
         if (g_wayland_window())
             g_wayland_window()->setOwner(nullptr);
         park_shared_wayland_container();
-        // While the empty tab is active nothing presents, so nothing pulses
-        // the compositor: a mapped parked subsurface then degrades toplevel
-        // frame-callback delivery and freezes chrome animations. Unmap it —
-        // empty tabs need no Servo surface at all (see helper for details).
+        // Empty tab presents nothing, so a parked-but-mapped subsurface freezes
+        // chrome animations; unmap it (see helper, §0d).
         unmap_shared_servo_subsurface("empty_tab_servo_subsurface_unmapped");
         debug_log("become_active_tab_container_parked", m_tab_id, QStringLiteral(""));
     } else if (m_webview_created && !m_wayland_renderer_active) {
@@ -2047,11 +1943,8 @@ bool WebContentView::event(QEvent* ev)
 
 } // namespace ServoQ
 
-// ────────────────────────────────────────────────────────────────────────────
-// servoq::* callback implementations
-// Declared in servo_callbacks.h; called from Rust via the CXX bridge.
-// They use g_view_registry() defined in this same translation unit.
-// ────────────────────────────────────────────────────────────────────────────
+// servoq::* callback implementations (declared in servo_callbacks.h, called from
+// Rust via the CXX bridge); they use g_view_registry() in this TU.
 
 namespace servoq {
 
@@ -2090,10 +1983,8 @@ void deliver_frame(::std::int32_t tab_id,
         debug_log("ignored_frame_missing_view", tab_id);
         return;
     }
-    // C1: skip frames for hidden tabs. Servo shares one event loop across all
-    // tabs; set_throttled(true) is advisory and may not take effect immediately.
-    // Without this guard a tab that was hidden still delivers frames, wasting
-    // CPU and potentially racing with the visible tab's render state.
+    // Skip frames for hidden tabs: set_throttled is only advisory, so without this
+    // a hidden tab still delivers frames and can race the visible tab's render.
     if (!view->isVisible()) {
         debug_log("skipped_frame_hidden_view", tab_id);
         return;
@@ -2245,10 +2136,8 @@ void request_wayland_window_repaint(::std::int32_t tab_id)
         view->requestWaylandRepaint(ServoQ::WebContentView::PresentRequestReason::FrameReady);
 }
 
-// Called from Rust's QtEventLoopWaker::wake() from Servo background threads.
-// Posts a custom event to qApp; BrowserWindow::eventFilter intercepts it and
-// calls tick_servo() to spin Servo's event loop on the Qt main thread.
-// QCoreApplication::postEvent() is documented as thread-safe.
+// Called from Servo background threads (QtEventLoopWaker::wake): posts a thread-safe
+// event that BrowserWindow::eventFilter turns into a tick on the main thread.
 void servoq_wake_event_loop()
 {
     if (servo_shutdown_started())
@@ -2430,10 +2319,8 @@ void request_open_tab_for_id(::std::int32_t tab_id)
     return action_map[selected];
 }
 
-// window.screen.* backing data, all in device pixels. Servo converts to CSS
-// pixels with the webview's pixel scaling. On Wayland the compositor does not
-// expose global window positions, so window_x/window_y are whatever Qt
-// reports (typically 0,0) — the same limitation every Wayland browser has.
+// window.screen.* backing data in device pixels. On Wayland the compositor hides
+// global window positions, so window_x/window_y are whatever Qt reports (~0,0).
 ScreenGeometryResult get_screen_geometry(::std::int32_t tab_id)
 {
     ScreenGeometryResult result;

@@ -30,10 +30,8 @@ namespace ServoQ {
 class Tab;
 class ServoWaylandContentWindow;
 
-// Debug tooling (M3.7): evaluate JavaScript in a tab's page context. The
-// callback runs on the main thread with (success, result_text) — JSON on
-// success, an error description otherwise. Implemented in WebContentView.cpp
-// next to the servoq::notify_javascript_result router.
+// Evaluate JS in a tab's page context; callback runs on the main thread with
+// (success, result_text) — JSON on success, else an error description.
 void evaluate_javascript_in_tab(int tab_id, QString const& script,
     std::function<void(bool, QString const&)> callback);
 
@@ -59,10 +57,8 @@ public:
     void setEmptyNewTab(bool empty_new_tab);
     bool ensureEngineStarted();
 
-    // Internal-page mode (servoq:// pages, M4.4): when active, this view's tab
-    // is showing a native Qt internal page instead of web content, so the
-    // shared Servo Wayland surface is released/unmapped and never re-attached
-    // while the flag is set. Cleared when navigating back to a web URL.
+    // Internal-page mode (servoq:// pages): while active, the tab shows a native
+    // Qt page and the shared Servo surface stays released/unmapped.
     void setInternalPageActive(bool active);
     bool internalPageActive() const { return m_internal_page_active; }
 
@@ -170,11 +166,9 @@ private:
     bool m_wayland_present_pending { false };
     bool m_wayland_present_in_progress { false };
     bool m_wayland_dirty_after_present { false };
-    // Present duty-cycle cap (vsync is disabled at the swap, so presents are
-    // self-paced). Stamped at present COMPLETION; a slow (compositor-blocked)
-    // present stretches the admission gap to its own duration, bounding presents
-    // to ~50% of main-thread time. Reset on owner handoff. See
-    // docs/DEVIATIONS.md "Qt/Wayland shared Servo surface activation".
+    // Present duty-cycle cap (presents are self-paced; vsync is off at the swap):
+    // a slow present stretches the admission gap, bounding presents to ~50% of
+    // main-thread time (docs/DEVIATIONS.md §0d).
     qint64 m_last_present_request_ms { -1000 };
     qint64 m_last_present_duration_ms { 0 };
     bool m_present_throttle_scheduled { false };

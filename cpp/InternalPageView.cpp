@@ -57,11 +57,8 @@ namespace ServoQ {
 
 namespace {
 
-// Normalize a configured homepage / new-tab URL the same way the old Home & New
-// Tab dialog did: blank stays about:blank, otherwise run it through the address
-// bar's sanitizer (so "example.com" becomes "https://example.com/"). Falls back
-// to the raw trimmed text if it can't be made into a URL, so the field is never
-// silently emptied.
+// Normalize a configured homepage/new-tab URL: blank stays about:blank, else run
+// it through the address-bar sanitizer, falling back to the raw trimmed text.
 QString normalize_configured_url(QString const& raw)
 {
     auto trimmed = raw.trimmed();
@@ -463,11 +460,9 @@ void InternalPageView::startPdfDownload(QString const& source_url)
         return;
     }
 
-    // Share the page's live session with this out-of-engine fetch: Servo
-    // computes the cookies (session + HttpOnly) it would attach for this URL,
-    // and we load them into a cookie jar so authenticated PDFs download as the
-    // page would have. Using a jar (not a raw Cookie header) lets Qt match by
-    // domain and recompute on redirect, so cookies never leak cross-origin.
+    // Share the page's session with this fetch via a cookie jar (not a raw header)
+    // so Qt matches by domain and recomputes on redirect — cookies never leak
+    // cross-origin, and authenticated PDFs download as the page would.
     QUrl const request_url(source_url);
     auto cookies = parse_pdf_cookies(QString::fromStdString(std::string(servoq::cookies_for_url(source_url.toStdString()))), request_url);
     if (!cookies.isEmpty()) {
@@ -513,11 +508,8 @@ void InternalPageView::finishPdfDownload(QNetworkReply* reply)
         return;
     }
 
-    // Accept anything that is actually a PDF. Many servers send a valid PDF as
-    // application/octet-stream (or with no/garbled Content-Type), so trust the
-    // file's magic bytes ("%PDF-") over the header, and only reject when the
-    // header clearly says non-PDF AND the bytes don't look like one. A file
-    // that still isn't a real PDF is caught by QPdfDocument::load below.
+    // Trust the magic bytes ("%PDF-") over Content-Type (servers often send a PDF
+    // as octet-stream); reject only when both the header and bytes say non-PDF.
     m_pdf_temp_file->seek(0);
     auto const header = m_pdf_temp_file->read(5);
     auto const content_type = reply->header(QNetworkRequest::ContentTypeHeader).toString();

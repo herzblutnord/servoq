@@ -31,10 +31,8 @@ class QVBoxLayout;
 
 namespace ServoQ {
 
-// Process-wide ring buffer of page console messages, fed by
-// servoq::notify_console_message while a debug page is open. Capture is
-// reference-counted: the engine only forwards messages while at least one
-// debug page is consuming them.
+// Process-wide ring buffer of page console messages. Capture is ref-counted: the
+// engine forwards messages only while a debug page is consuming them.
 class ConsoleLog final : public QObject {
     Q_OBJECT
 public:

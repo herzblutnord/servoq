@@ -6,13 +6,9 @@
 
 namespace ServoQ {
 
-// Per-origin web permission decisions (permissions.json), modeled on the
-// content-settings exceptions Chrome keeps in its profile Preferences file:
-// an explicit Allow or Block from the permission prompt is remembered for
-// that origin permanently; dismissing the prompt decides once and stores
-// nothing. Keyed by (origin, feature), e.g. ("https://example.com",
-// "notifications"). Saves are synchronous — decisions are rare, explicit
-// user actions, not navigation-event traffic (see docs/STORAGE.md rules).
+// Per-origin permission decisions (permissions.json), keyed by (origin, feature).
+// An explicit Allow/Block is remembered permanently; dismissing stores nothing.
+// Saves are synchronous (rare, explicit actions — see docs/STORAGE.md).
 class PermissionStore {
 public:
     static PermissionStore* the();

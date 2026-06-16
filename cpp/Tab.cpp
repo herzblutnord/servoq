@@ -114,12 +114,9 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     buildToolbar();
 
     m_find_in_page->hide();
-    // Content area is a stack: the Servo WebContentView (index 0) and, lazily,
-    // a native internal-page view for servoq:// pages (M4.4). The WebContentView
-    // stays parented through this stack inside the Tab; the shared Wayland
-    // subsurface is parented to the page-column widget (not this stack), so
-    // switching the stack never maps/unmaps that surface — only
-    // WebContentView::setInternalPageActive does.
+    // Content stack: WebContentView (index 0) and, lazily, a native view for
+    // servoq:// pages. The shared Wayland subsurface is parented to the page-column
+    // widget, not this stack, so switching the stack never maps/unmaps it.
     m_content_stack = new QStackedWidget(this);
     m_content_stack->addWidget(m_view);
     tab_layout->addWidget(m_toolbar_container);
@@ -148,14 +145,8 @@ Tab::Tab(BrowserWindow* window, int controller_id)
 
     applyControllerState();
 
-    // Stylesheets applied before the window's first polish (the initial tab's
-    // chrome is built inside the BrowserWindow constructor, pre-show) leave
-    // QToolBarLayout margins/spacing and QSS contents margins on base-style
-    // values, while tabs created later resolve the QSS box — so each tab's
-    // chrome laid out 1-4px differently and the UI visibly shifted on every
-    // tab switch. Re-assert the chrome stylesheets once the event loop (and
-    // therefore the first polish) has run so every tab settles on identical
-    // metrics. Cheap one-time repolish of this tab's chrome only.
+    // Re-assert chrome stylesheets after the first polish so every tab settles on
+    // identical metrics; otherwise pre-show tabs shift 1-4px vs later tabs (§0f).
     QTimer::singleShot(0, this, [this] {
         auto container_sheet = m_toolbar_container->styleSheet();
         m_toolbar_container->setStyleSheet(QString());
@@ -214,10 +205,8 @@ void Tab::setActive(bool active)
 
 void Tab::showInternalPage(QString const& url)
 {
-    // Already showing this exact internal page: do nothing. Re-running the
-    // body would recompute previous_url from m_url (now itself a servoq:// URL)
-    // and wrongly reset m_internal_page_can_return_to_web, silently dropping the
-    // PDF viewer's Back-to-source behavior. (Reload uses showUrl() directly.)
+    // Already on this exact internal page: re-running would reset the PDF viewer's
+    // Back-to-source state. (Reload uses showUrl() directly.)
     if (m_is_internal_page && m_url == url)
         return;
 
@@ -297,12 +286,9 @@ void Tab::returnToWebContentFromInternalPage()
     if (!m_is_internal_page || !m_internal_page_can_return_to_web)
         return;
 
-    // A PDF reached via a link click commits in Servo as a real top-level
-    // history entry (routed from notify_url_changed), so the webview is sitting
-    // on the PDF URL — leaving the viewer means a real go_back to the source
-    // page. A PDF reached by typing/Open File never navigated Servo (handled in
-    // Tab::navigate), so the webview still shows the source page and we just
-    // re-show it. Distinguish by whether the webview committed the PDF URL.
+    // A link-clicked PDF committed in Servo as a real history entry, so leaving the
+    // viewer is a real go_back; a typed/Open File PDF never navigated Servo, so just
+    // re-show the source page. Distinguish by whether the webview committed the URL.
     bool const webview_committed_pdf = !m_pdf_display_url.isEmpty()
         && QString::fromStdString(std::string(servoq::current_url(m_controller_id))) == m_pdf_display_url
         && servoq::can_go_back(m_controller_id);
@@ -599,11 +585,9 @@ void Tab::applyControllerState()
     // history store to disk twice per tab switch and filled it with duplicates.
     on_url_change(url, /* record_visit */ false);
     on_title_change(title, /* record_visit */ false);
-    // No set_loading() here: like Ladybird, the tab spinner is driven only by
-    // load events (on_load_start/on_load_finish). The controller's cached
-    // loading flag stays true whenever Servo never reports LoadStatus::Complete,
-    // so re-deriving it on every tab switch replaced the favicon with a spinner
-    // that never stopped.
+    // No set_loading() here: the spinner is driven only by load events. The cached
+    // loading flag can stay true forever, so re-deriving it on tab switch would
+    // leave a spinner that never stops.
     auto status = QString::fromStdString(std::string(servoq::status_text(m_controller_id)));
     setStatusText(status);
     m_back_action->setEnabled(servoq::can_go_back(m_controller_id));

@@ -154,20 +154,9 @@ int run_qt_application()
         servoq::begin_servo_shutdown();
     });
 
-    // Phase 0 fix (Hypothesis A): initialize Servo at application startup,
-    // before the main window is shown and before Qt delivers any
-    // show/resize/paint events to WebContentView widgets.
-    //
-    // Previously Servo was initialized lazily in WebContentView::showEvent(),
-    // which fires during window.show(). At that point Qt is already dispatching
-    // events concurrently with Servo's internal thread-pool and font-system
-    // startup. If a layout request reaches the font cache before it is fully
-    // populated, it can return a stale FontRef whose high bits contain codepoint
-    // data — exactly the 0x300e.../0x30d2... pattern seen in the SIGSEGV dumps.
-    //
-    // Calling init_servo() here gives Servo's constellation, layout, and font
-    // subsystems time to fully initialize before any web content or font
-    // shaping is requested.
+    // Initialize Servo eagerly here, before window.show() and any Qt
+    // show/resize/paint, to avoid the lazy-init font-cache crash
+    // (docs/DEVIATIONS.md §0o).
     servoq::init_servo();
 
     ServoQ::BrowserWindow window;

@@ -12,14 +12,9 @@
  *     load_fallback_favicon_if_needed)
  *   Libraries/LibGfx/ImageFormats/ICOLoader.cpp (find_largest_image)
  */
-// Favicon.cpp
-//
-// Mirrors Ladybird's favicon pipeline on top of Qt: collect every
-// <link rel="icon"> candidate from the page head (tree order), fall back to
-// /favicon.ico when there are none, decode each candidate — picking the
-// highest-resolution frame inside multi-image .ico files — and apply the
-// candidate with the largest pixel area (ties go to the last one declared in
-// tree order, matching Document::check_favicon_after_loading_link_resource).
+// Favicon pipeline: collect <link rel="icon"> candidates (tree order), fall back
+// to /favicon.ico, decode each (largest frame in multi-image .ico), and apply the
+// one with the largest pixel area (ties go to the last declared).
 
 #include "Favicon.h"
 #include "FaviconStore.h"
@@ -122,10 +117,8 @@ QString detect_favicon_format(QUrl const& favicon_url, QString const& content_ty
     return QStringLiteral("unknown");
 }
 
-// Port of find_largest_image() from Ladybird's ICOLoader.cpp: .ico files bundle
-// several resolutions and Qt's QImageReader returns only the first directory
-// entry by default. Pick the frame with the largest pixel area, tiebreaking on
-// bits per pixel.
+// .ico files bundle several resolutions but QImageReader returns only the first;
+// pick the frame with the largest pixel area, tiebreaking on bits per pixel.
 QImage read_largest_frame(QImageReader& reader)
 {
     auto format = reader.format();
@@ -230,10 +223,8 @@ QString extract_html_attr(QString const& tag, QString const& attr)
 // /favicon.ico (load_fallback_favicon_if_needed).
 QList<QUrl> favicon_candidates_from_html(QUrl const& page_url, QByteArray const& html)
 {
-    // Favicons are declared in <head>. Converting and running a global regex over
-    // the *entire* document (which can be several MB) on the main thread caused a
-    // brief UI stall at load-finish. Bound the work to the head: cut at </head>
-    // (or <body>), and otherwise cap at 64 KB — favicon <link>s sit at the top.
+    // Favicons live in <head>; regexing the whole (multi-MB) document stalled the
+    // UI at load-finish, so bound the work to </head>/<body>, capped at 64 KB.
     QByteArray head = html;
     int head_end = head.indexOf("</head>");
     if (head_end < 0)

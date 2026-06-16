@@ -10,16 +10,10 @@
  *   UI/Qt/Tab.cpp (on_request_alert/confirm/prompt, color picker, file picker)
  *   UI/Qt/WebContentView.cpp (select dropdown)
  */
-// WebDialogs.cpp
-//
-// Modal Qt dialogs and menus for web form controls and script dialogs
-// (alert/confirm/prompt, <select>, <input type=color>, <input type=file>),
-// plus window.close() handling. Called synchronously from Servo's
-// show_embedder_control delegate via the CXX bridge, following the
-// show_context_menu_sync pattern: the SPINNING guard in servo_engine.rs makes
-// the nested Qt event loop of exec() safe, and Servo's script thread is
-// blocked awaiting the response — which matches the spec semantics of these
-// dialogs.
+// Modal Qt dialogs/menus for web form controls and script dialogs (alert/confirm/
+// prompt, <select>, color, file) plus window.close(). Called synchronously from
+// Servo via the CXX bridge; the SPINNING guard (servo_engine.rs) makes exec()'s
+// nested event loop safe while Servo's script thread blocks for the response.
 
 #include "BrowserWindow.h"
 #include "PermissionStore.h"

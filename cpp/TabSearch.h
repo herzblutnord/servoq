@@ -12,10 +12,8 @@ class BrowserWindow;
 class Tab;
 class TabWidget;
 
-// Chrome-style tab search (Ctrl+Shift+A): a popup listing all open tabs with
-// favicon/title/URL, filtered as you type. Enter or click switches to the
-// tab; each row has a close button. Implemented as a Qt::Popup window so it
-// renders above the native Servo subsurface and auto-closes on outside click.
+// Chrome-style tab search (Ctrl+Shift+A): a filtered popup of open tabs. A
+// Qt::Popup window so it renders above the native Servo subsurface.
 class TabSearchPopup final : public QWidget {
 public:
     TabSearchPopup(BrowserWindow* window, TabWidget* tabs);

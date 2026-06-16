@@ -545,13 +545,8 @@ void TabBar::paintEvent(QPaintEvent*)
 void TabBar::showEvent(QShowEvent* event)
 {
     QTabBar::showEvent(event);
-    // Close-button visibility computed during construction (before the window's
-    // first polish/layout) does not stick: QTabBar lays out and shows the
-    // default per-tab close buttons on its first post-show layout, leaving a
-    // stray ✕ on the initial single empty tab — which makes it look hovered —
-    // until the first real hover's leaveEvent re-runs the update. Re-assert
-    // after the event loop has run (post first show/polish), mirroring the
-    // chrome-style re-assertion in Tab.cpp (DEVIATIONS §0f).
+    // Re-assert close-button visibility after the first post-show layout, or
+    // QTabBar leaves a stray ✕ on the initial tab (docs/DEVIATIONS.md §0f).
     QTimer::singleShot(0, this, [this] { updateTabButtonGeometry(); });
 }
 
@@ -563,10 +558,8 @@ void TabBar::leaveEvent(QEvent* event)
 
 void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    // Use tabIndexAt() instead of tabAt() so hit-testing is consistent with
-    // mousePressEvent in vertical mode. Qt's internal tabAt() uses QTabBar's own
-    // rect calculations which don't match our custom vertical layout; returning -1
-    // for a position that visually lands on a tab causes new-tab creation on double-click.
+    // tabIndexAt(), not Qt's tabAt(): the latter's rects don't match our vertical
+    // layout and its spurious -1 would create a new tab on double-click.
     if (event->button() == Qt::LeftButton && tabIndexAt(event->pos()) == -1) {
         if (m_tab_widget && m_tab_widget->onNewTabRequested) {
             m_tab_widget->onNewTabRequested();
@@ -578,13 +571,9 @@ void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TabBar::mousePressEvent(QMouseEvent* event)
 {
-    // Middle-click closes a tab. We must NOT close on press: emitting the close
-    // here mutated the tab bar mid-interaction — the deferred close shifted the
-    // next tab under the cursor and a second close fired against the now-stale
-    // index, closing two tabs. Instead, on press we only *capture* the target by
-    // stable identity (QPointer<Tab>, survives reordering and index shifts) and
-    // swallow the event (no base-class handling). The actual close happens once,
-    // on release. (See mouseReleaseEvent.)
+    // Middle-click close: only capture the target by stable identity here, don't
+    // close — closing on press mutated the bar and closed two tabs (§5a). The
+    // close happens once, on release.
     if (event->button() == Qt::MiddleButton) {
         int index = tabIndexAt(event->pos());
         auto* target = (index >= 0 && m_tab_widget) ? m_tab_widget->tab(index) : nullptr;
@@ -606,14 +595,9 @@ void TabBar::mousePressEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton) {
         m_pressed_tab_index = tabIndexAt(event->pos());
         m_drag_start_position = event->pos();
-        // Activate via our vertical-layout-aware hit test instead of relying on
-        // QTabBar::mousePressEvent's internal tabAt(). That internal hit test
-        // returns -1 for valid positions right after the hover-expand popup is
-        // reparented (stale internal tab geometry) and silently ignores the
-        // click — the proven cause of the ~1 s post-switch tab-bar freeze.
-        // Our tabIndexAt() stays correct across the reparent, so drive the
-        // activation from it. Idempotent: skipped when the tab is already current,
-        // and drag-to-reorder is unaffected (handled in mouseMoveEvent).
+        // Drive activation from our tabIndexAt(): Qt's internal tabAt() returns -1
+        // right after the hover-expand reparent and drops the click — the cause of
+        // the post-switch tab-bar freeze (§2).
         if (m_pressed_tab_index >= 0 && m_pressed_tab_index != currentIndex())
             setCurrentIndex(m_pressed_tab_index);
         if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
@@ -642,12 +626,8 @@ void TabBar::mouseMoveEvent(QMouseEvent* event)
 
 void TabBar::mouseReleaseEvent(QMouseEvent* event)
 {
-    // Middle-click close, completed here so the bar is only mutated once the
-    // mouse interaction is over. Resolve the captured identity back to its
-    // current index and emit the same tabCloseRequested signal the close button
-    // uses (BrowserWindow defers the real close via QTimer::singleShot — no
-    // synchronous widget deletion / removeTab from this handler). The target is
-    // cleared *before* emitting so any re-entrant event cannot close twice.
+    // Complete the middle-click close here: resolve the captured tab to its index
+    // and emit tabCloseRequested (cleared before emitting so it can't fire twice).
     if (event->button() == Qt::MiddleButton) {
         QPointer<Tab> target = m_middle_close_target;
         m_middle_close_target = nullptr;
@@ -701,12 +681,9 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     if (!tab)
         return;
 
-    // All lambdas capture QPointer<Tab> so they are no-ops if the tab is
-    // deleted while the menu is open. Use popup() instead of exec() to avoid
-    // starting a blocking nested event loop: exec() causes the Wayland compositor
-    // to stop delivering pointer events to the main window surface after the
-    // popup closes, leaving the tab bar in a "locked" state where clicks are
-    // ignored until something forces a focus re-evaluation.
+    // Lambdas capture QPointer<Tab> (no-op if the tab is deleted while open). Use
+    // popup(), not exec(): exec()'s nested loop makes the Wayland compositor stop
+    // delivering pointer events to the window after the popup closes.
     QPointer<Tab> tab_ptr = tab;
     QPointer<TabWidget> tab_widget_ptr = tab_widget;
 
@@ -1239,10 +1216,8 @@ void TabWidget::removeTab(int index)
     m_stack->removeWidget(widget);
     m_tab_bar->removeTab(index);
     tab->setToolbarContainerInTabLayout(true);
-    // Use deleteLater() instead of delete so the Tab and its children (WebContentView,
-    // toolbars, timers) remain valid for the rest of the current event-delivery chain.
-    // Synchronous delete here can free widgets while Qt's mouse-event dispatch still
-    // holds a raw pointer to one of them, causing a vtable-corruption SIGSEGV.
+    // deleteLater(), not delete: a synchronous delete can free widgets while Qt's
+    // mouse-event dispatch still holds a raw pointer to one (vtable SIGSEGV).
     widget->deleteLater();
     updateTabLayout();
 }
@@ -1464,24 +1439,13 @@ bool TabWidget::cursorIsOverVerticalTabs() const
         return false;
     if (m_vertical_tab_bar_column->underMouse() || m_tab_bar->underMouse() || m_new_tab_button->underMouse())
         return true;
-    // When the tab column is a floating Qt::ToolTip window (hover-expanded), the cursor
-    // is over a separate Wayland surface, so window()->underMouse() is false and the
-    // underMouse() flags above may not have been set yet (the compositor delivers the
-    // wl_pointer.enter asynchronously after show()). Check the global cursor position
-    // against the floating window's rect directly to avoid a spurious collapse that would
-    // cause rapid expand/collapse oscillation and a ~1 s click freeze on the tab bar.
+    // While the tab column is a floating window the cursor is over a separate
+    // wl_surface, so trust the event-driven underMouse() flag instead of the
+    // Wayland-unreliable QCursor::pos(), which would cause expand/collapse
+    // oscillation and a tab-bar click freeze (§3).
     if (m_vertical_tab_bar_column->isWindow()) {
-        // QCursor::pos() is unreliable on Wayland when the cursor is over a separate
-        // wl_surface: it only updates when the compositor delivers wl_pointer.motion
-        // to Qt's main surface, so it lags behind the actual position. Using it here
-        // caused the 250 ms poll timer to see a stale "not over" position and collapse
-        // the panel prematurely, creating a rapid expand/collapse oscillation.
-        //
-        // Instead: trust the event-driven underMouse() flag. It is set by the Enter
-        // event that the floating window receives from the compositor once the cursor
-        // actually enters it. Before the first such Enter is confirmed (tracked by
-        // m_tab_column_floating_entered), assume the cursor is still over the panel —
-        // we just expanded for a hover and the compositor hasn't delivered Enter yet.
+        // Before the floating window's first Enter (m_tab_column_floating_entered),
+        // assume the cursor is still over the panel we just expanded.
         if (!m_tab_column_floating_entered)
             return true;
         return m_vertical_tab_bar_column->underMouse()
@@ -1733,21 +1697,12 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         // saving here lets us put it back cleanly without guessing which widget owned it.
         m_saved_focus_before_hover_expand = QApplication::focusWidget();
 
-        // Reset the "first Enter confirmed" flag. We must not collapse based on
-        // QCursor::pos() or underMouse() until the Wayland compositor has delivered
-        // wl_pointer.enter to the new floating surface — which happens asynchronously
-        // after show(). cursorIsOverVerticalTabs() returns true while this is false.
+        // Until the compositor delivers the first Enter, don't collapse (§3).
         m_tab_column_floating_entered = false;
 
-        // The tab column must be a floating window while hover-expanded so it
-        // paints above the native embedded webview surface, which always renders
-        // above ordinary child widgets regardless of z-order calls.
-        //
-        // Qt::ToolTip (with a parent) maps to xdg_popup on Wayland, which lets
-        // xdg_positioner enforce the exact position.  Qt::Tool maps to
-        // xdg_toplevel, whose position is compositor-controlled and ignored.
-        // Keep the parent as window() so the compositor knows which surface to
-        // anchor against when computing the popup offset.
+        // Float the column as a window so it paints above the native webview
+        // surface. Qt::ToolTip (with parent) maps to xdg_popup, whose position
+        // xdg_positioner can enforce; Qt::Tool's xdg_toplevel position is ignored.
         m_vertical_tab_bar_column->hide();
         m_vertical_tab_bar_column->setParent(window(), Qt::ToolTip | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
         m_vertical_tab_bar_column->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -1761,9 +1716,8 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
     } else {
         m_tab_column_floating_entered = false;
 
-        // setParent(parent, Qt::Widget) resets the window-type flags in one
-        // call so isWindow() returns false and the overlay reverts to a normal
-        // child widget positioned via setGeometry().
+        // setParent(.., Qt::Widget) clears the window flags so the overlay reverts
+        // to a normal child widget.
         m_vertical_tab_bar_column->hide();
         m_vertical_tab_bar_column->setParent(this, Qt::Widget);
         m_vertical_tabs_hover_collapse_timer->stop();
@@ -1782,20 +1736,15 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
             m_saved_focus_before_hover_expand->setFocus(Qt::OtherFocusReason);
             m_saved_focus_before_hover_expand = nullptr;
         }
-        // Queue a toplevel repaint so the collapse reaches the compositor in
-        // one commit, including any pending shared-subsurface state (e.g. a
-        // park from an empty-tab activation that happened while the floating
-        // panel was open).
+        // Queue a toplevel repaint so the collapse (and any pending subsurface
+        // state) reaches the compositor in one commit.
         if (auto* toplevel = window())
             toplevel->update();
         newtab_trace_point("hover_collapse_toplevel_update_queued");
     } else {
-        // Expand path: keep m_hover_expand_in_progress = true until the floating
-        // window receives its first wl_pointer.enter event (handled in eventFilter).
-        // This prevents the 250ms collapse-poll timer from seeing stale QCursor::pos()
-        // data and triggering a spurious collapse before the compositor has notified us.
-        // Safety: clear after 500 ms in case the Enter event never arrives (cursor left
-        // very quickly after the window appeared, before compositor could notify us).
+        // Keep m_hover_expand_in_progress until the floating window's first Enter
+        // so the poll timer doesn't collapse on stale cursor data (§3); clear after
+        // 500 ms as a safety net if Enter never arrives.
         QTimer::singleShot(500, this, [this] {
             if (m_vertical_tabs_hover_expanded)
                 m_hover_expand_in_progress = false;
@@ -1805,10 +1754,8 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
 
 void TabWidget::deferUpdateVerticalTabsHoverExpanded()
 {
-    // Suppress Leave events that fire synchronously during setVerticalTabsHoverExpanded
-    // itself (from hide()/setParent() reparenting). At that moment the floating window
-    // has not been shown/positioned yet, so cursorIsOverVerticalTabs() would see stale
-    // geometry and trigger a spurious collapse → expand → collapse oscillation.
+    // Suppress Leave events fired synchronously by the hide()/setParent() reparent
+    // inside setVerticalTabsHoverExpanded, which would oscillate collapse/expand (§3).
     if (m_hover_expand_in_progress)
         return;
     QTimer::singleShot(0, this, [this]() {
@@ -1882,15 +1829,10 @@ void TabWidget::updateContainerGeometry()
     }
 }
 
-// activateTab is the sole entry point for Wayland container ownership transfers.
-// BrowserWindow calls it from the QTabBar::currentChanged transaction so Qt's
-// stack current page, Servo active tab, and the shared native Wayland owner do
-// not drift across different mouse-event phases.
-//
-// TODO: background tabs on Wayland do not start their engine until activated
-// (deferred in WebContentView::startEngineIfNeeded).  Background tabs appear
-// blank until clicked.  Fix requires either software-renderer fallback or a
-// dedicated off-screen Wayland surface per tab.
+// Sole entry point for Wayland container ownership transfers, so Qt's current
+// page, Servo's active tab, and the shared owner don't drift.
+// TODO: background Wayland tabs defer engine start until activated, so they
+// appear blank until clicked (needs a software fallback or per-tab surface).
 void TabWidget::activateTab(int index)
 {
     if (index < 0 || index >= count()) {
@@ -1921,38 +1863,22 @@ void TabWidget::activateTab(int index)
         auto* t = tab(i);
         if (!t || t == new_tab)
             continue;
-        // Only notify the actual owner. m_wayland_renderer_active is preserved
-        // across inactive state, so checking waylandRendererActivePublic() would
-        // fire for every previously-loaded tab — wasteful and incorrect.
+        // Notify only the actual owner (m_wayland_renderer_active stays set on
+        // inactive tabs, so a renderer-active check would fire for all of them).
         if (auto* v = t->view(); v && v->isCurrentWaylandOwner()) {
             NewTabTraceScope scope("onBecomeInactiveTab_old_owner", t->controllerId());
             v->onBecomeInactiveTab();
         }
     }
 
-    // Do NOT call updateContainerGeometry() here. onBecomeInactiveTab() parks
-    // the container off-screen; calling updateContainerGeometry() before
-    // onBecomeActiveTab() immediately un-parks it to full size, causing the
-    // previous tab's content to flash to the left of the window for one frame
-    // (ghost rendering bug). onBecomeActiveTab() calls updateContainerGeometry()
-    // internally after attaching the container to the new owner.
-
+    // Do NOT call updateContainerGeometry() here: it would un-park the container
+    // before onBecomeActiveTab() reattaches it, flashing the old tab's content.
     if (auto* v = new_tab->view())
         v->onBecomeActiveTab();
 
-    // NOTE: no hover-expand "freeze guard" here. A previous attempt reset
-    // m_tab_column_floating_entered=false + m_hover_expand_in_progress=true (with a
-    // 500 ms timer) on every tab switch, intending to suppress a collapse during the
-    // Wayland surface churn. That was a misdiagnosis: the real tab-bar freeze was
-    // QTabBar::mousePressEvent ignoring clicks via its stale internal tabAt() (now
-    // fixed by activating from our own tabIndexAt() in TabBar::mousePressEvent).
-    //
-    // The guard also caused a real bug: with m_tab_column_floating_entered=false,
-    // cursorIsOverVerticalTabs() returns true unconditionally, so after clicking a
-    // tab the hover panel could not collapse until a fresh wl_pointer.enter re-set
-    // the flag — which never happens when the cursor leaves into the webview
-    // subsurface. Removing the guard lets the normal Leave/poll path collapse the
-    // panel as soon as the cursor leaves it.
+    // Intentionally no hover-expand guard here: the tab-bar freeze it tried to
+    // mask is fixed in TabBar::mousePressEvent (§2), and the guard blocked the
+    // hover panel from collapsing.
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("activateTab after onBecomeActiveTab (no hover-guard) | %1").arg(hoverDiagState()));
 

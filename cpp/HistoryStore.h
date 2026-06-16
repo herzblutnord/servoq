@@ -16,11 +16,9 @@
 
 namespace ServoQ {
 
-// Persistent browsing history, modeled on the Chromium/Firefox split:
-// a `urls` table (one row per known URL, with visit_count/last_visit_time)
-// plus a `visits` table (one row per visit). All queries that run per
-// keystroke (URL-bar autocomplete) are served from an in-memory index of the
-// most recently visited URLs, so the DB size never affects typing latency.
+// Persistent browsing history: a `urls` table (per-URL visit_count/last_visit)
+// plus a `visits` table. Per-keystroke autocomplete is served from an in-memory
+// index so DB size never affects typing latency.
 class HistoryStore : public QObject {
     Q_OBJECT
 public:
@@ -62,10 +60,8 @@ private:
     void migrateLegacyJson();
     void loadIndex();
     void expireOldVisits();
-    // Persisting goes through SQLite in one transaction per debounce window.
-    // Visits arrive on every URL/title change (SPAs mutate these constantly),
-    // so writes are coalesced behind a timer and flushed on quit — no
-    // synchronous disk I/O on the UI thread per navigation event.
+    // Writes are coalesced behind a debounce timer (one SQLite transaction) and
+    // flushed on quit — no synchronous disk I/O per navigation (docs/DEVIATIONS.md §0e).
     void scheduleFlush();
     void flushPendingWrites();
 
