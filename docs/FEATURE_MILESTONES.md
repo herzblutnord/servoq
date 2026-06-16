@@ -42,6 +42,7 @@ grouped by related work. Status was determined by auditing the codebase
 | Animation/event-loop driving | ✅ | wake-event architecture; see DEVIATIONS.md |
 | Window management UI (single window) | ✅ | geometry/maximized persistence (multi-window is L, see M5) |
 | Session restore | ✅ | opt-in URL-level open tabs + active tab restore |
+| Audio / video playback (`<audio>`/`<video>`) | ✅ | `servo/media-gstreamer` backend (system GStreamer); H.264/AAC + VP9/Opus verified, audio → PulseAudio. Software frame-upload path; GL zero-copy video is gated by init order (see DEVIATIONS.md §0j) |
 
 ## Partially implemented
 

@@ -475,6 +475,19 @@ mod engine {
         // Experimental features are enabled at startup via set_experimental_features_enabled
         // (called from applySettings after init_servo). Listed here for clarity only.
 
+        // media_glvideo_enabled (GL-accelerated <video>) stays OFF. It would gate
+        // servo-media's GL player thread + WebRender external-image handler, but that
+        // only helps if Servo::initialize_gl_accelerated_media has already shared a
+        // GL/EGL context — and that call must run *before* Servo::new. ServoQ builds
+        // Servo eagerly at startup (init_servo, a font-cache-crash safeguard) with a
+        // SoftwareRenderingContext, before any Wayland EGL surface exists, so there is
+        // no GL context to share at the required time. Video therefore decodes through
+        // servo-media's software upload path (GStreamer → image frames → WebRender),
+        // which is verified working for H.264/AAC and VP9/Opus. Audio is independent
+        // of this pref. Wiring true zero-copy GL video would require building Servo
+        // lazily against the Wayland context, which conflicts with the early-init
+        // design — a deliberate, isolated follow-up, not a one-liner.
+
         // CJK coverage for the generic font families. Servo's built-in fallback
         // list (servo-fonts) misses the CJK Symbols & Punctuation block (「」『』
         // 、。 etc.) on common Linux setups — e.g. the family "Droid Sans Fallback"
