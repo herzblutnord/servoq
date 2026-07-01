@@ -730,6 +730,9 @@ void BrowserWindow::createMenus()
         [this] { openInternalPage(QStringLiteral("servoq://history")); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_J), this,
         [this] { openInternalPage(QStringLiteral("servoq://downloads")); });
+    // Chrome/Firefox/Ladybird: Ctrl+Shift+Delete opens Clear Browsing Data.
+    new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Delete), this,
+        [this] { InternalPageView::showClearBrowsingDataDialog(this); });
 
     for (int i = 0; i <= 7; ++i) {
         new QShortcut(QKeySequence(Qt::CTRL | static_cast<Qt::Key>(Qt::Key_1 + i)), this, [this, i] {
@@ -1185,6 +1188,7 @@ void BrowserWindow::updateMenuBarVisibility()
 void BrowserWindow::applySettings()
 {
     servoq::set_experimental_features_enabled(Settings::the()->experimental_features_enabled());
+    servoq::set_user_scripts_enabled(Settings::the()->user_scripts_enabled());
 
     auto vertical_tabs_enabled = Settings::the()->vertical_tabs_enabled();
     auto vertical_tabs_expanded = Settings::the()->vertical_tabs_expanded();
@@ -1227,6 +1231,15 @@ void BrowserWindow::onSettingsChangedFromPage()
 
 void BrowserWindow::openInternalPage(QString const& url)
 {
+    // Switch to a tab already showing this internal page, if any (Chrome and
+    // Ladybird both reuse an existing history tab).
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        auto* open_tab = m_tabs->tab(i);
+        if (open_tab && open_tab->isInternalPage() && open_tab->url() == url) {
+            m_tabs->setCurrentIndex(i);
+            return;
+        }
+    }
     auto* tab = currentTab();
     // Open in the current tab when it is empty/already an internal page,
     // otherwise a new tab — matching Chrome's chrome:// behavior.

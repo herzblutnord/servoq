@@ -21,6 +21,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QFormLayout>
@@ -44,14 +45,17 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryFile>
 #include <QToolButton>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <cmath>
 
 namespace ServoQ {
 
@@ -267,6 +271,7 @@ void InternalPageView::clearContent()
         m_pdf_temp_file->deleteLater();
         m_pdf_temp_file = nullptr;
     }
+    m_pdf_local_path.clear();
     if (m_content) {
         m_root_layout->removeWidget(m_content);
         delete m_content;
@@ -353,6 +358,8 @@ void InternalPageView::buildPdfPage(QString const& source_url)
     auto* zoom_in = new QPushButton(QStringLiteral("+"), toolbar);
     zoom_in->setToolTip(QStringLiteral("Zoom in"));
     auto* fit_width = new QPushButton(QStringLiteral("Fit Width"), toolbar);
+    auto* save_as = new QPushButton(QStringLiteral("Save As…"), toolbar);
+    save_as->setToolTip(QStringLiteral("Save a copy of this PDF"));
     auto* open_external = new QPushButton(QStringLiteral("Open Externally"), toolbar);
 
     m_pdf_page_selector = new QPdfPageSelector(toolbar);
@@ -360,6 +367,7 @@ void InternalPageView::buildPdfPage(QString const& source_url)
     toolbar_layout->addWidget(zoom_out);
     toolbar_layout->addWidget(zoom_in);
     toolbar_layout->addWidget(fit_width);
+    toolbar_layout->addWidget(save_as);
     toolbar_layout->addWidget(open_external);
     layout->addWidget(toolbar);
 
@@ -394,6 +402,23 @@ void InternalPageView::buildPdfPage(QString const& source_url)
         if (m_pdf_view)
             m_pdf_view->setZoomMode(QPdfView::ZoomMode::FitToWidth);
     });
+    connect(save_as, &QPushButton::clicked, this, [this, source_url] {
+        if (m_pdf_local_path.isEmpty())
+            return;
+        auto suggested_name = titleForUrl(urlForPdfSource(source_url));
+        if (!suggested_name.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive))
+            suggested_name += QStringLiteral(".pdf");
+        auto downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        auto target = QFileDialog::getSaveFileName(this, QStringLiteral("Save PDF"),
+            downloads + QLatin1Char('/') + suggested_name, QStringLiteral("PDF documents (*.pdf)"));
+        if (target.isEmpty())
+            return;
+        if (QFile::exists(target))
+            QFile::remove(target); // getSaveFileName already confirmed the overwrite
+        if (!QFile::copy(m_pdf_local_path, target))
+            QMessageBox::warning(this, QStringLiteral("Save PDF"),
+                QStringLiteral("The PDF could not be saved to %1.").arg(target));
+    });
     connect(open_external, &QPushButton::clicked, this, [source_url] {
         QDesktopServices::openUrl(QUrl(source_url));
     });
@@ -411,6 +436,8 @@ void InternalPageView::buildPdfPage(QString const& source_url)
             QStringLiteral("Enter the password for this PDF:"), QLineEdit::Password, {}, &ok);
         if (ok)
             m_pdf_document->setPassword(password);
+        else
+            showPdfError(QStringLiteral("This PDF needs a password."));
     });
     connect(m_pdf_document, &QPdfDocument::statusChanged, this, [this](QPdfDocument::Status status) {
         if (!m_pdf_status_label || !m_pdf_document)
@@ -426,6 +453,9 @@ void InternalPageView::buildPdfPage(QString const& source_url)
         }
     });
 
+    // Ctrl+wheel zoom like Chrome/Firefox PDF viewers.
+    m_pdf_view->viewport()->installEventFilter(this);
+
     m_content = host;
     m_root_layout->addWidget(m_content, 1);
 
@@ -439,10 +469,28 @@ void InternalPageView::buildPdfPage(QString const& source_url)
     }
 }
 
+bool InternalPageView::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_pdf_view && watched == m_pdf_view->viewport() && event->type() == QEvent::Wheel) {
+        auto* wheel = static_cast<QWheelEvent*>(event);
+        if (wheel->modifiers().testFlag(Qt::ControlModifier)) {
+            auto steps = wheel->angleDelta().y() / 120.0;
+            if (steps != 0.0) {
+                m_pdf_view->setZoomMode(QPdfView::ZoomMode::Custom);
+                auto factor = m_pdf_view->zoomFactor() * std::pow(1.2, steps);
+                m_pdf_view->setZoomFactor(std::clamp<qreal>(factor, 0.25, 8.0));
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void InternalPageView::openPdfFile(QString const& path)
 {
     if (!m_pdf_document)
         return;
+    m_pdf_local_path = path;
     auto error = m_pdf_document->load(path);
     if (error != QPdfDocument::Error::None)
         showPdfError(pdf_error_text(error));
@@ -851,36 +899,8 @@ void InternalPageView::buildSettingsPage()
         btn_layout->addWidget(clear_perms);
         btn_layout->addStretch(1);
 
-        connect(clear_data, &QPushButton::clicked, this, [this] {
-            QDialog dialog(this);
-            dialog.setWindowTitle(QStringLiteral("Clear browsing data"));
-            auto* dl = new QVBoxLayout(&dialog);
-            dl->addWidget(new QLabel(QStringLiteral("Select what to clear:"), &dialog));
-            auto* history_box = new QCheckBox(QStringLiteral("Browsing history"), &dialog);
-            auto* cookies_box = new QCheckBox(QStringLiteral("Cookies and site data"), &dialog);
-            auto* cache_box = new QCheckBox(QStringLiteral("Cached files"), &dialog);
-            history_box->setChecked(true);
-            cookies_box->setChecked(true);
-            cache_box->setChecked(true);
-            dl->addWidget(history_box);
-            dl->addWidget(cookies_box);
-            dl->addWidget(cache_box);
-            auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            bb->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Clear data"));
-            dl->addWidget(bb);
-            connect(bb, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            connect(bb, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            if (dialog.exec() != QDialog::Accepted)
-                return;
-            if (history_box->isChecked())
-                HistoryStore::the()->clearHistory();
-            if (cookies_box->isChecked())
-                servoq::clear_all_cookies();
-            if (cache_box->isChecked())
-                servoq::clear_http_cache();
-            QMessageBox::information(this, QStringLiteral("Clear browsing data"),
-                QStringLiteral("The selected data has been cleared."));
-        });
+        connect(clear_data, &QPushButton::clicked, this,
+            [this] { showClearBrowsingDataDialog(this); });
 
         connect(manage_sites, &QPushButton::clicked, this, [this] {
             QDialog dialog(this);
@@ -973,12 +993,68 @@ void InternalPageView::buildSettingsPage()
         add_check(form, group, QStringLiteral("Enable experimental web platform features"),
             settings->experimental_features_enabled(),
             [settings](bool on) { settings->set_experimental_features_enabled(on); });
+
+        add_check(form, group, QStringLiteral("Enable user scripts"),
+            settings->user_scripts_enabled(),
+            [settings](bool on) { settings->set_user_scripts_enabled(on); });
+
+        auto* scripts_row = new QWidget(group);
+        auto* scripts_layout = new QHBoxLayout(scripts_row);
+        scripts_layout->setContentsMargins(0, 0, 0, 0);
+        auto* scripts_hint = new QLabel(
+            QStringLiteral(".js files from the user scripts folder run in every page; changes apply to pages loaded afterwards."),
+            scripts_row);
+        scripts_hint->setWordWrap(true);
+        scripts_layout->addWidget(scripts_hint, 1);
+        auto* open_scripts = new QPushButton(QStringLiteral("Open user scripts folder"), scripts_row);
+        connect(open_scripts, &QPushButton::clicked, this, [] {
+            auto dir = Settings::user_scripts_directory();
+            if (dir.isEmpty())
+                return;
+            QDir().mkpath(dir);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        });
+        scripts_layout->addWidget(open_scripts);
+        form->addRow(scripts_row);
+
         layout->addWidget(group);
     }
 
     layout->addStretch(1);
     m_content = host;
     m_root_layout->addWidget(m_content, 1);
+}
+
+void InternalPageView::showClearBrowsingDataDialog(QWidget* parent)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("Clear browsing data"));
+    auto* dl = new QVBoxLayout(&dialog);
+    dl->addWidget(new QLabel(QStringLiteral("Select what to clear:"), &dialog));
+    auto* history_box = new QCheckBox(QStringLiteral("Browsing history"), &dialog);
+    auto* cookies_box = new QCheckBox(QStringLiteral("Cookies and site data"), &dialog);
+    auto* cache_box = new QCheckBox(QStringLiteral("Cached files"), &dialog);
+    history_box->setChecked(true);
+    cookies_box->setChecked(true);
+    cache_box->setChecked(true);
+    dl->addWidget(history_box);
+    dl->addWidget(cookies_box);
+    dl->addWidget(cache_box);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    bb->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Clear data"));
+    dl->addWidget(bb);
+    connect(bb, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    if (history_box->isChecked())
+        HistoryStore::the()->clearHistory();
+    if (cookies_box->isChecked())
+        servoq::clear_all_cookies();
+    if (cache_box->isChecked())
+        servoq::clear_http_cache();
+    QMessageBox::information(parent, QStringLiteral("Clear browsing data"),
+        QStringLiteral("The selected data has been cleared."));
 }
 
 // ---- History page (M4.1) ------------------------------------------------
@@ -1196,6 +1272,9 @@ void InternalPageView::buildDebugPage()
                 .arg(settings->content_blocking_enabled() ? QStringLiteral("on") : QStringLiteral("off"));
     rows << QStringLiteral("Experimental features: %1")
                 .arg(settings->experimental_features_enabled() ? QStringLiteral("on") : QStringLiteral("off"));
+    rows << QStringLiteral("User scripts: %1 (%2)")
+                .arg(settings->user_scripts_enabled() ? QStringLiteral("on") : QStringLiteral("off"))
+                .arg(Settings::user_scripts_directory());
     rows << QStringLiteral("Default search engine: %1").arg(settings->search_engine_name());
     rows << QStringLiteral("History entries (indexed): %1").arg(HistoryStore::the()->entries().size());
 

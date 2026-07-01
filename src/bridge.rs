@@ -257,6 +257,10 @@ pub mod ffi {
         // Experimental web platform features toggle (mirrors servoshell EXPERIMENTAL_PREFS).
         fn set_experimental_features_enabled(enabled: bool);
         fn experimental_features_enabled() -> bool;
+
+        // Loads/unloads user scripts from <AppDataLocation>/userscripts
+        // (servoshell --userscripts equivalent); affects pages loaded afterwards.
+        fn set_user_scripts_enabled(enabled: bool);
     }
 }
 
@@ -296,7 +300,9 @@ pub use crate::servo_engine::{page_zoom, set_page_zoom};
 pub use crate::servo_engine::{evaluate_javascript, take_screenshot};
 
 pub use crate::blocklist::{reload_blocklists, user_blocklist_path};
-pub use crate::servo_engine::{experimental_features_enabled, set_experimental_features_enabled};
+pub use crate::servo_engine::{
+    experimental_features_enabled, set_experimental_features_enabled, set_user_scripts_enabled,
+};
 
 // Site data / cookies / cache management and media session control — always
 // present; no-ops (or empty results) when the servo-engine feature is off.

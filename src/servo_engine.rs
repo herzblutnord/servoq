@@ -54,7 +54,7 @@ mod engine {
     use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
     use servo::{CreateNewWebViewRequest, EmbedderControl};
     use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
-    use servo::UserContentManager;
+    use servo::{UserContentManager, UserScript};
     use servo::{
         MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState, StorageType,
     };
@@ -544,10 +544,10 @@ mod engine {
             .event_loop_waker(Box::new(QtEventLoopWaker))
             .build();
         servo.setup_logging();
-        // Servo 0.2 persists its network cookie jar when config_dir is set.
+        // Servo persists its network cookie jar when config_dir is set.
         // Clean session-only cookies at startup as well so a previous crash or
         // forced kill cannot turn them into restart-persistent cookies.
-        servo.site_data_manager().clear_session_cookies();
+        servo.site_data_manager().clear_session_cookies(None);
         servo
     }
 
@@ -557,10 +557,82 @@ mod engine {
         EngineState {
             servo,
             user_content_manager,
+            user_scripts: Vec::new(),
             clipboard_delegate: Rc::new(QtClipboardDelegate),
             tabs: HashMap::new(),
             rendering_context,
         }
+    }
+
+    // User scripts live in <AppDataLocation>/userscripts, loaded in filename
+    // order like servoshell's --userscripts directory (servo 0.3.0).
+    fn user_scripts_dir() -> Option<PathBuf> {
+        let app_data_dir = crate::bridge::ffi::servo_profile_data_dir();
+        if app_data_dir.is_empty() {
+            return None;
+        }
+        let mut path = PathBuf::from(app_data_dir);
+        path.push("userscripts");
+        if let Err(error) = std::fs::create_dir_all(&path) {
+            eprintln!(
+                "ServoQ user scripts: cannot create {}: {error}",
+                path.display()
+            );
+            return None;
+        }
+        Some(path)
+    }
+
+    pub fn set_user_scripts_enabled(enabled: bool) {
+        ENGINE.with(|s| {
+            let mut s = s.borrow_mut();
+            let Some(e) = s.as_mut() else { return };
+            if !enabled {
+                for script in e.user_scripts.drain(..) {
+                    e.user_content_manager.remove_script(script);
+                }
+                return;
+            }
+            if !e.user_scripts.is_empty() {
+                return; // already loaded; re-enable re-reads only after a disable
+            }
+            let Some(dir) = user_scripts_dir() else { return };
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    eprintln!(
+                        "ServoQ user scripts: cannot read {}: {error}",
+                        dir.display()
+                    );
+                    return;
+                }
+            };
+            let mut files: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .filter(|path| {
+                    path.is_file() &&
+                        path.extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+                })
+                .collect();
+            files.sort_unstable();
+            for file in files {
+                match std::fs::read_to_string(&file) {
+                    Ok(source) => {
+                        let script = Rc::new(UserScript::new(source, Some(file)));
+                        e.user_content_manager.add_script(script.clone());
+                        e.user_scripts.push(script);
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "ServoQ user scripts: cannot read {}: {error}",
+                            file.display()
+                        );
+                    }
+                }
+            }
+            diag(format!("user_scripts loaded count={}", e.user_scripts.len()));
+        });
     }
 
     fn configure_webview_diagnostics(webview: &WebView) {
@@ -812,6 +884,10 @@ mod engine {
         // See https://github.com/servo/servo/issues/36711.
         servo: Servo,
         user_content_manager: Rc<UserContentManager>,
+        // Scripts currently registered with the UserContentManager, kept so a
+        // settings toggle can remove them again (new loads only; live pages
+        // pick the change up on reload — Servo's UserContentManager contract).
+        user_scripts: Vec<Rc<UserScript>>,
         clipboard_delegate: Rc<QtClipboardDelegate>,
         tabs: HashMap<i32, TabEntry>,
         rendering_context: EngineRenderingContext,
@@ -2003,7 +2079,9 @@ mod engine {
 
         ENGINE.with(|s| {
             if let Some(engine) = s.borrow().as_ref() {
-                engine.servo.site_data_manager().clear_session_cookies();
+                // No callback: stays synchronous on the resource-thread channel so
+                // it is ordered before the Exit-time jar write (docs/STORAGE.md).
+                engine.servo.site_data_manager().clear_session_cookies(None);
             }
             // Drop deterministically while Qt still owns a valid QWindow/wl_surface,
             // or Surfman/EGL can destroy a surface whose Wayland proxy is already gone.
@@ -2890,7 +2968,7 @@ mod engine {
     pub fn clear_all_cookies() {
         ENGINE.with(|s| {
             if let Some(e) = s.borrow().as_ref() {
-                e.servo.site_data_manager().clear_cookies();
+                e.servo.site_data_manager().clear_cookies(None);
             }
         });
     }
@@ -3122,6 +3200,11 @@ pub use engine::{
 pub fn set_experimental_features_enabled(_enabled: bool) {
     #[cfg(feature = "servo-engine")]
     engine::set_experimental_features_enabled(_enabled);
+}
+
+pub fn set_user_scripts_enabled(_enabled: bool) {
+    #[cfg(feature = "servo-engine")]
+    engine::set_user_scripts_enabled(_enabled);
 }
 
 pub fn experimental_features_enabled() -> bool {

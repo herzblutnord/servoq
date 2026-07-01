@@ -730,10 +730,11 @@ void Tab::buildToolbar()
 
     m_back_action = new QAction("‹", this);
     m_back_action->setToolTip("Back");
-    m_back_action->setShortcut(QKeySequence::Back);
+    // All platform bindings (e.g. Alt+Left and Cmd+[), not just the primary one.
+    m_back_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Back));
     m_forward_action = new QAction("›", this);
     m_forward_action->setToolTip("Forward");
-    m_forward_action->setShortcut(QKeySequence::Forward);
+    m_forward_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Forward));
     m_home_action = new QAction(this);
     m_home_action->setToolTip("Home");
     m_home_action->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Home));

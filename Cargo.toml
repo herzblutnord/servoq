@@ -13,7 +13,7 @@ servo-engine = ["dep:servo", "servo/media-gstreamer", "dep:dpi", "dep:euclid", "
 cxx = "1.0"
 libc = "0.2"
 adblock = { version = "0.12", optional = true }
-servo = { version = "0.2.0", optional = true }
+servo = { version = "0.3.0", optional = true }
 dpi = { version = "0.1", optional = true }
 euclid = { version = "0.22", optional = true }
 url = { version = "2", optional = true }
@@ -29,7 +29,7 @@ pkg-config = "0.3"
 # that does NOT set playbin3's "download" (progressive-download) flag. That flag
 # makes urisourcebin pre-parse Servo's push `servosrc`, and on GStreamer 1.28 a
 # pushed containerless MP3 trips a fatal decodebin3 assertion that aborts the whole
-# browser. Same crate name/version (0.2.0), one block removed. See
+# browser. Same crate name/version (0.3.0), one block removed. See
 # third_party/servo-media-gstreamer/player.rs and docs/DEVIATIONS.md §0k.
 [patch.crates-io]
 servo-media-gstreamer = { path = "third_party/servo-media-gstreamer" }

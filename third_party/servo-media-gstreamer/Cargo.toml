@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.86.0"
+rust-version = "1.88.0"
 name = "servo-media-gstreamer"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["The Servo Project Developers"]
 build = false
 publish = true
@@ -30,6 +30,7 @@ resolver = "2"
 
 [features]
 glx = ["servo-media-gstreamer-render-unix/gl-x11"]
+v1_28 = ["gstreamer/v1_28"]
 wayland = ["servo-media-gstreamer-render-unix/gl-wayland"]
 
 [lib]
@@ -75,41 +76,41 @@ version = "0.25"
 features = ["v1_18"]
 
 [dependencies.ipc-channel]
-version = "0.21"
+version = "0.22"
 
 [dependencies.log]
-version = "0.4.29"
+version = "0.4.30"
 
 [dependencies.mime]
 version = "0.3.13"
 
 [dependencies.servo-media]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-audio]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-gstreamer-render]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-player]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-streams]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-traits]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.servo-media-webrtc]
-version = "0.2.0"
+version = "=0.3.0"
 
 [dependencies.url]
 version = "2.5"
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies.servo-media-gstreamer-render-unix]
-version = "0.2.0"
+version = "=0.3.0"
 features = ["gl-egl"]
 
 [target.'cfg(target_os = "android")'.dependencies.servo-media-gstreamer-render-android]
-version = "0.2.0"
+version = "=0.3.0"

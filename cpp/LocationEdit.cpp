@@ -207,6 +207,13 @@ void LocationEdit::changeEvent(QEvent* event)
 
 void LocationEdit::focusInEvent(QFocusEvent* event)
 {
+    // Focus returning from a popup (e.g. the context menu) must not rewrite
+    // the text or reselect — that would drop the user's selection mid-edit.
+    if (event->reason() == Qt::PopupFocusReason) {
+        QLineEdit::focusInEvent(event);
+        return;
+    }
+
     auto display_text = m_url.has_value() ? WebViewURL::url_for_display(*m_url) : QString();
     auto should_defer_full_url = event->reason() == Qt::MouseFocusReason
         && m_url.has_value()
@@ -222,7 +229,7 @@ void LocationEdit::focusInEvent(QFocusEvent* event)
     updateLocationIcon(); // hide indicator while editing
     animateFocusGlow(58);
 
-    if (event->reason() != Qt::PopupFocusReason && !should_defer_full_url) {
+    if (!should_defer_full_url) {
         QTimer::singleShot(0, this, [this] {
             if (hasFocus())
                 selectAll();

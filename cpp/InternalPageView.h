@@ -78,6 +78,9 @@ public:
     static Kind kindForUrl(QString const& url);
     static QString titleForUrl(QString const& url);
 
+    // Modal "Clear browsing data" dialog (settings page and Ctrl+Shift+Delete).
+    static void showClearBrowsingDataDialog(QWidget* parent);
+
     // Build and display the page for the given servoq:// URL.
     void showUrl(QString const& url);
     Kind currentKind() const { return m_kind; }
@@ -120,6 +123,11 @@ private:
     QLabel* m_pdf_status_label { nullptr };
     QNetworkAccessManager* m_pdf_network { nullptr };
     QTemporaryFile* m_pdf_temp_file { nullptr };
+    // Local path backing the open document (temp download or local file).
+    QString m_pdf_local_path;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 };
 
 }

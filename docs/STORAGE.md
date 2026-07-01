@@ -72,14 +72,17 @@ network stack owns cookie parsing and matching for `Set-Cookie`,
 `document.cookie`, Domain, Path, Expires/Max-Age, Secure, HttpOnly, and SameSite.
 That keeps cookie behavior in the engine instead of duplicating it in Qt.
 
-Servo 0.2 persists its cookie jar as `cookie_jar.json` rather than the
+Servo persists its cookie jar as `cookie_jar.json` rather than the
 Firefox/Chromium SQLite cookie schemas. ServoQ treats that as Servo's profile
 store for now and keeps it under the same browser profile root as the SQLite
 stores above. Session cookies are cleared at startup and again before Servo
 shutdown so cookies without `Expires`/`Max-Age` do not become restart-persistent
 just because the public cookie jar is now saved on disk.
 
-Audited mechanics (Servo 0.2 `servo-net` `resource_thread.rs`):
+Audited mechanics (Servo 0.2 `servo-net` `resource_thread.rs`; re-audited
+unchanged in 0.3.0 — the cookie-clearing APIs grew an optional completion
+callback, ServoQ passes `None` to stay on the synchronous ordered path, see
+DEVIATIONS.md §0p):
 
 - The jar/HSTS files are read once at startup and written **only** on the
   resource thread's `Exit` message, which `Servo`'s `Drop` impl triggers and

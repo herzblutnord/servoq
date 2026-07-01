@@ -240,7 +240,8 @@ QString location_edit_style_sheet(QPalette const& palette)
     auto hover_border  = style_sheet_color(border_color);
     auto focus_border  = style_sheet_color(focus_border_color);
     auto text          = style_sheet_color(dark ? mix(chrome_text(palette), surface_color, 0.12) : mix(chrome_text(palette), surface_color, 0.06));
-    auto placeholder   = style_sheet_color(mix(chrome_muted_text(palette), surface_color, dark ? 0.46 : 0.34));
+    // Blend less into the surface in dark mode so the placeholder stays readable.
+    auto placeholder   = style_sheet_color(mix(chrome_muted_text(palette), surface_color, dark ? 0.20 : 0.34));
     auto selection     = style_sheet_color(dark ? mix(surface_color, QColor(91, 140, 205), 0.74) : QColor(169, 199, 240));
     auto selection_text= style_sheet_color(chrome_text(palette));
 

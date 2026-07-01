@@ -105,7 +105,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | 4.4 | Internal pages scheme (`servoq://`) + debug page | ✅ | `InternalPageView` hosted per-tab in a content `QStackedWidget`; `servoq://settings/history/downloads/debug`; debug page shows shell state + a console-message panel (capture-gated). Surface handling: see DEVIATIONS.md §0h |
 | 4.5 | Site data / cookies clearing UI | ✅ | Settings → Privacy: "Manage site data" lists eTLD+1 sites from `SiteDataManager::site_data` with per-site/all removal; "Clear browsing data" clears history/cookies/cache |
 | 4.6 | HTTP cache clearing | ✅ | wired via `NetworkManager::clear_cache` from the Clear browsing data dialog (servoq::clear_http_cache) |
-| 4.7 | Inline PDF viewer | ✅ | `servoq://pdf` native Qt PDF view (`QPdfDocument`/`QPdfView`); local files plus obvious `.pdf` main-frame URLs from typed URLs, Open File, and clicked links |
+| 4.7 | Inline PDF viewer | ✅ | `servoq://pdf` native Qt PDF view (`QPdfDocument`/`QPdfView`); local files plus obvious `.pdf` main-frame URLs from typed URLs, Open File, and clicked links; Ctrl+wheel zoom, Save As…, password prompt |
 | 4.8 | Qt chrome accessibility pass | ✗ | accessible names, tab order, focus rings |
 
 ## Milestone 5 — Large / architectural (L, needs design first)
@@ -113,7 +113,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | # | Feature | Status | Notes |
 |---|---|---|---|
 | 5.1 | Download panel + downloads | ✗ | Servo 0.2 has no download API; needs `load_web_resource`-based design |
-| 5.2 | User scripts/styles management | ✗ | `UserContentManager` is already wired; needs UI + persistence |
+| 5.2 | User scripts/styles management | ◐ | user *scripts* load from `<AppData>/userscripts/*.js` in filename order (servoshell `--userscripts` equivalent, servo 0.3.0), gated by Settings → Advanced → "Enable user scripts" (default off; applies to pages loaded afterwards); missing: in-browser script editor/manager and user *stylesheets* |
 | 5.3 | Profiles | ✗ | separate config/cache dirs; Servo storage paths |
 | 5.4 | Private windows | ✗ | blocked on Servo-side storage isolation |
 | 5.5 | Multi-window | ✗ | conflicts with single shared Wayland surface (DEVIATIONS.md); needs per-window surface rework |

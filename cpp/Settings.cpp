@@ -14,6 +14,7 @@
 #include "Settings.h"
 
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QUrl>
 
 namespace ServoQ {
@@ -254,6 +255,24 @@ bool Settings::experimental_features_enabled() const
 void Settings::set_experimental_features_enabled(bool enabled)
 {
     m_qsettings.setValue(QStringLiteral("engine/experimental_features_enabled"), enabled);
+}
+
+bool Settings::user_scripts_enabled() const
+{
+    return m_qsettings.value(QStringLiteral("engine/user_scripts_enabled"), QVariant(false)).toBool();
+}
+
+void Settings::set_user_scripts_enabled(bool enabled)
+{
+    m_qsettings.setValue(QStringLiteral("engine/user_scripts_enabled"), enabled);
+}
+
+QString Settings::user_scripts_directory()
+{
+    auto dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty())
+        return {};
+    return dir + QStringLiteral("/userscripts");
 }
 
 bool Settings::content_blocking_enabled() const

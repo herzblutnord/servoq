@@ -105,6 +105,10 @@ public:
     bool experimental_features_enabled() const;
     void set_experimental_features_enabled(bool enabled);
 
+    bool user_scripts_enabled() const;
+    void set_user_scripts_enabled(bool enabled);
+    static QString user_scripts_directory();
+
     QStringList bookmarks() const;
     void set_bookmarks(QStringList const& bookmarks);
     bool has_bookmark(QString const& url) const;

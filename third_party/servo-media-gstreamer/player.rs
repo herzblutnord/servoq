@@ -10,7 +10,11 @@ use std::sync::{Arc, Mutex, Once};
 use std::time;
 
 use byte_slice_cast::AsSliceOf;
+use glib;
 use glib::prelude::*;
+use gstreamer;
+use gstreamer_app;
+use gstreamer_play;
 use gstreamer_play::prelude::*;
 use ipc_channel::ipc::{IpcReceiver, IpcSender, channel};
 use servo_media::MediaInstanceError;
@@ -23,7 +27,6 @@ use servo_media_player::{
 };
 use servo_media_streams::registry::{MediaStreamId, get_stream};
 use servo_media_traits::{BackendMsg, ClientContextId, MediaInstance};
-use {glib, gstreamer, gstreamer_app, gstreamer_play};
 
 use super::BACKEND_BASE_TIME;
 use crate::media_stream::GStreamerMediaStream;
@@ -125,6 +128,7 @@ struct PlayerInner {
     source: Option<PlayerSource>,
     video_sink: gstreamer_app::AppSink,
     input_size: u64,
+    seekable: bool,
     play_state: gstreamer_play::PlayState,
     paused: Cell<bool>,
     can_resume: Cell<bool>,
@@ -148,6 +152,14 @@ impl PlayerInner {
             } else {
                 -1 // live source
             });
+        }
+        Ok(())
+    }
+
+    pub fn set_seekable(&mut self, seekable: bool) -> Result<(), PlayerError> {
+        self.seekable = seekable;
+        if let Some(PlayerSource::Seekable(ref mut source)) = self.source {
+            source.set_seekable(seekable);
         }
         Ok(())
     }
@@ -250,17 +262,12 @@ impl PlayerInner {
         if self.stream_type != StreamType::Seekable {
             return Err(PlayerError::NonSeekableStream);
         }
-        if let Some(ref metadata) = self.last_metadata {
-            if let Some(ref duration) = metadata.duration {
-                if duration < &time::Duration::new(time as u64, 0) {
-                    gstreamer::warning!(
-                        self.cat,
-                        obj = &self.player,
-                        "Trying to seek out of range"
-                    );
-                    return Err(PlayerError::SeekOutOfRange);
-                }
-            }
+        if let Some(ref metadata) = self.last_metadata &&
+            let Some(ref duration) = metadata.duration &&
+            duration < &time::Duration::new(time as u64, 0)
+        {
+            gstreamer::warning!(self.cat, obj = &self.player, "Trying to seek out of range");
+            return Err(PlayerError::SeekOutOfRange);
         }
 
         let time = time * 1_000_000_000.;
@@ -337,15 +344,14 @@ impl PlayerInner {
 
     pub fn seekable(&self) -> Vec<Range<f64>> {
         // if the servosrc is seekable, we should return the duration of the media
-        if let Some(metadata) = self.last_metadata.as_ref() {
-            if metadata.is_seekable {
-                if let Some(duration) = metadata.duration {
-                    return vec![Range {
-                        start: 0.0,
-                        end: duration.as_secs_f64(),
-                    }];
-                }
-            }
+        if let Some(metadata) = self.last_metadata.as_ref() &&
+            metadata.is_seekable &&
+            let Some(duration) = metadata.duration
+        {
+            return vec![Range {
+                start: 0.0,
+                end: duration.as_secs_f64(),
+            }];
         }
 
         // if the servosrc is not seekable, we should return the buffered range
@@ -641,6 +647,7 @@ impl GStreamerPlayer {
             source: None,
             video_sink,
             input_size: 0,
+            seekable: true,
             play_state: gstreamer_play::PlayState::Stopped,
             paused: Cell::new(DEFAULT_PAUSED),
             can_resume: Cell::new(DEFAULT_CAN_RESUME),
@@ -754,17 +761,17 @@ impl GStreamerPlayer {
             });
 
             let mut inner = inner_clone.lock().unwrap();
-            if let Some(ref mut metadata) = inner.last_metadata {
-                if metadata.duration != duration {
-                    metadata.duration = duration;
-                    gstreamer::info!(
-                        inner.cat,
-                        obj = &inner.player,
-                        "Duration changed: {:?}",
-                        duration
-                    );
-                    let _ = notify!(observer, PlayerEvent::DurationChanged(duration));
-                }
+            if let Some(ref mut metadata) = inner.last_metadata &&
+                metadata.duration != duration
+            {
+                metadata.duration = duration;
+                gstreamer::info!(
+                    inner.cat,
+                    obj = &inner.player,
+                    "Duration changed: {:?}",
+                    duration
+                );
+                let _ = notify!(observer, PlayerEvent::DurationChanged(duration));
             }
         });
 
@@ -843,6 +850,7 @@ impl GStreamerPlayer {
                         if inner.input_size > 0 {
                             servosrc.set_size(inner.input_size as i64);
                         }
+                        servosrc.set_seekable(inner.seekable);
 
                         let sender_clone = sender.clone();
                         let is_ready = is_ready_clone.clone();
@@ -984,6 +992,7 @@ impl Player for GStreamerPlayer {
     inner_player_proxy!(stop, ());
     inner_player_proxy!(end_of_stream, ());
     inner_player_proxy!(set_input_size, size, u64);
+    inner_player_proxy!(set_seekable, seekable, bool);
     inner_player_proxy!(set_mute, muted, bool);
     inner_player_proxy_getter!(muted, bool, DEFAULT_MUTED);
     inner_player_proxy!(set_playback_rate, playback_rate, f64);
