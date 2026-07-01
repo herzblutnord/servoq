@@ -1,7 +1,7 @@
 #include "qt_app.h"
-#include "BrowserWindow.h"
-#include "Icon.h"
-#include "servo_callbacks.h"
+#include "ui/BrowserWindow.h"
+#include "ui/Icon.h"
+#include "engine/servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>

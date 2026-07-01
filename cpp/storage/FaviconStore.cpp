@@ -1,5 +1,5 @@
-#include "FaviconStore.h"
-#include "StorageDb.h"
+#include "storage/FaviconStore.h"
+#include "storage/StorageDb.h"
 
 #include <QCoreApplication>
 #include <QDateTime>

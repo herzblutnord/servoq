@@ -2,13 +2,13 @@
  * Copyright (c) 2026, ServoQ contributors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#include "InternalPageView.h"
-#include "FaviconStore.h"
-#include "HistoryStore.h"
-#include "Icon.h"
-#include "PermissionStore.h"
-#include "Settings.h"
-#include "WebViewURL.h"
+#include "ui/InternalPageView.h"
+#include "storage/FaviconStore.h"
+#include "storage/HistoryStore.h"
+#include "ui/Icon.h"
+#include "storage/PermissionStore.h"
+#include "storage/Settings.h"
+#include "engine/WebViewURL.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QAbstractItemView>

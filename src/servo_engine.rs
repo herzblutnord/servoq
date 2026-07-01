@@ -445,8 +445,10 @@ mod engine {
     ];
 
     fn servo_preferences() -> Preferences {
-        let mut preferences = Preferences::default();
-        preferences.viewport_meta_enabled = true;
+        let mut preferences = Preferences {
+            viewport_meta_enabled: true,
+            ..Preferences::default()
+        };
         // Experimental features are enabled at startup via applySettings, not here.
         // media_glvideo_enabled stays off (no GL context at our early init time) —
         // see docs/DEVIATIONS.md §0j.
@@ -584,6 +586,9 @@ mod engine {
     }
 
     pub fn set_user_scripts_enabled(enabled: bool) {
+        // Resolve the directory before borrowing ENGINE: user_scripts_dir()
+        // crosses the FFI into Qt, and no FFI call may run under the borrow.
+        let dir = if enabled { user_scripts_dir() } else { None };
         ENGINE.with(|s| {
             let mut s = s.borrow_mut();
             let Some(e) = s.as_mut() else { return };
@@ -596,8 +601,8 @@ mod engine {
             if !e.user_scripts.is_empty() {
                 return; // already loaded; re-enable re-reads only after a disable
             }
-            let Some(dir) = user_scripts_dir() else { return };
-            let entries = match std::fs::read_dir(&dir) {
+            let Some(dir) = dir.as_ref() else { return };
+            let entries = match std::fs::read_dir(dir) {
                 Ok(entries) => entries,
                 Err(error) => {
                     eprintln!(
@@ -1332,11 +1337,11 @@ mod engine {
         fn request_create_new(&self, _parent_webview: WebView, request: CreateNewWebViewRequest) {
             if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
             let new_id = crate::servo_controller::create_tab();
-            let (rc, clipboard, size, scale) = ENGINE.with(|s| {
+            let (rc, clipboard, engine_rc, size, scale) = ENGINE.with(|s| {
                 let s = s.borrow();
                 let e = match s.as_ref() {
                     Some(e) => e,
-                    None => return (None, None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
+                    None => return (None, None, None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
                 };
                 let (size, scale) = e.tabs.get(&self.tab_id)
                     .map(|t| (t.physical_size, t.hidpi_scale_factor))
@@ -1344,14 +1349,15 @@ mod engine {
                 (
                     Some(e.rendering_context.as_rendering_context()),
                     Some(e.clipboard_delegate.clone()),
+                    Some(e.rendering_context.clone()),
                     size,
                     scale,
                 )
             });
-            let (Some(rc), Some(clipboard)) = (rc, clipboard) else { return; };
+            let (Some(rc), Some(clipboard), Some(engine_rc)) = (rc, clipboard, engine_rc) else { return; };
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: new_id,
-                rendering_context: ENGINE.with(|s| s.borrow().as_ref().map(|e| e.rendering_context.clone()).unwrap()),
+                rendering_context: engine_rc,
                 animating: Cell::new(false),
                 initial_resize_done: Cell::new(false),
             });
@@ -1828,6 +1834,7 @@ mod engine {
             .map_err(|error| format!("WindowRenderingContext::new failed: {error:?}"))
     }
 
+    #[allow(clippy::too_many_arguments)] // flat FFI signature (CXX bridge)
     pub fn create_webview_wayland_window(
         id: i32,
         url_str: &str,
@@ -2518,7 +2525,7 @@ mod engine {
             // Ctrl+A: forward the corrected logical key 'a' so Servo's select-all
             // shortcut matches (under Ctrl, Qt's text() is SOH) — see §5b.
             diag(format!("select_all id={id} down={down} via=keyboard Key::Character(\"a\")"));
-            Key::Character("a".to_string().into())
+            Key::Character("a".to_string())
         } else {
             qt_key_to_key(key_char, qt_key)
         };
@@ -2819,7 +2826,7 @@ mod engine {
             _ => {
                 if let Some(c) = char::from_u32(key_char) {
                     if !c.is_control() {
-                        return Key::Character(c.to_string().into());
+                        return Key::Character(c.to_string());
                     }
                 }
                 Key::Named(NamedKey::Unidentified)
@@ -3059,6 +3066,7 @@ pub fn create_webview(_id: i32, _url: &str, _w: i32, _h: i32, _scale: f32) {
     engine::create_webview(_id, _url, _w, _h, _scale);
 }
 
+#[allow(clippy::too_many_arguments)] // flat FFI signature (CXX bridge)
 pub fn create_webview_wayland_window(
     _id: i32,
     _url: &str,

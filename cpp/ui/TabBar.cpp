@@ -9,15 +9,15 @@
  *   UI/Qt/TabBar.cpp
  *   UI/Qt/ChromeLayout.h
  */
-#include "TabBar.h"
+#include "ui/TabBar.h"
 
-#include "BrowserWindow.h"
-#include "ChromeStyle.h"
-#include "ChromeLayout.h"
-#include "NewTabTrace.h"
-#include "Icon.h"
-#include "Tab.h"
-#include "WebContentView.h"
+#include "ui/BrowserWindow.h"
+#include "ui/ChromeStyle.h"
+#include "ui/ChromeLayout.h"
+#include "engine/NewTabTrace.h"
+#include "ui/Icon.h"
+#include "ui/Tab.h"
+#include "engine/WebContentView.h"
 
 #include <QAction>
 #include <QApplication>
@@ -71,6 +71,13 @@ qint64 servoq_diag_now_ms()
 
 namespace ServoQ {
 namespace {
+
+// Cached once — env reads take a process-global lock (docs/DEVIATIONS.md §0c).
+bool debug_enabled()
+{
+    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
+    return v;
+}
 
 // Constants mirror Ladybird UI/Qt/TabBar.cpp and UI/Qt/ChromeLayout.h.
 constexpr int HorizontalTabStripHeight = 44;
@@ -600,7 +607,7 @@ void TabBar::mousePressEvent(QMouseEvent* event)
         // the post-switch tab-bar freeze (§2).
         if (m_pressed_tab_index >= 0 && m_pressed_tab_index != currentIndex())
             setCurrentIndex(m_pressed_tab_index);
-        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        if (debug_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_DEBUG tab_bar_press"
                 << " tab_at=" << m_pressed_tab_index
@@ -646,7 +653,7 @@ void TabBar::mouseReleaseEvent(QMouseEvent* event)
         servoq_diag_log(QStringLiteral("TabBar::mouseReleaseEvent DELIVERED tab_at=%1 pressed=%2 current=%3 | %4")
             .arg(released_tab_index).arg(pressed_tab_index).arg(currentIndex())
             .arg(m_tab_widget ? m_tab_widget->hoverDiagState() : QStringLiteral("<no tab_widget>")));
-    if (event->button() == Qt::LeftButton && qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (event->button() == Qt::LeftButton && debug_enabled()) {
         qInfo().nospace()
             << "SERVOQ_DEBUG tab_bar_release"
             << " tab_at=" << released_tab_index
@@ -657,7 +664,7 @@ void TabBar::mouseReleaseEvent(QMouseEvent* event)
     m_pressed_tab_index = -1;
     QTabBar::mouseReleaseEvent(event);
 
-    if (event->button() == Qt::LeftButton && qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (event->button() == Qt::LeftButton && debug_enabled()) {
         qInfo().nospace()
             << "SERVOQ_DEBUG tab_bar_release_after_base"
             << " tab_at=" << released_tab_index
@@ -1161,7 +1168,7 @@ TabWidget::TabWidget(QWidget* parent)
             m_toolbar_container->setCurrentIndex(index);
         updateVerticalTabsOverlayGeometry();
         updateVerticalTabsResizeHandle();
-        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        if (debug_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_DEBUG tab_widget_current_changed index=" << index
                 << " has_callback=" << (onCurrentChanged ? 1 : 0);
@@ -1836,14 +1843,14 @@ void TabWidget::updateContainerGeometry()
 void TabWidget::activateTab(int index)
 {
     if (index < 0 || index >= count()) {
-        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+        if (debug_enabled())
             qInfo().nospace() << "SERVOQ_DEBUG activate_tab_return_invalid_index index=" << index << " count=" << count();
         return;
     }
 
     auto* new_tab = tab(index);
     if (!new_tab) {
-        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+        if (debug_enabled())
             qInfo().nospace() << "SERVOQ_DEBUG activate_tab_return_null_tab index=" << index;
         return;
     }
@@ -1852,7 +1859,7 @@ void TabWidget::activateTab(int index)
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral(">>> activateTab ENTER index=%1 tab_id=%2 | %3")
             .arg(index).arg(new_tab->controllerId()).arg(hoverDiagState()));
-    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (debug_enabled()) {
         qInfo().nospace()
             << "SERVOQ_DEBUG activate_tab_enter index=" << index
             << " tab_id=" << new_tab->controllerId();
@@ -1882,7 +1889,7 @@ void TabWidget::activateTab(int index)
     if (servoq_diag_enabled())
         servoq_diag_log(QStringLiteral("activateTab after onBecomeActiveTab (no hover-guard) | %1").arg(hoverDiagState()));
 
-    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (debug_enabled()) {
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - t0).count();
         qInfo().nospace()
@@ -1897,7 +1904,7 @@ void TabWidget::activateTab(int index)
 
 void TabWidget::dumpPresentationState(const char* reason, int activation_serial) const
 {
-    if (!qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+    if (!debug_enabled())
         return;
 
     auto* owner = WebContentView::currentWaylandOwner();

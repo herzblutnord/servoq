@@ -18,8 +18,8 @@
 #include <cstdint>
 #include <functional>
 
-#include "Icon.h"
-#include "ChromeLayout.h"
+#include "ui/Icon.h"
+#include "ui/ChromeLayout.h"
 
 class QAction;
 class QBoxLayout;

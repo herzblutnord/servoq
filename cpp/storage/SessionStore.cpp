@@ -1,4 +1,4 @@
-#include "SessionStore.h"
+#include "storage/SessionStore.h"
 
 #include <QDir>
 #include <QFile>

@@ -5,7 +5,7 @@
  * Derived from Ladybird:
  *   UI/Qt/ChromeStyle.cpp
  */
-#include "ChromeStyle.h"
+#include "ui/ChromeStyle.h"
 
 #include <QGuiApplication>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)

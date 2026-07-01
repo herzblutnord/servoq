@@ -11,7 +11,7 @@
  *   Libraries/LibWebView/SearchEngine.cpp
  */
 
-#include "Settings.h"
+#include "storage/Settings.h"
 
 #include <QFileInfo>
 #include <QStandardPaths>

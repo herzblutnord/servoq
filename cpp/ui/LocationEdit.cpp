@@ -9,12 +9,12 @@
  *   Libraries/LibWebView/HistoryStore.cpp
  *   UI/Qt/Autocomplete.h
  */
-#include "LocationEdit.h"
-#include "ChromeStyle.h"
-#include "FaviconStore.h"
-#include "HistoryStore.h"
-#include "Icon.h"
-#include "WebViewURL.h"
+#include "ui/LocationEdit.h"
+#include "ui/ChromeStyle.h"
+#include "storage/FaviconStore.h"
+#include "storage/HistoryStore.h"
+#include "ui/Icon.h"
+#include "engine/WebViewURL.h"
 
 #include <QAction>
 #include <QAbstractItemView>

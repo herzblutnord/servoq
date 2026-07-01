@@ -5,9 +5,9 @@
  * Derived from Ladybird:
  *   UI/Qt/FindInPageWidget.cpp
  */
-#include "FindInPageWidget.h"
-#include "ChromeStyle.h"
-#include "Icon.h"
+#include "ui/FindInPageWidget.h"
+#include "ui/ChromeStyle.h"
+#include "ui/Icon.h"
 
 #include <QCheckBox>
 #include <QEvent>

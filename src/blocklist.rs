@@ -28,7 +28,7 @@ mod inner {
     fn build_engine() -> Engine {
         let opts = ParseOptions::default();
         let mut filter_set = FilterSet::new(false);
-        filter_set.add_filter_list(BUILTIN_RULES, opts.clone());
+        filter_set.add_filter_list(BUILTIN_RULES, opts);
         if let Some(user_rules) = load_user_rules() {
             filter_set.add_filter_list(&user_rules, opts);
         }
@@ -49,9 +49,14 @@ mod inner {
         format!("{base}/servoq/blocklist.txt")
     }
 
+    // Cached: env reads contend a process-global lock (docs/DEVIATIONS.md §0c),
+    // and this can fire per blocked subresource on ad-heavy pages.
     fn debug_enabled() -> bool {
-        std::env::var_os("SERVOQ_CONTENT_BLOCKING_DEBUG").is_some()
-            || std::env::var_os("SERVOQ_PERF").is_some()
+        static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var_os("SERVOQ_CONTENT_BLOCKING_DEBUG").is_some()
+                || std::env::var_os("SERVOQ_PERF").is_some()
+        })
     }
 
     pub fn reload_blocklists() -> bool {

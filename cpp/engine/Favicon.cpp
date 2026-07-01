@@ -16,10 +16,10 @@
 // to /favicon.ico, decode each (largest frame in multi-image .ico), and apply the
 // one with the largest pixel area (ties go to the last declared).
 
-#include "Favicon.h"
-#include "FaviconStore.h"
-#include "Tab.h"
-#include "WebContentView.h"
+#include "engine/Favicon.h"
+#include "storage/FaviconStore.h"
+#include "ui/Tab.h"
+#include "engine/WebContentView.h"
 
 #include <QBuffer>
 #include <QDebug>

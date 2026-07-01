@@ -5,8 +5,8 @@
  * Derived from Ladybird:
  *   Libraries/LibWebView/BookmarkStore.cpp
  */
-#include "BookmarkStore.h"
-#include "FaviconStore.h"
+#include "storage/BookmarkStore.h"
+#include "storage/FaviconStore.h"
 
 #include <QDir>
 #include <QFile>

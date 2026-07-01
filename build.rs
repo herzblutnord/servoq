@@ -50,13 +50,13 @@ fn main() {
         "moc"
     };
     for header in &[
-        "cpp/BookmarkStore.h",
-        "cpp/BookmarksBar.h",
-        "cpp/FaviconStore.h",
-        "cpp/HistoryStore.h",
-        "cpp/WebContentView.h",
-        "cpp/MprisManager.h",
-        "cpp/InternalPageView.h",
+        "cpp/storage/BookmarkStore.h",
+        "cpp/ui/BookmarksBar.h",
+        "cpp/storage/FaviconStore.h",
+        "cpp/storage/HistoryStore.h",
+        "cpp/engine/WebContentView.h",
+        "cpp/engine/MprisManager.h",
+        "cpp/ui/InternalPageView.h",
     ] {
         let stem = std::path::Path::new(header)
             .file_stem()
@@ -124,8 +124,8 @@ fn main() {
 
     for flag in &qt.defines {
         match &flag.1 {
-            Some(value) => build.define(&flag.0, Some(value.as_str())),
-            None => build.define(&flag.0, None),
+            Some(value) => build.define(flag.0.as_str(), Some(value.as_str())),
+            None => build.define(flag.0.as_str(), None),
         };
     }
     for flag in qt_svg
@@ -138,36 +138,40 @@ fn main() {
         .chain(qt_pdf_widgets.defines.iter())
     {
         match &flag.1 {
-            Some(value) => build.define(&flag.0, Some(value.as_str())),
-            None => build.define(&flag.0, None),
+            Some(value) => build.define(flag.0.as_str(), Some(value.as_str())),
+            None => build.define(flag.0.as_str(), None),
         };
     }
 
     build.files([
+        // root: entry point
         "cpp/main.cpp",
-        "cpp/BrowserWindow.cpp",
-        "cpp/Tab.cpp",
-        "cpp/TabBar.cpp",
-        "cpp/LocationEdit.cpp",
-        "cpp/WebViewURL.cpp",
-        "cpp/BookmarksBar.cpp",
-        "cpp/BookmarkStore.cpp",
-        "cpp/HistoryStore.cpp",
-        "cpp/FaviconStore.cpp",
-        "cpp/SessionStore.cpp",
-        "cpp/PermissionStore.cpp",
-        "cpp/StorageDb.cpp",
-        "cpp/TabSearch.cpp",
-        "cpp/Favicon.cpp",
-        "cpp/FindInPageWidget.cpp",
-        "cpp/WebContentPlaceholder.cpp",
-        "cpp/WebContentView.cpp",
-        "cpp/WebDialogs.cpp",
-        "cpp/ChromeStyle.cpp",
-        "cpp/Icon.cpp",
-        "cpp/Settings.cpp",
-        "cpp/MprisManager.cpp",
-        "cpp/InternalPageView.cpp",
+        // ui: browser chrome widgets and styling
+        "cpp/ui/BrowserWindow.cpp",
+        "cpp/ui/Tab.cpp",
+        "cpp/ui/TabBar.cpp",
+        "cpp/ui/TabSearch.cpp",
+        "cpp/ui/LocationEdit.cpp",
+        "cpp/ui/BookmarksBar.cpp",
+        "cpp/ui/FindInPageWidget.cpp",
+        "cpp/ui/InternalPageView.cpp",
+        "cpp/ui/WebContentPlaceholder.cpp",
+        "cpp/ui/ChromeStyle.cpp",
+        "cpp/ui/Icon.cpp",
+        // storage: on-disk profile data
+        "cpp/storage/Settings.cpp",
+        "cpp/storage/HistoryStore.cpp",
+        "cpp/storage/BookmarkStore.cpp",
+        "cpp/storage/FaviconStore.cpp",
+        "cpp/storage/SessionStore.cpp",
+        "cpp/storage/PermissionStore.cpp",
+        "cpp/storage/StorageDb.cpp",
+        // engine: Servo-facing glue (surface host, callbacks, dialogs)
+        "cpp/engine/WebContentView.cpp",
+        "cpp/engine/WebViewURL.cpp",
+        "cpp/engine/Favicon.cpp",
+        "cpp/engine/WebDialogs.cpp",
+        "cpp/engine/MprisManager.cpp",
     ]);
     build.file(resources_cpp);
 

@@ -15,11 +15,11 @@
 // Servo via the CXX bridge; the SPINNING guard (servo_engine.rs) makes exec()'s
 // nested event loop safe while Servo's script thread blocks for the response.
 
-#include "BrowserWindow.h"
-#include "PermissionStore.h"
-#include "Tab.h"
-#include "WebContentView.h"
-#include "servo_callbacks.h"
+#include "ui/BrowserWindow.h"
+#include "storage/PermissionStore.h"
+#include "ui/Tab.h"
+#include "engine/WebContentView.h"
+#include "engine/servo_callbacks.h"
 
 #include <QColorDialog>
 #include <QDialog>

@@ -5,8 +5,8 @@
  * Derived from Ladybird:
  *   Libraries/LibWebView/HistoryStore.cpp
  */
-#include "HistoryStore.h"
-#include "StorageDb.h"
+#include "storage/HistoryStore.h"
+#include "storage/StorageDb.h"
 
 #include <QCoreApplication>
 #include <QDir>

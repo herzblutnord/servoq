@@ -15,26 +15,26 @@
  *   Libraries/LibWebView/Settings.cpp
  *   Libraries/LibWeb/Loader/ContentBlocker.cpp
  */
-#include "BrowserWindow.h"
-#include "BookmarksBar.h"
-#include "FaviconStore.h"
-#include "HistoryStore.h"
-#include "InternalPageView.h"
-#include "MprisManager.h"
-#include "NewTabTrace.h"
-#include "PermissionStore.h"
-#include "SessionStore.h"
-#include "TabSearch.h"
-#include "ChromeLayout.h"
-#include "ChromeStyle.h"
-#include "Icon.h"
-#include "LocationEdit.h"
-#include "Settings.h"
-#include "Tab.h"
-#include "TabBar.h"
-#include "WebContentView.h"
-#include "WebViewURL.h"
-#include "servo_callbacks.h"
+#include "ui/BrowserWindow.h"
+#include "ui/BookmarksBar.h"
+#include "storage/FaviconStore.h"
+#include "storage/HistoryStore.h"
+#include "ui/InternalPageView.h"
+#include "engine/MprisManager.h"
+#include "engine/NewTabTrace.h"
+#include "storage/PermissionStore.h"
+#include "storage/SessionStore.h"
+#include "ui/TabSearch.h"
+#include "ui/ChromeLayout.h"
+#include "ui/ChromeStyle.h"
+#include "ui/Icon.h"
+#include "ui/LocationEdit.h"
+#include "storage/Settings.h"
+#include "ui/Tab.h"
+#include "ui/TabBar.h"
+#include "engine/WebContentView.h"
+#include "engine/WebViewURL.h"
+#include "engine/servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QAction>
@@ -262,7 +262,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
         QPointer<Tab> target_tab = next_tab;
         QPointer<TabWidget> tabs = m_tabs;
         int serial = ++m_activation_serial;
-        if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+        if (debug_enabled()) {
             qInfo().nospace()
                 << "SERVOQ_DEBUG activation_deferred serial=" << serial
                 << " index=" << index
@@ -674,7 +674,7 @@ void BrowserWindow::createMenus()
     }
 
     // Developer JS console, hidden unless SERVOQ_DEBUG is set.
-    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (debug_enabled()) {
         view_menu->addSeparator();
         auto* js_console_action = new QAction(QStringLiteral("Evaluate &JavaScript…"), this);
         js_console_action->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));

@@ -1,11 +1,11 @@
-#include "TabSearch.h"
+#include "ui/TabSearch.h"
 
-#include "BrowserWindow.h"
-#include "ChromeStyle.h"
-#include "Icon.h"
-#include "Tab.h"
-#include "TabBar.h"
-#include "WebViewURL.h"
+#include "ui/BrowserWindow.h"
+#include "ui/ChromeStyle.h"
+#include "ui/Icon.h"
+#include "ui/Tab.h"
+#include "ui/TabBar.h"
+#include "engine/WebViewURL.h"
 
 #include <QEvent>
 #include <QHBoxLayout>

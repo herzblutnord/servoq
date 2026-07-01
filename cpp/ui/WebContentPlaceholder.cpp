@@ -1,5 +1,5 @@
-#include "WebContentPlaceholder.h"
-#include "ChromeStyle.h"
+#include "ui/WebContentPlaceholder.h"
+#include "ui/ChromeStyle.h"
 
 #include <QEvent>
 #include <QFrame>

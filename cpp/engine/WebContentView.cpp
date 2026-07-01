@@ -10,16 +10,16 @@
 // Qt widget that hosts the Servo engine (or a placeholder before the first
 // frame / when the engine is disabled).
 
-#include "BrowserWindow.h"
-#include "BookmarkStore.h"
-#include "ChromeStyle.h"
-#include "Favicon.h"
-#include "InternalPageView.h"
-#include "NewTabTrace.h"
-#include "WebContentView.h"
-#include "Settings.h"
-#include "Tab.h"
-#include "servo_callbacks.h"
+#include "ui/BrowserWindow.h"
+#include "storage/BookmarkStore.h"
+#include "ui/ChromeStyle.h"
+#include "engine/Favicon.h"
+#include "ui/InternalPageView.h"
+#include "engine/NewTabTrace.h"
+#include "engine/WebContentView.h"
+#include "storage/Settings.h"
+#include "ui/Tab.h"
+#include "engine/servo_callbacks.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
@@ -1053,7 +1053,7 @@ void WebContentView::updateContainerGeometry()
 
     // Verify container does not overlap the tab bar (which lives above m_page_column).
     // Overlap would allow the native subsurface to intercept tab-bar mouse events.
-    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (debug_enabled()) {
         auto container_global = m_wayland_container->mapToGlobal(QPoint(0, 0));
         QRect container_global_rect(container_global, m_wayland_container->size());
         // Walk up to find the top-level window and check geometry sanity.
@@ -2409,6 +2409,7 @@ void notify_screenshot_taken(::std::int32_t tab_id,
                              ::std::int32_t width,
                              ::std::int32_t height)
 {
+    Q_UNUSED(tab_id); // the save dialog is window-global, not per tab
     if (servo_shutdown_started())
         return;
     auto* window = find_browser_window();

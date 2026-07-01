@@ -2,7 +2,7 @@
  * Copyright (c) 2026, ServoQ contributors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#include "MprisManager.h"
+#include "engine/MprisManager.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>

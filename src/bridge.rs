@@ -9,6 +9,7 @@
 // Derived from Ladybird:
 //   UI/Qt/BrowserWindow.cpp
 #[cxx::bridge(namespace = "servoq")]
+#[allow(clippy::too_many_arguments)] // flat FFI signatures
 pub mod ffi {
     // Result of a JS prompt() dialog: accepted=false means Cancel (JS gets null).
     pub struct PromptDialogResult {
@@ -50,7 +51,7 @@ pub mod ffi {
         fn system_cjk_font_family(generic: &str) -> String;
 
         // Frame and delegate notifications: Rust -> C++ (safe per CXX's unsafe extern "C++" contract)
-        include!("servoq/cpp/servo_callbacks.h");
+        include!("servoq/cpp/engine/servo_callbacks.h");
         fn deliver_frame(tab_id: i32, bytes: &[u8], width: i32, height: i32);
         fn notify_url_changed(tab_id: i32, url: &str);
         fn notify_title_changed(tab_id: i32, title: &str);

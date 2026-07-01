@@ -6,8 +6,8 @@
  *   UI/Qt/Icon.cpp
  */
 
-#include "ChromeStyle.h"
-#include "Icon.h"
+#include "ui/ChromeStyle.h"
+#include "ui/Icon.h"
 
 #include <cmath>
 

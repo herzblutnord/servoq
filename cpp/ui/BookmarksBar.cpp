@@ -14,12 +14,12 @@
  *   Libraries/LibWebView/ViewImplementation.cpp
  *   UI/Qt/Menu.cpp
  */
-#include "BookmarksBar.h"
-#include "BookmarkStore.h"
-#include "FaviconStore.h"
-#include "ChromeStyle.h"
-#include "Icon.h"
-#include "Settings.h"
+#include "ui/BookmarksBar.h"
+#include "storage/BookmarkStore.h"
+#include "storage/FaviconStore.h"
+#include "ui/ChromeStyle.h"
+#include "ui/Icon.h"
+#include "storage/Settings.h"
 
 #include <QAction>
 #include <QApplication>

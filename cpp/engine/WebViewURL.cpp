@@ -6,8 +6,8 @@
  *   Libraries/LibWebView/SearchEngine.cpp
  *   Libraries/LibWebView/Settings.cpp
  */
-#include "WebViewURL.h"
-#include "Settings.h"
+#include "engine/WebViewURL.h"
+#include "storage/Settings.h"
 
 #include <QFileInfo>
 #include <QSet>
@@ -120,7 +120,11 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
     auto location = raw_location.trimmed();
 
     QFileInfo file_info(location);
-    if (file_info.exists()) {
+    // Only absolute paths open local files (Chrome/Firefox behavior). Ladybird
+    // also resolves bare names against the process CWD, which turns a search
+    // like "downloads" into a file navigation whenever CWD happens to contain
+    // such an entry (docs/DEVIATIONS.md §0q).
+    if (file_info.isAbsolute() && file_info.exists()) {
         auto canonical_path = file_info.canonicalFilePath();
         if (!canonical_path.isEmpty()) {
             auto file_url = QUrl::fromLocalFile(canonical_path);
