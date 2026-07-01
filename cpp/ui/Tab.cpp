@@ -13,6 +13,7 @@
  *   UI/Qt/BrowserWindow.cpp
  */
 #include "ui/Tab.h"
+#include "engine/Favicon.h"
 #include "engine/NewTabTrace.h"
 #include "ui/BookmarksBar.h"
 #include "storage/BookmarkStore.h"
@@ -35,6 +36,7 @@
 #include <QBoxLayout>
 #include <QBuffer>
 #include <QDebug>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -71,6 +73,17 @@ void debug_log(char const* event, int tab_id, QString const& detail = {})
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id;
     else
         qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
+}
+
+QString fallback_title_for_url(QString const& url)
+{
+    if (url.isEmpty() || url == QStringLiteral("about:blank"))
+        return QStringLiteral("New Tab");
+    QUrl parsed(url);
+    auto file_name = QFileInfo(parsed.path()).fileName();
+    if (!file_name.isEmpty())
+        return file_name;
+    return WebViewURL::url_for_display(url);
 }
 }
 
@@ -344,12 +357,13 @@ void Tab::showEmptyNewTab()
     update_tab_title();
 }
 
-void Tab::restoreSessionUrl(QString const& url)
+void Tab::restoreSessionUrl(QString const& url, QString const& title)
 {
     auto normalized_url = url.trimmed().isEmpty() ? QStringLiteral("about:blank") : url.trimmed();
     m_is_empty_new_tab = false;
     m_url = normalized_url;
-    m_title = normalized_url;
+    // Prefer the saved page title (Chrome-style); fall back to a display URL.
+    m_title = title.trimmed().isEmpty() ? WebViewURL::url_for_display(normalized_url) : title.trimmed();
     // Restored tabs don't load until activated; show the site's cached favicon
     // (Chrome does the same) instead of a generic globe until then.
     m_favicon = FaviconStore::the()->iconForUrl(normalized_url);
@@ -415,6 +429,17 @@ void Tab::navigate(QString const& url)
         servoq::load_url(m_controller_id, normalized_url.toStdString());
     applyControllerState();
     on_load_finish();
+    // A background tab defers its engine webview (§0d), so applyControllerState
+    // above reset title/URL to controller placeholders and no load events will
+    // arrive until activation. Show the queued URL, the cached site favicon, and
+    // run the Qt-side favicon probe — all without touching the engine.
+    if (!is_active && !m_view->webviewCreated()) {
+        on_url_change(normalized_url, /* record_visit */ false);
+        m_title = WebViewURL::url_for_display(normalized_url);
+        update_tab_title();
+        on_favicon_change(FaviconStore::the()->iconForUrl(normalized_url));
+        start_favicon_probe(m_view);
+    }
     // When the engine already existed, ensureEngineStarted does not re-attach
     // the surface that the internal page unmapped — drive a full re-activation.
     if (leaving_internal && is_active)
@@ -608,7 +633,13 @@ void Tab::on_url_change(QString const& url, bool record_visit)
 
 void Tab::on_title_change(QString const& title, bool record_visit)
 {
-    m_title = title.isEmpty() ? QStringLiteral("New Tab") : title;
+    // Untitled documents (bare images, plain text, media) show the file name,
+    // or the display URL when there is none — like Chrome; "New Tab" is only
+    // for pages with no real URL.
+    auto effective = title.trimmed();
+    if (effective.isEmpty())
+        effective = fallback_title_for_url(m_url);
+    m_title = effective;
     update_tab_title();
     // Update title of most-recent history entry for current URL
     if (record_visit)

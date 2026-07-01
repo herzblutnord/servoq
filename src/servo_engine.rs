@@ -1040,10 +1040,21 @@ mod engine {
                 return;
             }
             debug_log_detail("notify_url_changed", self.tab_id, &url);
+            let mut title_cleared = false;
             ENGINE.with(|s| {
                 let mut s = s.borrow_mut();
                 if let Some(e) = s.as_mut() {
                     if let Some(t) = e.tabs.get_mut(&self.tab_id) {
+                        let without_fragment =
+                            |u: &str| u.split('#').next().unwrap_or_default().to_string();
+                        // New document (not a same-document fragment/pushState-with-
+                        // same-path change): drop the previous page's title so an
+                        // untitled document (e.g. a bare image) doesn't inherit it
+                        // on tab-switch resync; the shell derives a URL fallback.
+                        if without_fragment(&t.current_url) != without_fragment(url.as_str()) {
+                            t.title = String::new();
+                            title_cleared = true;
+                        }
                         t.current_url = url.to_string();
                     }
                 }
@@ -1056,6 +1067,13 @@ mod engine {
                 return;
             }
             crate::bridge::ffi::notify_url_changed(self.tab_id, url.as_str());
+            // Untitled documents never fire notify_page_title_changed, so push the
+            // cleared title (after the URL, which the fallback derives from) instead
+            // of leaving the shell on the previous document's title. A real title
+            // arriving later simply overwrites the fallback.
+            if title_cleared {
+                crate::bridge::ffi::notify_title_changed(self.tab_id, "");
+            }
         }
 
         fn notify_page_title_changed(&self, _webview: WebView, title: Option<String>) {
@@ -1066,7 +1084,9 @@ mod engine {
                 log_ignored_closed_callback("notify_page_title_changed", self.tab_id);
                 return;
             }
-            let title_str = title.as_deref().unwrap_or("New Tab");
+            // Untitled documents (e.g. bare images) forward "" so the shell can
+            // derive a file-name/URL fallback title (Chrome behavior).
+            let title_str = title.as_deref().unwrap_or("");
             debug_log_detail("notify_title_changed", self.tab_id, title_str);
             ENGINE.with(|s| {
                 let mut s = s.borrow_mut();
@@ -1372,7 +1392,9 @@ mod engine {
                     e.tabs.insert(new_id, TabEntry {
                         webview,
                         current_url: String::new(),
-                        title: "New Tab".to_string(),
+                        // Empty until the page reports one: the shell derives a
+                    // file-name/URL fallback ("New Tab" only for blank URLs).
+                    title: String::new(),
                         loading: false,
                         status_text: String::new(),
                         active: true,
@@ -1782,7 +1804,9 @@ mod engine {
                 TabEntry {
                     webview,
                     current_url: url.to_string(),
-                    title: "New Tab".to_string(),
+                    // Empty until the page reports one: the shell derives a
+                    // file-name/URL fallback ("New Tab" only for blank URLs).
+                    title: String::new(),
                     loading: false,
                     status_text: String::new(),
                     active: true,
@@ -1907,7 +1931,9 @@ mod engine {
                 TabEntry {
                     webview,
                     current_url: url.to_string(),
-                    title: "New Tab".to_string(),
+                    // Empty until the page reports one: the shell derives a
+                    // file-name/URL fallback ("New Tab" only for blank URLs).
+                    title: String::new(),
                     loading: false,
                     status_text: String::new(),
                     active: true,
@@ -2015,7 +2041,9 @@ mod engine {
                 TabEntry {
                     webview,
                     current_url: url.to_string(),
-                    title: "New Tab".to_string(),
+                    // Empty until the page reports one: the shell derives a
+                    // file-name/URL fallback ("New Tab" only for blank URLs).
+                    title: String::new(),
                     loading: false,
                     status_text: String::new(),
                     active: true,

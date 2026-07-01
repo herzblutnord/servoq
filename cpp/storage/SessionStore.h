@@ -7,6 +7,8 @@ namespace ServoQ {
 
 struct SessionTabState {
     QString url;
+    // Last known page title, shown on restored tabs until they load (Chrome-style).
+    QString title;
     bool is_empty_new_tab { false };
     bool pinned { false };
 };

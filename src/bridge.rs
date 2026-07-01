@@ -41,7 +41,9 @@ pub mod ffi {
 
     unsafe extern "C++" {
         include!("servoq/cpp/qt_app.h");
-        fn run_qt_application() -> i32;
+        // Process argv (argv[0] included); positional args open as tabs,
+        // --active-tab=N selects a tab after startup (see cpp/main.cpp).
+        fn run_qt_application(args: Vec<String>) -> i32;
         fn servo_profile_data_dir() -> String;
         // Best installed CJK-capable font family for a generic family
         // ("serif"/"sans-serif"/"monospace"), locale-ordered, or "" if none.

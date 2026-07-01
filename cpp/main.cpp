@@ -2,11 +2,14 @@
 #include "ui/BrowserWindow.h"
 #include "ui/Icon.h"
 #include "engine/servo_callbacks.h"
+#include "engine/WebViewURL.h"
 #include "servoq/src/bridge.rs.h"
 
 #include <QApplication>
+#include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QImageReader>
@@ -15,9 +18,12 @@
 #include <QResource>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 #include <QWindow>
 
 #include <cstdio>
+#include <string>
+#include <vector>
 
 void init_servoq_resources()
 {
@@ -126,15 +132,46 @@ namespace servoq {
     return {};
 }
 
-int run_qt_application()
+// CLI arguments: an existing local path (relative or absolute) opens as a
+// file URL; everything else goes through the URL-bar grammar (search fallback).
+static QString startup_url_for_argument(QString const& argument)
 {
-    static int argc = 1;
-    static char app_name[] = "servoq";
-    static char* argv[] = { app_name, nullptr };
+    QFileInfo info(argument);
+    if (info.exists())
+        return QUrl::fromLocalFile(info.absoluteFilePath()).toString(QUrl::FullyEncoded);
+    return ServoQ::WebViewURL::sanitize_url(argument).value_or(argument);
+}
 
-    QApplication app(argc, argv);
+int run_qt_application(::rust::Vec<::rust::String> args)
+{
+    // QApplication keeps argc/argv references for its whole lifetime.
+    static std::vector<std::string> arg_storage;
+    static std::vector<char*> arg_pointers;
+    static int argc = 0;
+    for (auto const& arg : args)
+        arg_storage.emplace_back(std::string(arg));
+    if (arg_storage.empty())
+        arg_storage.emplace_back("servoq");
+    for (auto& arg : arg_storage)
+        arg_pointers.push_back(arg.data());
+    arg_pointers.push_back(nullptr);
+    argc = static_cast<int>(arg_storage.size());
+
+    QApplication app(argc, arg_pointers.data());
     QCoreApplication::setApplicationName(QStringLiteral("ServoQ"));
     QCoreApplication::setOrganizationName(QStringLiteral("ServoQ"));
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription(QStringLiteral("ServoQ — a Qt shell for the Servo web engine"));
+    parser.addHelpOption();
+    parser.addPositionalArgument(QStringLiteral("url"),
+        QStringLiteral("Web addresses or local files to open, one tab each."),
+        QStringLiteral("[url...]"));
+    QCommandLineOption active_tab_option(QStringLiteral("active-tab"),
+        QStringLiteral("Select tab <index> (0-based, over all tabs) after startup."),
+        QStringLiteral("index"));
+    parser.addOption(active_tab_option);
+    parser.process(app);
     init_servoq_resources();
     auto icon = ServoQ::app_icon();
     app.setWindowIcon(icon);
@@ -160,6 +197,14 @@ int run_qt_application()
     servoq::init_servo();
 
     ServoQ::BrowserWindow window;
+
+    QStringList startup_urls;
+    for (auto const& argument : parser.positionalArguments())
+        startup_urls.append(startup_url_for_argument(argument));
+    bool active_tab_ok = false;
+    int active_tab = parser.value(active_tab_option).toInt(&active_tab_ok);
+    window.openStartupUrls(startup_urls, active_tab_ok ? active_tab : -1);
+
     apply_window_icon_to_qwindow(window, icon);
     window.show();
     apply_window_icon_to_qwindow(window, icon);

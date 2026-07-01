@@ -57,7 +57,7 @@ public:
     void showEmptyNewTab();
     void showInternalPage(QString const& url);
     bool isInternalPage() const { return m_is_internal_page; }
-    void restoreSessionUrl(QString const& url);
+    void restoreSessionUrl(QString const& url, QString const& title = {});
     void attachExistingWebView(QString const& initial_url = {});
     void updateToggleVerticalTabsIcon();
     void navigate(QString const& url);

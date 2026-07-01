@@ -45,6 +45,9 @@ public:
     void openNextTab();
     void openPreviousTab();
     void createNewTab(QString const& url = {}, bool background = false, bool use_configured_new_tab = true);
+    // CLI startup: open each URL in a tab (reusing the initial empty tab), then
+    // optionally select a tab by index (--active-tab).
+    void openStartupUrls(QStringList const& urls, int active_index);
     void openTabForExistingId(int tab_id);
     void setFullscreen(bool fullscreen);
     void closeTabFromContextMenu(int index);

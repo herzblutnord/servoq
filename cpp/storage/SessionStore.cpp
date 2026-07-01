@@ -53,6 +53,7 @@ void SessionStore::load()
             continue;
         m_tabs.append({
             is_empty ? QStringLiteral("about:blank") : url,
+            object[QStringLiteral("title")].toString(),
             is_empty,
             object[QStringLiteral("pinned")].toBool(false),
         });
@@ -88,7 +89,7 @@ void SessionStore::migrateLegacyQSettingsSession()
             auto url = object.value(QStringLiteral("url")).toString().trimmed();
             if (!is_empty && url.isEmpty())
                 continue;
-            m_tabs.append({ is_empty ? QStringLiteral("about:blank") : url, is_empty, false });
+            m_tabs.append({ is_empty ? QStringLiteral("about:blank") : url, QString(), is_empty, false });
         }
         m_active_tab_index = settings.value(QStringLiteral("session/active_tab_index"), 0).toInt();
     }
@@ -104,6 +105,8 @@ void SessionStore::save()
     for (auto const& tab : m_tabs) {
         QJsonObject object;
         object.insert(QStringLiteral("url"), tab.url);
+        if (!tab.title.isEmpty())
+            object.insert(QStringLiteral("title"), tab.title);
         if (tab.is_empty_new_tab)
             object.insert(QStringLiteral("empty"), true);
         if (tab.pinned)

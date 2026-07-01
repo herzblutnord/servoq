@@ -815,6 +815,23 @@ bool BrowserWindow::restoreSessionTabs()
     return true;
 }
 
+void BrowserWindow::openStartupUrls(QStringList const& urls, int active_index)
+{
+    if (!urls.isEmpty()) {
+        // Chrome behavior: CLI URLs replace a lone empty new tab, otherwise
+        // append after whatever the session restored.
+        auto* tab = currentTab();
+        if (m_tabs->count() == 1 && tab && tab->isEmptyNewTab())
+            tab->navigate(urls.first());
+        else
+            createNewTab(urls.first());
+        for (int i = 1; i < urls.size(); ++i)
+            createNewTab(urls.at(i));
+    }
+    if (active_index >= 0 && active_index < m_tabs->count())
+        m_tabs->setCurrentIndex(active_index);
+}
+
 Tab* BrowserWindow::createRestoredSessionTab(SessionTabState const& entry)
 {
     auto tab_id = servoq::create_tab();
@@ -822,7 +839,7 @@ Tab* BrowserWindow::createRestoredSessionTab(SessionTabState const& entry)
     if (entry.is_empty_new_tab)
         tab->showEmptyNewTab();
     else
-        tab->restoreSessionUrl(entry.url);
+        tab->restoreSessionUrl(entry.url, entry.title);
     // The session is saved with the pinned group first, so restoring in order
     // keeps the group contiguous; no reordering needed here.
     tab->setPinned(entry.pinned);
@@ -1332,6 +1349,7 @@ void BrowserWindow::saveSessionState()
             continue;
         tabs.append({
             tab->isEmptyNewTab() ? QStringLiteral("about:blank") : tab->url(),
+            tab->isEmptyNewTab() ? QString() : tab->title(),
             tab->isEmptyNewTab(),
             tab->isPinned(),
         });
