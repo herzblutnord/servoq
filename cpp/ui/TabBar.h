@@ -23,7 +23,9 @@
 
 class QAction;
 class QBoxLayout;
+class QColor;
 class QContextMenuEvent;
+class QPainter;
 class QDragEnterEvent;
 class QDragLeaveEvent;
 class QDragMoveEvent;
@@ -82,6 +84,8 @@ public:
     int pinnedCount() const;
 
 private:
+    void paintTab(QPainter& painter, int index, QColor const& text_color, QColor const& muted_text);
+    void paintDropIndicator(QPainter& painter);
     QRect visualTabRect(int index) const;
     int tabIndexAt(QPoint const& position) const;
     int insertionIndexAt(QPoint const& position) const;

@@ -16,6 +16,7 @@
  *   Libraries/LibWeb/Loader/ContentBlocker.cpp
  */
 #include "ui/BrowserWindow.h"
+#include "DebugFlags.h"
 #include "ui/BookmarksBar.h"
 #include "storage/FaviconStore.h"
 #include "storage/HistoryStore.h"
@@ -84,26 +85,9 @@
 #include <algorithm>
 #include <optional>
 
-// TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — defined in WebContentView.cpp.
-bool servoq_diag_enabled();
-QString servoq_diag_describe(QObject const* o);
-void servoq_diag_log(QString const& msg);
-
 namespace ServoQ {
 
 namespace {
-
-bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
-
-void debug_log(char const* event, int tab_id, QString const& detail)
-{
-    if (debug_enabled())
-        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
-}
 
 // Rate-limit wake-driven ticking to once per kServoTickIntervalMs: Servo can wake
 // the loop ~25k×/s and each spin drains everything, so coalesce extra wakes (leave
@@ -185,7 +169,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
 
     // Main-thread jank detector: a 50 ms heartbeat whose gap reveals event-loop
     // stalls the per-second PERF flush can't show (SERVOQ_PERF/SERVOQ_NEWTAB_TRACE).
-    if (qEnvironmentVariableIsSet("SERVOQ_PERF") || newtab_trace_enabled()) {
+    if (perf_enabled() || newtab_trace_enabled()) {
         auto* heartbeat = new QTimer(this);
         heartbeat->setInterval(50);
         heartbeat->setTimerType(Qt::PreciseTimer);
@@ -462,6 +446,16 @@ void BrowserWindow::applyBrowserChromeCursors(QWidget* root)
 
 void BrowserWindow::createMenus()
 {
+    createFileMenu();
+    createEditMenu();
+    createHistoryMenu();
+    createViewMenu();
+    createSettingsAndHelpMenus();
+    createGlobalShortcuts();
+}
+
+void BrowserWindow::createFileMenu()
+{
     auto* file_menu = menuBar()->addMenu("&File");
     m_new_tab_action = new QAction("New &Tab", this);
     m_new_tab_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::AddTab));
@@ -530,7 +524,10 @@ void BrowserWindow::createMenus()
     connect(quit_action, &QAction::triggered, qApp, &QApplication::quit);
     file_menu->addAction(quit_action);
     m_hamburger_menu->addAction(quit_action);
+}
 
+void BrowserWindow::createEditMenu()
+{
     auto* edit_menu = menuBar()->addMenu("&Edit");
     m_find_action = new QAction("&Find in Page...", this);
     m_find_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::Find));
@@ -546,7 +543,10 @@ void BrowserWindow::createMenus()
         new QShortcut(shortcut, this, [this] { if (auto* tab = currentTab()) tab->findNext(); });
 
     m_hamburger_menu->addMenu(edit_menu);
+}
 
+void BrowserWindow::createHistoryMenu()
+{
     auto* history_menu = menuBar()->addMenu("&History");
     connect(history_menu, &QMenu::aboutToShow, this, [this, history_menu] {
         history_menu->clear();
@@ -581,7 +581,10 @@ void BrowserWindow::createMenus()
         }
     });
     m_hamburger_menu->addMenu(history_menu);
+}
 
+void BrowserWindow::createViewMenu()
+{
     auto* view_menu = menuBar()->addMenu("&View");
     m_toggle_bookmarks_action = new QAction("Toggle &Bookmarks Bar", this);
     m_toggle_bookmarks_action->setCheckable(true);
@@ -709,7 +712,10 @@ void BrowserWindow::createMenus()
         view_menu->addAction(m_show_menu_bar_action);
     }
     m_hamburger_menu->addMenu(view_menu);
+}
 
+void BrowserWindow::createSettingsAndHelpMenus()
+{
     // Browser settings live on the servoq://settings page; this is just a quick
     // entry point to it.
     auto* open_settings_page_action = new QAction(QStringLiteral("&Settings"), this);
@@ -725,7 +731,10 @@ void BrowserWindow::createMenus()
     about_action->setEnabled(false);
     help_menu->addAction(about_action);
     m_hamburger_menu->addMenu(help_menu);
+}
 
+void BrowserWindow::createGlobalShortcuts()
+{
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_H), this,
         [this] { openInternalPage(QStringLiteral("servoq://history")); });
     new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_J), this,

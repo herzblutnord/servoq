@@ -17,6 +17,7 @@
 // one with the largest pixel area (ties go to the last declared).
 
 #include "engine/Favicon.h"
+#include "DebugFlags.h"
 #include "storage/FaviconStore.h"
 #include "ui/Tab.h"
 #include "engine/WebContentView.h"
@@ -44,12 +45,6 @@
 namespace ServoQ {
 
 namespace {
-
-bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
 
 void debug_log_favicon(int tab_id, QString const& detail)
 {

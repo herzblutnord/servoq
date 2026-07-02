@@ -79,6 +79,12 @@ private:
     };
 
     void createMenus();
+    void createFileMenu();
+    void createEditMenu();
+    void createHistoryMenu();
+    void createViewMenu();
+    void createSettingsAndHelpMenus();
+    void createGlobalShortcuts();
     void createInitialTab();
     bool restoreSessionTabs();
     Tab* createRestoredSessionTab(SessionTabState const& entry);

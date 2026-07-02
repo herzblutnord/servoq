@@ -168,6 +168,8 @@ fn main() {
         "cpp/storage/StorageDb.cpp",
         // engine: Servo-facing glue (surface host, callbacks, dialogs)
         "cpp/engine/WebContentView.cpp",
+        "cpp/engine/servo_callbacks.cpp",
+        "cpp/engine/QtPerfStats.cpp",
         "cpp/engine/WebViewURL.cpp",
         "cpp/engine/Favicon.cpp",
         "cpp/engine/WebDialogs.cpp",

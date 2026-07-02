@@ -13,11 +13,10 @@
 #pragma once
 
 #include <QImage>
+#include <QList>
 #include <QSize>
 #include <QString>
 #include <QWidget>
-
-#include <functional>
 
 class QKeyEvent;
 class QMouseEvent;
@@ -29,11 +28,6 @@ namespace ServoQ {
 
 class Tab;
 class ServoWaylandContentWindow;
-
-// Evaluate JS in a tab's page context; callback runs on the main thread with
-// (success, result_text) — JSON on success, else an error description.
-void evaluate_javascript_in_tab(int tab_id, QString const& script,
-    std::function<void(bool, QString const&)> callback);
 
 class WebContentView final : public QWidget {
     Q_OBJECT
@@ -72,19 +66,22 @@ public:
     // Public so TabWidget::updateContainerGeometry can delegate to it.
     void updateContainerGeometry();
 
-    // tab_id -> view lookup for async completions (Favicon.cpp probe callbacks).
+    // tab_id -> view lookup for async completions (Favicon.cpp probe callbacks,
+    // the servo_callbacks.cpp FFI layer).
     static WebContentView* findByTabId(int tab_id);
+    // All live views, for shutdown-time iteration (servoq::begin_servo_shutdown).
+    static QList<WebContentView*> allViews();
 
     // State accessors used by TabWidget::dumpPresentationState.
     static WebContentView* currentWaylandOwner();
     static QWidget* sharedWaylandContainer();
+    static QWindow* sharedWaylandWindow();
     bool webviewCreated() const { return m_webview_created; }
     bool waylandRendererActivePublic() const { return m_wayland_renderer_active; }
     bool waylandPresentPendingPublic() const { return m_wayland_present_pending; }
     bool isEmptyNewTab() const { return m_empty_new_tab; }
 
     // Called from C++ callback (servoq::deliver_frame) to push a frame.
-    void receiveFrame(QImage const& frame);
     void receiveFrameBytes(uint8_t const* bytes, int width, int height);
     bool hasPendingFrameRepaint() const { return m_pending_frame_repaint; }
     // Why a present was requested — tracked per-second under SERVOQ_PERF so an

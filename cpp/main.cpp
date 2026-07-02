@@ -1,4 +1,5 @@
 #include "qt_app.h"
+#include "DebugFlags.h"
 #include "ui/BrowserWindow.h"
 #include "ui/Icon.h"
 #include "engine/servo_callbacks.h"
@@ -45,7 +46,7 @@ static QString icon_sizes_to_string(QIcon const& icon)
 
 static void log_icon_state(char const* label, QIcon const& icon)
 {
-    if (!qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+    if (!ServoQ::debug_enabled())
         return;
     std::fprintf(stderr, "SERVOQ_DEBUG app_icon %s.isNull=%s availableSizes=%s\n",
         label,
@@ -55,7 +56,7 @@ static void log_icon_state(char const* label, QIcon const& icon)
 
 static void log_icon_diagnostics(QApplication const& app, QMainWindow const& window, QIcon const& icon)
 {
-    if (!qEnvironmentVariableIsSet("SERVOQ_DEBUG"))
+    if (!ServoQ::debug_enabled())
         return;
     std::fprintf(stderr, "SERVOQ_DEBUG app_icon resource=%s resource_can_read=%s isNull=%s availableSizes=%s\n",
         AppIconResource,
@@ -178,7 +179,7 @@ int run_qt_application(::rust::Vec<::rust::String> args)
 #ifdef Q_OS_LINUX
     app.setDesktopFileName(QStringLiteral("servoq"));
 #endif
-    if (qEnvironmentVariableIsSet("SERVOQ_DEBUG")) {
+    if (ServoQ::debug_enabled()) {
         std::fprintf(stderr, "SERVOQ_DEBUG app_icon resource=%s resource_can_read=%s isNull=%s availableSizes=%s\n",
             AppIconResource,
             QImageReader(AppIconResourceString).canRead() ? "true" : "false",

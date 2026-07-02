@@ -6,7 +6,10 @@
 #include "rust/cxx.h"
 
 #include <cstdint>
+#include <functional>
 #include <type_traits>
+
+class QString;
 
 #ifndef CXX_DEFAULT_VALUE
 #define CXX_DEFAULT_VALUE(value) = value
@@ -180,3 +183,13 @@ void begin_servo_shutdown();
 bool servo_shutdown_started();
 
 } // namespace servoq
+
+namespace ServoQ {
+
+// Evaluate JS in a tab's page context (C++ side of servoq::evaluate_javascript);
+// callback runs on the main thread with (success, result_text) — JSON on
+// success, else an error description.
+void evaluate_javascript_in_tab(int tab_id, QString const& script,
+    std::function<void(bool, QString const&)> callback);
+
+} // namespace ServoQ

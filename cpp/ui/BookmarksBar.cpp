@@ -15,6 +15,7 @@
  *   UI/Qt/Menu.cpp
  */
 #include "ui/BookmarksBar.h"
+#include "DebugFlags.h"
 #include "storage/BookmarkStore.h"
 #include "storage/FaviconStore.h"
 #include "ui/ChromeStyle.h"
@@ -66,12 +67,6 @@ struct BookmarkDragPayload {
     QString id;
     QString source_folder_id;
 };
-
-static bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
 
 static void debug_bookmark_drag(QString const& detail)
 {

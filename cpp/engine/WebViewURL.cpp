@@ -7,6 +7,7 @@
  *   Libraries/LibWebView/Settings.cpp
  */
 #include "engine/WebViewURL.h"
+#include "DebugFlags.h"
 #include "storage/Settings.h"
 
 #include <QFileInfo>
@@ -15,12 +16,6 @@
 
 namespace ServoQ::WebViewURL {
 namespace {
-
-bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
 
 void debug_log(QString const& event, QString const& detail)
 {

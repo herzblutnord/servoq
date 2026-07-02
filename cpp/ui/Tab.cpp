@@ -13,6 +13,7 @@
  *   UI/Qt/BrowserWindow.cpp
  */
 #include "ui/Tab.h"
+#include "DebugFlags.h"
 #include "engine/Favicon.h"
 #include "engine/NewTabTrace.h"
 #include "ui/BookmarksBar.h"
@@ -58,22 +59,6 @@ namespace {
 constexpr int ToolbarHorizontalMargin = 12;
 constexpr int ToolbarVerticalMargin = 2;
 constexpr int ToolbarSidebarToggleNavigationGap = 8;
-
-bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
-
-void debug_log(char const* event, int tab_id, QString const& detail = {})
-{
-    if (!debug_enabled())
-        return;
-    if (detail.isEmpty())
-        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id;
-    else
-        qInfo().nospace() << "SERVOQ_DEBUG " << event << " tab_id=" << tab_id << " " << detail;
-}
 
 QString fallback_title_for_url(QString const& url)
 {

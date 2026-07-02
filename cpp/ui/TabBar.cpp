@@ -11,6 +11,7 @@
  */
 #include "ui/TabBar.h"
 
+#include "DebugFlags.h"
 #include "ui/BrowserWindow.h"
 #include "ui/ChromeStyle.h"
 #include "ui/ChromeLayout.h"
@@ -52,11 +53,6 @@
 #include <algorithm>
 #include <chrono>
 
-// TEMPORARY DIAGNOSTICS (SERVOQ_DIAG) — defined in WebContentView.cpp.
-bool servoq_diag_enabled();
-QString servoq_diag_describe(QObject const* o);
-void servoq_diag_log(QString const& msg);
-
 namespace {
 // Monotonic millisecond clock for the hover-expand freeze investigation, so the
 // log shows "tab switch -> first accepted click" gaps. steady_clock is allowed
@@ -71,13 +67,6 @@ qint64 servoq_diag_now_ms()
 
 namespace ServoQ {
 namespace {
-
-// Cached once — env reads take a process-global lock (docs/DEVIATIONS.md §0c).
-bool debug_enabled()
-{
-    static bool const v = qEnvironmentVariableIsSet("SERVOQ_DEBUG");
-    return v;
-}
 
 // Constants mirror Ladybird UI/Qt/TabBar.cpp and UI/Qt/ChromeLayout.h.
 constexpr int HorizontalTabStripHeight = 44;
@@ -426,127 +415,138 @@ void TabBar::paintEvent(QPaintEvent*)
         ChromeStyle::chrome_active_tab_surface_top(palette()),
         ChromeStyle::is_dark(palette()) ? 0.16 : 0.08);
     auto muted_text = ChromeStyle::chrome_muted_text(palette());
+
+    for (int index = 0; index < count(); ++index)
+        paintTab(painter, index, text_color, muted_text);
+
+    paintDropIndicator(painter);
+}
+
+void TabBar::paintTab(QPainter& painter, int index, QColor const& text_color, QColor const& muted_text)
+{
     auto is_vertical = m_tab_layout != TabLayout::Horizontal;
     auto is_collapsed = m_tab_layout == TabLayout::VerticalCollapsed;
 
-    for (int index = 0; index < count(); ++index) {
-        auto tab_rect = visualTabRect(index);
-        if (!tab_rect.isValid())
-            continue;
-        if (is_vertical && (tab_rect.bottom() < 0 || tab_rect.top() > height()))
-            continue;
+    auto tab_rect = visualTabRect(index);
+    if (!tab_rect.isValid())
+        return;
+    if (is_vertical && (tab_rect.bottom() < 0 || tab_rect.top() > height()))
+        return;
 
-        auto selected = index == currentIndex();
-        auto hover_progress = index == m_hover_animation_tab_index ? m_hover_progress : (index == m_hovered_tab_index ? 1.0 : 0.0);
+    auto selected = index == currentIndex();
+    auto hover_progress = index == m_hover_animation_tab_index ? m_hover_progress : (index == m_hovered_tab_index ? 1.0 : 0.0);
 
-        QRectF shape_rect;
-        if (is_collapsed)
-            shape_rect = collapsedVerticalTabShapeRect(QRectF(tab_rect));
-        else if (is_vertical)
-            shape_rect = tabCardShapeRect(QRectF(tab_rect));
+    QRectF shape_rect;
+    if (is_collapsed)
+        shape_rect = collapsedVerticalTabShapeRect(QRectF(tab_rect));
+    else if (is_vertical)
+        shape_rect = tabCardShapeRect(QRectF(tab_rect));
+    else
+        shape_rect = horizontalTabCardShapeRect(QRectF(tab_rect));
+
+    auto shape = tabShapePath(shape_rect, 9.0, 9.0);
+    if (selected) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(selectedTabShadow(palette(), 1));
+        painter.drawPath(shape.translated(0, 2));
+        painter.setBrush(selectedTabShadow(palette(), 0));
+        painter.drawPath(shape.translated(0, 1));
+
+        auto selected_gradient = QLinearGradient(shape_rect.topLeft(), shape_rect.bottomLeft());
+        selected_gradient.setColorAt(0.0, ChromeStyle::chrome_active_tab_surface_top(palette()));
+        selected_gradient.setColorAt(1.0, ChromeStyle::chrome_active_tab_surface_bottom(palette()));
+        painter.setBrush(selected_gradient);
+        painter.setPen(QPen(selectedTabBorder(palette(), is_collapsed), 1));
+        painter.drawPath(shape);
+    } else if (hover_progress > 0.0) {
+        painter.setBrush(tabHoverSurface(palette(), hover_progress));
+        painter.setPen(Qt::NoPen);
+        painter.drawPath(shape);
+    }
+
+    if (!selected && hover_progress <= 0.0 && index > 0 && index != currentIndex() + 1 && !is_collapsed) {
+        auto separator = ChromeStyle::chrome_border(palette());
+        separator.setAlpha(ChromeStyle::is_dark(palette()) ? 24 : 20);
+        painter.setPen(separator);
+        if (is_vertical)
+            painter.drawLine(QPoint(tab_rect.left() + 16, tab_rect.top()), QPoint(tab_rect.right() - 16, tab_rect.top()));
         else
-            shape_rect = horizontalTabCardShapeRect(QRectF(tab_rect));
+            painter.drawLine(QPoint(tab_rect.left(), 15), QPoint(tab_rect.left(), height() - 15));
+    }
 
-        auto shape = tabShapePath(shape_rect, 9.0, 9.0);
-        if (selected) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(selectedTabShadow(palette(), 1));
-            painter.drawPath(shape.translated(0, 2));
-            painter.setBrush(selectedTabShadow(palette(), 0));
-            painter.drawPath(shape.translated(0, 1));
+    auto contents_rect = shape_rect.toAlignedRect().adjusted(8, 0, -8, 0);
+    auto pinned = isTabPinned(index);
+    // Pinned horizontal tabs are favicon-only (compact, Chrome-style).
+    auto icon_only = is_collapsed || (pinned && !is_vertical);
+    auto icon = tabIcon(index);
+    if (icon.isNull())
+        icon = create_chrome_icon(ChromeIcon::Globe, palette());
+    auto icon_size = QSize(16, 16);
+    QRect icon_rect {
+        icon_only ? tab_rect.center().x() - icon_size.width() / 2 : contents_rect.left(),
+        contents_rect.top() + (contents_rect.height() - icon_size.height()) / 2,
+        icon_size.width(),
+        icon_size.height()
+    };
+    icon.paint(&painter, icon_rect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
 
-            auto selected_gradient = QLinearGradient(shape_rect.topLeft(), shape_rect.bottomLeft());
-            selected_gradient.setColorAt(0.0, ChromeStyle::chrome_active_tab_surface_top(palette()));
-            selected_gradient.setColorAt(1.0, ChromeStyle::chrome_active_tab_surface_bottom(palette()));
-            painter.setBrush(selected_gradient);
-            painter.setPen(QPen(selectedTabBorder(palette(), is_collapsed), 1));
-            painter.drawPath(shape);
-        } else if (hover_progress > 0.0) {
-            painter.setBrush(tabHoverSurface(palette(), hover_progress));
-            painter.setPen(Qt::NoPen);
-            painter.drawPath(shape);
-        }
+    if (icon_only)
+        return;
 
-        if (!selected && hover_progress <= 0.0 && index > 0 && index != currentIndex() + 1 && !is_collapsed) {
-            auto separator = ChromeStyle::chrome_border(palette());
-            separator.setAlpha(ChromeStyle::is_dark(palette()) ? 24 : 20);
-            painter.setPen(separator);
-            if (is_vertical)
-                painter.drawLine(QPoint(tab_rect.left() + 16, tab_rect.top()), QPoint(tab_rect.right() - 16, tab_rect.top()));
-            else
-                painter.drawLine(QPoint(tab_rect.left(), 15), QPoint(tab_rect.left(), height() - 15));
-        }
+    contents_rect.setLeft(icon_rect.right() + 8);
+    if (auto* button = tabButton(index, QTabBar::RightSide); button && button->isVisible())
+        contents_rect.setRight(contents_rect.right() - button->width() - 6);
 
-        auto contents_rect = shape_rect.toAlignedRect().adjusted(8, 0, -8, 0);
-        auto pinned = isTabPinned(index);
-        // Pinned horizontal tabs are favicon-only (compact, Chrome-style).
-        auto icon_only = is_collapsed || (pinned && !is_vertical);
-        auto icon = tabIcon(index);
-        if (icon.isNull())
-            icon = create_chrome_icon(ChromeIcon::Globe, palette());
-        auto icon_size = QSize(16, 16);
-        QRect icon_rect {
-            icon_only ? tab_rect.center().x() - icon_size.width() / 2 : contents_rect.left(),
-            contents_rect.top() + (contents_rect.height() - icon_size.height()) / 2,
-            icon_size.width(),
-            icon_size.height()
+    // Pinned tabs in the expanded vertical list keep their title but show
+    // a pin indicator where the close button would be.
+    if (pinned) {
+        QRect pin_rect {
+            contents_rect.right() - 12,
+            contents_rect.top() + (contents_rect.height() - 12) / 2,
+            12,
+            12
         };
-        icon.paint(&painter, icon_rect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
-
-        if (icon_only)
-            continue;
-
-        contents_rect.setLeft(icon_rect.right() + 8);
-        if (auto* button = tabButton(index, QTabBar::RightSide); button && button->isVisible())
-            contents_rect.setRight(contents_rect.right() - button->width() - 6);
-
-        // Pinned tabs in the expanded vertical list keep their title but show
-        // a pin indicator where the close button would be.
-        if (pinned) {
-            QRect pin_rect {
-                contents_rect.right() - 12,
-                contents_rect.top() + (contents_rect.height() - 12) / 2,
-                12,
-                12
-            };
-            create_chrome_icon(ChromeIcon::Pin, palette()).paint(&painter, pin_rect);
-            contents_rect.setRight(pin_rect.left() - 6);
-        }
-
-        auto tab_font = font();
-        if (selected)
-            tab_font.setWeight(QFont::DemiBold);
-        painter.setFont(tab_font);
-
-        auto tab_text_color = selected ? text_color : muted_text;
-        if (!selected)
-            tab_text_color.setAlpha(hover_progress > 0.0 ? (ChromeStyle::is_dark(palette()) ? 236 : 228) : (ChromeStyle::is_dark(palette()) ? 226 : 216));
-        painter.setPen(tab_text_color);
-        QFontMetrics metrics(tab_font);
-        auto title = metrics.elidedText(tabText(index), Qt::ElideRight, std::max(0, contents_rect.width()));
-        painter.drawText(contents_rect, Qt::AlignLeft | Qt::AlignVCenter, title);
+        create_chrome_icon(ChromeIcon::Pin, palette()).paint(&painter, pin_rect);
+        contents_rect.setRight(pin_rect.left() - 6);
     }
 
-    if (m_drop_indicator_index >= 0 && count() > 0) {
-        auto indicator_color = ChromeStyle::chrome_accent(palette());
-        indicator_color.setAlpha(220);
-        painter.setPen(QPen(indicator_color, 3, Qt::SolidLine, Qt::RoundCap));
+    auto tab_font = font();
+    if (selected)
+        tab_font.setWeight(QFont::DemiBold);
+    painter.setFont(tab_font);
 
-        if (is_vertical) {
-            auto indicator_y = m_drop_indicator_index >= count()
-                ? visualTabRect(count() - 1).bottom() + 3
-                : visualTabRect(m_drop_indicator_index).top() + 1;
-            indicator_y = std::max(3, std::min(height() - 3, indicator_y));
-            painter.drawLine(QPointF(10, indicator_y), QPointF(width() - 10, indicator_y));
-            return;
-        }
+    auto tab_text_color = selected ? text_color : muted_text;
+    if (!selected)
+        tab_text_color.setAlpha(hover_progress > 0.0 ? (ChromeStyle::is_dark(palette()) ? 236 : 228) : (ChromeStyle::is_dark(palette()) ? 226 : 216));
+    painter.setPen(tab_text_color);
+    QFontMetrics metrics(tab_font);
+    auto title = metrics.elidedText(tabText(index), Qt::ElideRight, std::max(0, contents_rect.width()));
+    painter.drawText(contents_rect, Qt::AlignLeft | Qt::AlignVCenter, title);
+}
 
-        auto indicator_x = m_drop_indicator_index >= count()
-            ? visualTabRect(count() - 1).right() + 3
-            : visualTabRect(m_drop_indicator_index).left() + 1;
-        indicator_x = std::max(2, std::min(width() - 3, indicator_x));
-        painter.drawLine(QPointF(indicator_x, 8), QPointF(indicator_x, height() - 6));
+void TabBar::paintDropIndicator(QPainter& painter)
+{
+    if (m_drop_indicator_index < 0 || count() == 0)
+        return;
+
+    auto indicator_color = ChromeStyle::chrome_accent(palette());
+    indicator_color.setAlpha(220);
+    painter.setPen(QPen(indicator_color, 3, Qt::SolidLine, Qt::RoundCap));
+
+    if (m_tab_layout != TabLayout::Horizontal) {
+        auto indicator_y = m_drop_indicator_index >= count()
+            ? visualTabRect(count() - 1).bottom() + 3
+            : visualTabRect(m_drop_indicator_index).top() + 1;
+        indicator_y = std::max(3, std::min(height() - 3, indicator_y));
+        painter.drawLine(QPointF(10, indicator_y), QPointF(width() - 10, indicator_y));
+        return;
     }
+
+    auto indicator_x = m_drop_indicator_index >= count()
+        ? visualTabRect(count() - 1).right() + 3
+        : visualTabRect(m_drop_indicator_index).left() + 1;
+    indicator_x = std::max(2, std::min(width() - 3, indicator_x));
+    painter.drawLine(QPointF(indicator_x, 8), QPointF(indicator_x, height() - 6));
 }
 
 void TabBar::showEvent(QShowEvent* event)
