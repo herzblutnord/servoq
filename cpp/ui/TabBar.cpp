@@ -86,6 +86,11 @@ constexpr int VerticalTabsCollapsedSideMargin = 6;
 constexpr int VerticalTabsExpandedSideMargin = 5;
 constexpr int VerticalTabsTopMargin = 8;
 constexpr int VerticalTabsHoverCollapsePollIntervalMs = 250;
+// How long a freshly expanded hover panel is assumed to be under the cursor
+// while its first wl_pointer.enter is still outstanding. Must exceed the 500 ms
+// m_hover_expand_in_progress guard; after this, missing Enter means the cursor
+// left (e.g. out of the window) before the floating panel mapped.
+constexpr int VerticalTabsHoverEnterGraceMs = 600;
 constexpr auto VerticalTabsExpandedProperty = "verticalTabsExpanded";
 constexpr auto VerticalTabsButtonProperty = "verticalTabsButton";
 constexpr auto VerticalTabsResizeHandleHoveredProperty = "hovered";
@@ -1329,11 +1334,38 @@ bool TabWidget::event(QEvent* event)
 
 bool TabWidget::eventFilter(QObject* watched, QEvent* event)
 {
-    if (m_main_window_filter_installed && watched == window() &&
-        (event->type() == QEvent::Move || event->type() == QEvent::Resize)) {
-        if (m_vertical_tab_bar_column->isWindow())
-            updateVerticalTabsOverlayGeometry();
-        return false;
+    if (m_main_window_filter_installed && watched == window()) {
+        if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
+            if (m_vertical_tab_bar_column->isWindow())
+                updateVerticalTabsOverlayGeometry();
+            return false;
+        }
+        // The floating panel is an xdg_popup stacked above other applications'
+        // windows, so it must never outlive this window's activation: collapse
+        // when another window takes over (alt-tab, click elsewhere, a window
+        // raised on top). Deferred so a transient blip — or one of our own
+        // popups (tab context menu) — doesn't tear the panel down.
+        if (event->type() == QEvent::WindowDeactivate && m_vertical_tabs_hover_expanded) {
+            QTimer::singleShot(0, this, [this] {
+                if (!m_vertical_tabs_hover_expanded)
+                    return;
+                if (QApplication::activePopupWidget())
+                    return;
+                if (auto* w = window(); w && w->isActiveWindow())
+                    return;
+                if (servoq_diag_enabled())
+                    servoq_diag_log(QStringLiteral("hover panel COLLAPSE on window deactivate | %1").arg(hoverDiagState()));
+                setVerticalTabsHoverExpanded(false);
+            });
+        }
+        // Re-activation with the cursor already over the collapsed strip fires no
+        // new Enter; re-run the hover check so the panel expands as expected.
+        if (event->type() == QEvent::WindowActivate && !m_vertical_tabs_hover_expanded) {
+            QTimer::singleShot(0, this, [this] {
+                if (!m_vertical_tabs_hover_expanded && canExpandVerticalTabsOnHover() && cursorIsOverVerticalTabs())
+                    setVerticalTabsHoverExpanded(true);
+            });
+        }
     }
 
     if (watched == m_vertical_tabs_resize_handle) {
@@ -1437,28 +1469,46 @@ bool TabWidget::verticalTabsEffectivelyExpanded() const
 
 bool TabWidget::canExpandVerticalTabsOnHover() const
 {
-    return m_vertical_tabs_enabled && m_vertical_tabs_expand_on_hover && !m_vertical_tabs_expanded;
+    // Inactive window: never pop the floating panel. It is an xdg_popup, which
+    // the compositor stacks above other applications' windows, so expanding
+    // while another window covers ServoQ would paint over that window.
+    return m_vertical_tabs_enabled && m_vertical_tabs_expand_on_hover && !m_vertical_tabs_expanded
+        && window() && window()->isActiveWindow();
 }
 
 bool TabWidget::cursorIsOverVerticalTabs() const
 {
     if (!m_vertical_tabs_content->isVisible())
         return false;
-    if (m_vertical_tab_bar_column->underMouse() || m_tab_bar->underMouse() || m_new_tab_button->underMouse())
-        return true;
     // While the tab column is a floating window the cursor is over a separate
     // wl_surface, so trust the event-driven underMouse() flag instead of the
     // Wayland-unreliable QCursor::pos(), which would cause expand/collapse
-    // oscillation and a tab-bar click freeze (§3).
+    // oscillation and a tab-bar click freeze (§3). This branch must run before
+    // the generic underMouse() check: it is gated on the floating window's own
+    // Enter, whereas pre-expand WA_UnderMouse state can go stale (see the reset
+    // in setVerticalTabsHoverExpanded).
     if (m_vertical_tab_bar_column->isWindow()) {
         // Before the floating window's first Enter (m_tab_column_floating_entered),
-        // assume the cursor is still over the panel we just expanded.
-        if (!m_tab_column_floating_entered)
-            return true;
+        // assume the cursor is still over the panel we just expanded — but only
+        // for a bounded grace period. If the cursor left the window before the
+        // panel mapped, that Enter never arrives, and unbounded trust kept the
+        // panel expanded until the cursor touched the window again.
+        if (!m_tab_column_floating_entered) {
+            if (m_hover_expand_grace.isValid()
+                && m_hover_expand_grace.elapsed() < VerticalTabsHoverEnterGraceMs)
+                return true;
+            // Grace expired without the panel's Enter. A compositor that doesn't
+            // re-evaluate pointer focus on map leaves a stationary cursor focused
+            // on the toplevel — then the toplevel's own pointer state is the
+            // truth: still inside keeps the panel, gone collapses it.
+            return window() && window()->underMouse();
+        }
         return m_vertical_tab_bar_column->underMouse()
             || m_tab_bar->underMouse()
             || m_new_tab_button->underMouse();
     }
+    if (m_vertical_tab_bar_column->underMouse() || m_tab_bar->underMouse() || m_new_tab_button->underMouse())
+        return true;
     auto rect = QRect {
         m_vertical_tabs_content->mapToGlobal(QPoint { 0, 0 }),
         QSize { currentVerticalTabsWidth(), m_vertical_tabs_content->height() }
@@ -1704,8 +1754,10 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         // saving here lets us put it back cleanly without guessing which widget owned it.
         m_saved_focus_before_hover_expand = QApplication::focusWidget();
 
-        // Until the compositor delivers the first Enter, don't collapse (§3).
+        // Until the compositor delivers the first Enter, don't collapse (§3) —
+        // bounded by VerticalTabsHoverEnterGraceMs (see cursorIsOverVerticalTabs).
         m_tab_column_floating_entered = false;
+        m_hover_expand_grace.start();
 
         // Float the column as a window so it paints above the native webview
         // surface. Qt::ToolTip (with parent) maps to xdg_popup, whose position
@@ -1713,6 +1765,13 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         m_vertical_tab_bar_column->hide();
         m_vertical_tab_bar_column->setParent(window(), Qt::ToolTip | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
         m_vertical_tab_bar_column->setAttribute(Qt::WA_ShowWithoutActivating);
+        // The reparent detaches these widgets from the toplevel's enter/leave
+        // chain, so WA_UnderMouse set by the triggering Enter never receives its
+        // clearing Leave and would read as "cursor still here" forever. Reset;
+        // the compositor re-delivers Enter if the cursor really is on the panel.
+        m_vertical_tab_bar_column->setAttribute(Qt::WA_UnderMouse, false);
+        m_tab_bar->setAttribute(Qt::WA_UnderMouse, false);
+        m_new_tab_button->setAttribute(Qt::WA_UnderMouse, false);
         m_vertical_tabs_hover_collapse_timer->start();
         if (!m_main_window_filter_installed) {
             if (auto* w = window()) {
@@ -1722,6 +1781,7 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         }
     } else {
         m_tab_column_floating_entered = false;
+        m_hover_expand_grace.invalidate();
 
         // setParent(.., Qt::Widget) clears the window flags so the overlay reverts
         // to a normal child widget.
