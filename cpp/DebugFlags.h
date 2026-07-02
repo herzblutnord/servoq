@@ -1,6 +1,5 @@
-// Shared, cached gates for the SERVOQ_* debug/diagnostic environment variables.
-// Cached once per process: qEnvironmentVariableIsSet takes a process-global lock
-// contended on hot paths (docs/DEVIATIONS.md §0c).
+// Shared gates for the SERVOQ_* env vars, cached once per process — env reads
+// take a process-global lock contended on hot paths (docs/DEVIATIONS.md §0c).
 
 #pragma once
 

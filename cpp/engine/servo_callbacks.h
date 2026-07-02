@@ -186,9 +186,8 @@ bool servo_shutdown_started();
 
 namespace ServoQ {
 
-// Evaluate JS in a tab's page context (C++ side of servoq::evaluate_javascript);
-// callback runs on the main thread with (success, result_text) — JSON on
-// success, else an error description.
+// Evaluate JS in a tab's page context; callback runs on the main thread with
+// (success, result_text) — JSON on success, else an error description.
 void evaluate_javascript_in_tab(int tab_id, QString const& script,
     std::function<void(bool, QString const&)> callback);
 

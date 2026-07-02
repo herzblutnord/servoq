@@ -140,6 +140,9 @@ public:
     TabBar* tabBar() const { return m_tab_bar; }
     TabBar* tab_bar() const { return m_tab_bar; }
 
+    // Focus + raise the browser window (xdg_activation); used by tab-strip clicks.
+    void activateBrowserWindow();
+
     // Returns the page-column QStackedWidget. WebContentView uses it to
     // calculate container geometry via mapTo().
     QWidget* contentViewport() const { return m_stack; }
@@ -245,8 +248,7 @@ private:
     int m_vertical_tabs_resize_start_global_x { 0 };
     int m_vertical_tabs_resize_start_width { browser_chrome_layout_policy().expanded_sidebar_width };
     QPointer<QWidget> m_saved_focus_before_hover_expand;
-    // Bounds the "no Enter received yet" trust window after a hover-expand, so a
-    // panel whose wl_pointer.enter never arrives cannot stay expanded forever.
+    // Bounds the pre-first-Enter trust after a hover-expand (docs/DEVIATIONS.md §0r).
     QElapsedTimer m_hover_expand_grace;
 };
 

@@ -86,10 +86,8 @@ constexpr int VerticalTabsCollapsedSideMargin = 6;
 constexpr int VerticalTabsExpandedSideMargin = 5;
 constexpr int VerticalTabsTopMargin = 8;
 constexpr int VerticalTabsHoverCollapsePollIntervalMs = 250;
-// How long a freshly expanded hover panel is assumed to be under the cursor
-// while its first wl_pointer.enter is still outstanding. Must exceed the 500 ms
-// m_hover_expand_in_progress guard; after this, missing Enter means the cursor
-// left (e.g. out of the window) before the floating panel mapped.
+// Trust window for the floating panel's first Enter; must exceed the 500 ms
+// in-progress guard (docs/DEVIATIONS.md §0r).
 constexpr int VerticalTabsHoverEnterGraceMs = 600;
 constexpr auto VerticalTabsExpandedProperty = "verticalTabsExpanded";
 constexpr auto VerticalTabsButtonProperty = "verticalTabsButton";
@@ -583,6 +581,10 @@ void TabBar::mouseDoubleClickEvent(QMouseEvent* event)
 
 void TabBar::mousePressEvent(QMouseEvent* event)
 {
+    // Any click on the tab strip focuses and raises the whole browser window,
+    // like a click anywhere else in it (docs/DEVIATIONS.md §0r).
+    if (m_tab_widget)
+        m_tab_widget->activateBrowserWindow();
     // Middle-click close: only capture the target by stable identity here, don't
     // close — closing on press mutated the bar and closed two tabs (§5a). The
     // close happens once, on release.
@@ -1340,11 +1342,8 @@ bool TabWidget::eventFilter(QObject* watched, QEvent* event)
                 updateVerticalTabsOverlayGeometry();
             return false;
         }
-        // The floating panel is an xdg_popup stacked above other applications'
-        // windows, so it must never outlive this window's activation: collapse
-        // when another window takes over (alt-tab, click elsewhere, a window
-        // raised on top). Deferred so a transient blip — or one of our own
-        // popups (tab context menu) — doesn't tear the panel down.
+        // The panel (an xdg_popup above other apps' windows) must not outlive this
+        // window's activation; deferred so our own popups don't tear it down (§0r).
         if (event->type() == QEvent::WindowDeactivate && m_vertical_tabs_hover_expanded) {
             QTimer::singleShot(0, this, [this] {
                 if (!m_vertical_tabs_hover_expanded)
@@ -1432,6 +1431,10 @@ bool TabWidget::eventFilter(QObject* watched, QEvent* event)
         }
     }
     if (is_hover_target) {
+        // Clicks on the strip's non-TabBar parts (panel background, new-tab
+        // button) focus the browser window too; TabBar handles its own presses.
+        if (event->type() == QEvent::MouseButtonPress)
+            activateBrowserWindow();
         if (event->type() == QEvent::Enter) {
             // When the floating window receives its first Enter, the Wayland compositor
             // has delivered wl_pointer.enter — underMouse() is now reliable. Clear the
@@ -1469,9 +1472,8 @@ bool TabWidget::verticalTabsEffectivelyExpanded() const
 
 bool TabWidget::canExpandVerticalTabsOnHover() const
 {
-    // Inactive window: never pop the floating panel. It is an xdg_popup, which
-    // the compositor stacks above other applications' windows, so expanding
-    // while another window covers ServoQ would paint over that window.
+    // Inactive window: never pop the panel — it is an xdg_popup and would paint
+    // above whatever window covers ServoQ (docs/DEVIATIONS.md §0r).
     return m_vertical_tabs_enabled && m_vertical_tabs_expand_on_hover && !m_vertical_tabs_expanded
         && window() && window()->isActiveWindow();
 }
@@ -1480,27 +1482,15 @@ bool TabWidget::cursorIsOverVerticalTabs() const
 {
     if (!m_vertical_tabs_content->isVisible())
         return false;
-    // While the tab column is a floating window the cursor is over a separate
-    // wl_surface, so trust the event-driven underMouse() flag instead of the
-    // Wayland-unreliable QCursor::pos(), which would cause expand/collapse
-    // oscillation and a tab-bar click freeze (§3). This branch must run before
-    // the generic underMouse() check: it is gated on the floating window's own
-    // Enter, whereas pre-expand WA_UnderMouse state can go stale (see the reset
-    // in setVerticalTabsHoverExpanded).
+    // Floating panel: event-driven state only — QCursor::pos() is Wayland-unreliable
+    // (§3) — and this branch must precede the stale-able underMouse() checks (§0r).
     if (m_vertical_tab_bar_column->isWindow()) {
-        // Before the floating window's first Enter (m_tab_column_floating_entered),
-        // assume the cursor is still over the panel we just expanded — but only
-        // for a bounded grace period. If the cursor left the window before the
-        // panel mapped, that Enter never arrives, and unbounded trust kept the
-        // panel expanded until the cursor touched the window again.
+        // No first Enter yet: trust for a bounded grace, then let the toplevel's
+        // own pointer state decide (docs/DEVIATIONS.md §0r).
         if (!m_tab_column_floating_entered) {
             if (m_hover_expand_grace.isValid()
                 && m_hover_expand_grace.elapsed() < VerticalTabsHoverEnterGraceMs)
                 return true;
-            // Grace expired without the panel's Enter. A compositor that doesn't
-            // re-evaluate pointer focus on map leaves a stationary cursor focused
-            // on the toplevel — then the toplevel's own pointer state is the
-            // truth: still inside keeps the panel, gone collapses it.
             return window() && window()->underMouse();
         }
         return m_vertical_tab_bar_column->underMouse()
@@ -1737,6 +1727,14 @@ void TabWidget::setResizeHandleProperty(char const* property, bool enabled)
     setDynamicPropertyIfNeeded(*m_vertical_tab_bar_column, property, enabled);
 }
 
+// On Wayland only xdg_activation (activateWindow) can focus AND raise; window()
+// is used, not the floating panel's own window handle, so this works from both.
+void TabWidget::activateBrowserWindow()
+{
+    if (auto* w = window())
+        w->activateWindow();
+}
+
 void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
 {
     expanded &= canExpandVerticalTabsOnHover();
@@ -1765,10 +1763,8 @@ void TabWidget::setVerticalTabsHoverExpanded(bool expanded)
         m_vertical_tab_bar_column->hide();
         m_vertical_tab_bar_column->setParent(window(), Qt::ToolTip | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
         m_vertical_tab_bar_column->setAttribute(Qt::WA_ShowWithoutActivating);
-        // The reparent detaches these widgets from the toplevel's enter/leave
-        // chain, so WA_UnderMouse set by the triggering Enter never receives its
-        // clearing Leave and would read as "cursor still here" forever. Reset;
-        // the compositor re-delivers Enter if the cursor really is on the panel.
+        // Reparenting detaches these from the toplevel's enter/leave chain; stale
+        // WA_UnderMouse would read "cursor still here" forever (§0r).
         m_vertical_tab_bar_column->setAttribute(Qt::WA_UnderMouse, false);
         m_tab_bar->setAttribute(Qt::WA_UnderMouse, false);
         m_new_tab_button->setAttribute(Qt::WA_UnderMouse, false);
