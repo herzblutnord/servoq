@@ -1,3 +1,13 @@
+> [!CAUTION]
+> 
+> *This is purely a fun project that is not supposed to be proper, good or make any sense.*
+
+> [!IMPORTANT]
+> 
+> In this repo i try to see how far i can come, purely with vibecoding ai-slop.
+> By no means this is supposed to be a real browser, look at the repo/code at your own discretion.
+
+
 <img src="docs/images/screenshot_main.jpg" alt="ServoQ overview" width="800">
 
 # ServoQ
