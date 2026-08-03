@@ -7,6 +7,9 @@
 > In this repo i try to see how far i can come, purely with vibecoding ai-slop.
 > By no means this is supposed to be a real browser, look at the repo/code at your own discretion.
 
+> [!NOTE]
+> Despite everything, this is surprisingly usable. Try it if you want, or dont.
+
 
 <img src="docs/images/screenshot_main.jpg" alt="ServoQ overview" width="800">
 
