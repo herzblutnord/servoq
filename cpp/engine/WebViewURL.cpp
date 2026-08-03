@@ -133,7 +133,12 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
 
     bool https_scheme_was_guessed = false;
     auto parsed_url = parse_url(location);
-    if (!parsed_url.has_value() || parsed_url->scheme().compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+    if (parsed_url.has_value() && parsed_url->host().isEmpty()
+        && (parsed_url->scheme().compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0
+            || is_domain_like(parsed_url->scheme()))) {
+        // QUrl reads the host before an explicit port as a scheme.
+        parsed_url = parse_url(QStringLiteral("http://") + location);
+    } else if (!parsed_url.has_value()) {
         if (!is_domain_like(location) && append_tld == AppendTLD::No)
             return search_url_or_error(location);
         parsed_url = parse_url(QStringLiteral("https://") + location);
@@ -141,6 +146,8 @@ std::optional<QString> sanitize_url(QString const& raw_location, AppendTLD appen
             return search_url_or_error(location);
         https_scheme_was_guessed = true;
     }
+    if (!parsed_url.has_value())
+        return search_url_or_error(location);
 
     auto url = *parsed_url;
     auto scheme = url.scheme().toLower();

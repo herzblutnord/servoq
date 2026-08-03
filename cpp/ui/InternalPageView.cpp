@@ -998,6 +998,16 @@ void InternalPageView::buildSettingsPage()
             settings->user_scripts_enabled(),
             [settings](bool on) { settings->set_user_scripts_enabled(on); });
 
+        add_check(form, group, QStringLiteral("Enable remote DevTools server (restart required)"),
+            settings->devtools_server_enabled(),
+            [settings](bool on) { settings->set_devtools_server_enabled(on); });
+
+        auto* devtools_hint = new QLabel(
+            QStringLiteral("Listens only on 127.0.0.1:7000 and asks before an inspector may control pages."),
+            group);
+        devtools_hint->setWordWrap(true);
+        form->addRow(devtools_hint);
+
         auto* scripts_row = new QWidget(group);
         auto* scripts_layout = new QHBoxLayout(scripts_row);
         scripts_layout->setContentsMargins(0, 0, 0, 0);
@@ -1275,6 +1285,8 @@ void InternalPageView::buildDebugPage()
     rows << QStringLiteral("User scripts: %1 (%2)")
                 .arg(settings->user_scripts_enabled() ? QStringLiteral("on") : QStringLiteral("off"))
                 .arg(Settings::user_scripts_directory());
+    rows << QStringLiteral("Remote DevTools: %1 (127.0.0.1:7000; restart required)")
+                .arg(settings->devtools_server_enabled() ? QStringLiteral("on") : QStringLiteral("off"));
     rows << QStringLiteral("Default search engine: %1").arg(settings->search_engine_name());
     rows << QStringLiteral("History entries (indexed): %1").arg(HistoryStore::the()->entries().size());
 
@@ -1308,8 +1320,8 @@ void InternalPageView::buildDebugPage()
     vbox->addWidget(console_group, 1);
 
     auto format_message = [](ConsoleLog::Message const& m) {
-        static char const* const names[] = { "LOG", "DEBUG", "INFO", "WARN", "ERROR", "TRACE" };
-        auto level = (m.level >= 0 && m.level < 6) ? names[m.level] : "LOG";
+        static char const* const names[] = { "LOG", "DEBUG", "INFO", "WARN", "ERROR", "TRACE", "DIR" };
+        auto level = (m.level >= 0 && m.level < 7) ? names[m.level] : "LOG";
         return QStringLiteral("[%1] [tab %2] %3: %4").arg(m.time).arg(m.tab_id).arg(QString::fromLatin1(level), m.text);
     };
     for (auto const& m : ConsoleLog::the()->messages())

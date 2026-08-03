@@ -275,6 +275,16 @@ QString Settings::user_scripts_directory()
     return dir + QStringLiteral("/userscripts");
 }
 
+bool Settings::devtools_server_enabled() const
+{
+    return m_qsettings.value(QStringLiteral("engine/devtools_server_enabled"), QVariant(false)).toBool();
+}
+
+void Settings::set_devtools_server_enabled(bool enabled)
+{
+    m_qsettings.setValue(QStringLiteral("engine/devtools_server_enabled"), enabled);
+}
+
 bool Settings::content_blocking_enabled() const
 {
     return m_qsettings.value(QStringLiteral("content_blocking/enabled"), QVariant(true)).toBool();

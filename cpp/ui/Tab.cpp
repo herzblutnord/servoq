@@ -135,6 +135,8 @@ Tab::Tab(BrowserWindow* window, int controller_id)
     };
     m_find_in_page->onHidden = [this] {
         servoq::hide_find_in_page(m_controller_id);
+        if (m_content_stack && m_content_stack->currentWidget())
+            m_content_stack->currentWidget()->setFocus(Qt::OtherFocusReason);
     };
 
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+L")), this, [this] { focusLocationEditor(); });
@@ -487,7 +489,7 @@ void Tab::setStatusText(QString const& status)
         m_window->tabStateChanged(this);
 }
 
-// Servo 0.2.0 also clamps internally, so our outer clamp matches the stricter bound.
+// Servo 0.4.0 also clamps internally, so our outer clamp matches the stricter bound.
 static constexpr float ZoomStep = 0.1f;
 static constexpr float ZoomMin  = 0.1f;
 static constexpr float ZoomMax  = 10.0f;
@@ -670,6 +672,7 @@ void Tab::on_link_hover(QString const& url)
     auto parsed = QUrl(url);
     m_hovered_link_url = (parsed.isValid() && !parsed.scheme().isEmpty()) ? url : QString();
     m_hover_label->setText(url);
+    m_hover_label->setCursor(m_view->cursor());
     setStatusText(url);
     updateHoverLabel();
     m_hover_label->show();

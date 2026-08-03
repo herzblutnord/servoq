@@ -7,12 +7,16 @@ app_dir="$data_home/applications"
 icon_root="$data_home/icons/hicolor"
 icon_src="$repo_root/cpp/icons/servo.png"
 desktop_dst="$app_dir/servoq.desktop"
-exec_path="$repo_root/target/release/servoq"
+exec_path=${SERVOQ_EXEC_PATH:-"$repo_root/target/release/servoq"}
 icon_name=servoq
 sizes="16 22 32 48 64 128 256"
 
 if [ ! -f "$icon_src" ]; then
     echo "missing icon: $icon_src" >&2
+    exit 1
+fi
+if [ ! -x "$exec_path" ]; then
+    echo "missing executable: $exec_path" >&2
     exit 1
 fi
 

@@ -16,7 +16,7 @@ use gstreamer;
 use gstreamer_app;
 use gstreamer_play;
 use gstreamer_play::prelude::*;
-use ipc_channel::ipc::{IpcReceiver, IpcSender, channel};
+use servo_base::generic_channel::{self, GenericCallback, GenericReceiver};
 use servo_media::MediaInstanceError;
 use servo_media_player::audio::AudioRenderer;
 use servo_media_player::context::PlayerGLContext;
@@ -409,12 +409,13 @@ macro_rules! notify(
 
 struct SeekChannel {
     sender: SeekLock,
-    recv: IpcReceiver<SeekLockMsg>,
+    recv: GenericReceiver<SeekLockMsg>,
 }
 
 impl SeekChannel {
     fn new() -> Self {
-        let (sender, recv) = channel::<SeekLockMsg>().expect("Couldn't create IPC channel");
+        let (sender, recv) =
+            generic_channel::channel::<SeekLockMsg>().expect("Couldn't create IPC channel");
         Self {
             sender: SeekLock {
                 lock_channel: sender,
@@ -440,7 +441,7 @@ pub struct GStreamerPlayer {
     /// Channel to communicate with the owner GStreamerBackend instance.
     backend_chan: Arc<Mutex<Sender<BackendMsg>>>,
     inner: RefCell<Option<Arc<Mutex<PlayerInner>>>>,
-    observer: Arc<Mutex<IpcSender<PlayerEvent>>>,
+    observer: Arc<Mutex<GenericCallback<PlayerEvent>>>,
     audio_renderer: Option<Arc<Mutex<dyn AudioRenderer>>>,
     video_renderer: Option<Arc<Mutex<dyn VideoFrameRenderer>>>,
     /// Indicates whether the setup was succesfully performed and
@@ -459,7 +460,7 @@ impl GStreamerPlayer {
         context_id: &ClientContextId,
         backend_chan: Arc<Mutex<Sender<BackendMsg>>>,
         stream_type: StreamType,
-        observer: IpcSender<PlayerEvent>,
+        observer: GenericCallback<PlayerEvent>,
         video_renderer: Option<Arc<Mutex<dyn VideoFrameRenderer>>>,
         audio_renderer: Option<Arc<Mutex<dyn AudioRenderer>>>,
         gl_context: Box<dyn PlayerGLContext>,
@@ -504,20 +505,8 @@ impl GStreamerPlayer {
         let signal_adapter = gstreamer_play::PlaySignalAdapter::new_sync_emit(&player);
         let pipeline = player.pipeline();
 
-        // ServoQ patch: the upstream "download" (progressive-download) playbin3
-        // flag is NOT set. Setting it makes playbin3's urisourcebin pre-parse the
-        // stream (`parse-streams=true`) by running a parsebin on Servo's push-based
-        // `servosrc`. On GStreamer 1.28, parsing a containerless MP3 pushed that way
-        // yields a demuxer pad with no GstStream ("No GstStream on pad" from
-        // gsturisourcebin.c), so decodebin3's `mq_slot_handle_stream_start` then hits
-        // `g_assert(collection)` (gstdecodebin3.c:3381) and aborts the whole process
-        // — i.e. visiting any page with a looping/streamed MP3 (e.g.
-        // medjed.nekoweb.org) crashed the browser. Upstream already disables this
-        // flag on Windows/Android (their FIXME(#282): "progressive downloading breaks
-        // playback"); ServoQ disables it on every platform. The flag is only a
-        // tempfile caching optimization — without it media still streams via normal
-        // network buffering, and the push MP3 reaches decodebin3 directly (which
-        // typefinds/parses it correctly). See docs/DEVIATIONS.md §0k.
+        // Keep progressive download disabled to avoid the GStreamer 1.28
+        // push-source MP3 abort (docs/DEVIATIONS.md §0k).
 
         // Set max size for the player buffer.
         pipeline.set_property("buffer-size", MAX_BUFFER_SIZE);
@@ -539,7 +528,6 @@ impl GStreamerPlayer {
 
             pipeline.set_property("audio-sink", &audio_sink);
 
-            // ServoQ patch: do not panic if the appsink cast fails.
             let audio_sink = audio_sink
                 .dynamic_cast::<gstreamer_app::AppSink>()
                 .map_err(|_| PlayerError::Backend("audio sink is not an AppSink".to_owned()))?;
@@ -550,9 +538,6 @@ impl GStreamerPlayer {
                 gstreamer_app::AppSinkCallbacks::builder()
                     .new_preroll(|_| Ok(gstreamer::FlowSuccess::Ok))
                     .new_sample(move |audio_sink| {
-                        // ServoQ patch: runs on a GStreamer streaming thread —
-                        // catch panics so they cannot abort the process, and
-                        // never `.unwrap()` a poisoned renderer lock.
                         crate::servoq_audio::guard(
                             "media player audio appsink callback",
                             || {
@@ -578,9 +563,7 @@ impl GStreamerPlayer {
                                     let buffer = buffer.clone();
                                     let map = match buffer.into_mapped_buffer_readable() {
                                         Ok(map) => map,
-                                        _ => {
-                                            return Err(gstreamer::FlowError::Error);
-                                        },
+                                        _ => return Err(gstreamer::FlowError::Error),
                                     };
                                     let chunk = Box::new(GStreamerAudioChunk(map));
                                     let channel = position.to_mask() as u32;
@@ -597,15 +580,9 @@ impl GStreamerPlayer {
                     .build(),
             );
         } else {
-            // ServoQ patch: plain media-element playback (no Web Audio renderer)
-            // would otherwise use Play's built-in autoaudiosink. Force ServoQ's
-            // preferred output (native PipeWire when available) with graceful
-            // fallback; if even that fails, leave Play's default in place.
             match crate::servoq_audio::pick_audio_sink() {
                 Ok(sink) => pipeline.set_property("audio-sink", &sink),
-                Err(err) => {
-                    log::warn!("[servoq] using Play's default audio sink: {err}")
-                },
+                Err(error) => log::warn!("[servoq] using Play's default audio sink: {error}"),
             }
         }
 

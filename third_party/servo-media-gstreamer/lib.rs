@@ -13,7 +13,6 @@ mod media_stream_source;
 pub mod player;
 mod registry_scanner;
 mod render;
-/// ServoQ patch: audio sink selection + codec capability check (docs/DEVIATIONS.md §0l).
 pub mod servoq_audio;
 mod source;
 pub mod webrtc;
@@ -28,11 +27,11 @@ use std::vec::Vec;
 
 use device_monitor::GStreamerDeviceMonitor;
 use gstreamer::prelude::*;
-use ipc_channel::ipc::IpcSender;
 use log::warn;
 use media_stream::GStreamerMediaStream;
 use mime::Mime;
 use registry_scanner::GSTREAMER_REGISTRY_SCANNER;
+use servo_base::generic_channel::GenericCallback;
 use servo_media::{Backend, BackendDeInit, BackendInit, MediaInstanceError, SupportsMediaType};
 use servo_media_audio::context::{AudioContext, AudioContextOptions};
 use servo_media_audio::decoder::AudioDecoder;
@@ -76,7 +75,6 @@ impl GStreamerBackend {
     ) -> Result<Box<dyn Backend>, ErrorLoadingPlugins<'a>> {
         gstreamer::init().unwrap();
 
-        // ServoQ patch: warn once if a web codec's decoder is missing.
         servoq_audio::log_codec_capabilities();
 
         // GStreamer between 1.19.1 and 1.22.7 will not send messages like "end of stream"
@@ -178,7 +176,7 @@ impl Backend for GStreamerBackend {
         &self,
         context_id: &ClientContextId,
         stream_type: StreamType,
-        sender: IpcSender<PlayerEvent>,
+        sender: GenericCallback<PlayerEvent>,
         renderer: Option<Arc<Mutex<dyn VideoFrameRenderer>>>,
         audio_renderer: Option<Arc<Mutex<dyn AudioRenderer>>>,
         gl_context: Box<dyn PlayerGLContext>,

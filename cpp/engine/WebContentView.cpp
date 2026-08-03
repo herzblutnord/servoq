@@ -31,6 +31,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QImage>
+#include <QInputDevice>
 #include <QKeyEvent>
 #include <QMap>
 #include <QMouseEvent>
@@ -41,7 +42,9 @@
 #include <QDebug>
 #include <QResizeEvent>
 #include <QStyleHints>
+#include <QTabletEvent>
 #include <QTimer>
+#include <QTouchEvent>
 #include <QWheelEvent>
 #include <QStackedWidget>
 #include <QWindow>
@@ -237,6 +240,18 @@ public:
 protected:
     bool event(QEvent* event) override
     {
+        if (m_owner && !servoq::servo_shutdown_started()) {
+            if (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate
+                || event->type() == QEvent::TouchEnd || event->type() == QEvent::TouchCancel) {
+                if (m_owner->forwardTouchEvent(static_cast<QTouchEvent*>(event), devicePixelRatio()))
+                    return true;
+            }
+            if (event->type() == QEvent::TabletPress || event->type() == QEvent::TabletMove
+                || event->type() == QEvent::TabletRelease) {
+                if (m_owner->forwardTabletEvent(static_cast<QTabletEvent*>(event), devicePixelRatio()))
+                    return true;
+            }
+        }
         // Touchpad pinch arrives on the embedded QWindow (it has pointer
         // focus while the cursor is over the page). Mirrors Ladybird's
         // ZoomNativeGesture handling; Servo applies the magnification.
@@ -376,9 +391,9 @@ protected:
         }
     }
 
-    void mouseDoubleClickEvent(QMouseEvent* event) override
+    void mouseDoubleClickEvent(QMouseEvent*) override
     {
-        mousePressEvent(event);
+        // QWindow already sends the second press before this event.
     }
 
     void wheelEvent(QWheelEvent* event) override
@@ -389,11 +404,12 @@ protected:
             return;
         double dx = 0.0;
         double dy = 0.0;
-        if (auto pixel_delta = -event->pixelDelta(); !pixel_delta.isNull()) {
+        auto pixel_delta = -event->pixelDelta();
+        auto* device = event->pointingDevice();
+        if (!pixel_delta.isNull() && device && device->type() == QInputDevice::DeviceType::TouchPad) {
             dx = pixel_delta.x();
             dy = pixel_delta.y();
-        } else {
-            auto angle_delta = -event->angleDelta();
+        } else if (auto angle_delta = -event->angleDelta(); !angle_delta.isNull()) {
             double step_x = static_cast<double>(angle_delta.x()) / 120.0
                             * static_cast<double>(QApplication::wheelScrollLines());
             double step_y = static_cast<double>(angle_delta.y()) / 120.0
@@ -401,6 +417,9 @@ protected:
             static constexpr double scroll_step_size = 40.0;
             dx = step_x * scroll_step_size;
             dy = step_y * scroll_step_size;
+        } else {
+            dx = pixel_delta.x();
+            dy = pixel_delta.y();
         }
 
         qreal dpr = devicePixelRatio();
@@ -504,6 +523,7 @@ WebContentView::WebContentView(QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
 
     // Empty new tabs and crash states are painted directly by this widget; real
     // pages are handed to Servo on first navigation.
@@ -1148,6 +1168,79 @@ void WebContentView::forwardResizeToEngine()
         update();
 }
 
+bool WebContentView::forwardTouchEvent(QTouchEvent* event, qreal dpr)
+{
+    if (!m_webview_created || m_tab_id == 0)
+        return false;
+
+    for (auto const& point : event->points())
+        m_active_touch_points[point.id()] = point.position();
+
+    if (event->type() == QEvent::TouchCancel) {
+        for (auto it = m_active_touch_points.cbegin(); it != m_active_touch_points.cend(); ++it) {
+            servoq::forward_touch(m_tab_id, 3, it.key(),
+                static_cast<float>(it.value().x() * dpr),
+                static_cast<float>(it.value().y() * dpr), 1);
+        }
+        m_active_touch_points.clear();
+        event->accept();
+        return true;
+    }
+
+    bool forwarded = false;
+    for (auto const& point : event->points()) {
+        int event_type = -1;
+        switch (point.state()) {
+        case QEventPoint::State::Pressed:
+            event_type = 0;
+            break;
+        case QEventPoint::State::Updated:
+            event_type = 1;
+            break;
+        case QEventPoint::State::Released:
+            event_type = 2;
+            break;
+        case QEventPoint::State::Stationary:
+        case QEventPoint::State::Unknown:
+            break;
+        }
+        if (event_type < 0)
+            continue;
+        servoq::forward_touch(m_tab_id, event_type, point.id(),
+            static_cast<float>(point.position().x() * dpr),
+            static_cast<float>(point.position().y() * dpr), 1);
+        if (event_type == 2)
+            m_active_touch_points.remove(point.id());
+        forwarded = true;
+    }
+    if (forwarded)
+        event->accept();
+    return forwarded;
+}
+
+bool WebContentView::forwardTabletEvent(QTabletEvent* event, qreal dpr)
+{
+    if (!m_webview_created || m_tab_id == 0)
+        return false;
+    int event_type = -1;
+    if (event->type() == QEvent::TabletPress) {
+        event_type = 0;
+        m_pen_active = true;
+    } else if (event->type() == QEvent::TabletMove && m_pen_active) {
+        event_type = 1;
+    } else if (event->type() == QEvent::TabletRelease && m_pen_active) {
+        event_type = 2;
+        m_pen_active = false;
+    }
+    if (event_type < 0)
+        return false;
+    servoq::forward_touch(m_tab_id, event_type, 0,
+        static_cast<float>(event->position().x() * dpr),
+        static_cast<float>(event->position().y() * dpr), 0);
+    event->accept();
+    return true;
+}
+
 // Set devicePixelRatio on the image so Qt maps physical pixels to the widget's
 // logical rect (avoids a painter.scale trick that breaks on DPR changes).
 void WebContentView::paintEvent(QPaintEvent*)
@@ -1359,11 +1452,12 @@ void WebContentView::wheelEvent(QWheelEvent* event)
     double dx = 0.0;
     double dy = 0.0;
 
-    if (auto pixel_delta = -event->pixelDelta(); !pixel_delta.isNull()) {
+    auto pixel_delta = -event->pixelDelta();
+    auto* device = event->pointingDevice();
+    if (!pixel_delta.isNull() && device && device->type() == QInputDevice::DeviceType::TouchPad) {
         dx = pixel_delta.x();
         dy = pixel_delta.y();
-    } else {
-        auto angle_delta = -event->angleDelta();
+    } else if (auto angle_delta = -event->angleDelta(); !angle_delta.isNull()) {
         double step_x = static_cast<double>(angle_delta.x()) / 120.0
                         * static_cast<double>(QApplication::wheelScrollLines());
         double step_y = static_cast<double>(angle_delta.y()) / 120.0
@@ -1371,6 +1465,9 @@ void WebContentView::wheelEvent(QWheelEvent* event)
         static constexpr double scroll_step_size = 40.0;
         dx = step_x * scroll_step_size;
         dy = step_y * scroll_step_size;
+    } else {
+        dx = pixel_delta.x();
+        dy = pixel_delta.y();
     }
 
     qreal dpr = devicePixelRatioF();
@@ -1641,6 +1738,16 @@ bool WebContentView::event(QEvent* ev)
     if (ev->type() == QEvent::KeyRelease) {
         keyReleaseEvent(static_cast<QKeyEvent*>(ev));
         return true;
+    }
+    if (ev->type() == QEvent::TouchBegin || ev->type() == QEvent::TouchUpdate
+        || ev->type() == QEvent::TouchEnd || ev->type() == QEvent::TouchCancel) {
+        if (forwardTouchEvent(static_cast<QTouchEvent*>(ev), devicePixelRatioF()))
+            return true;
+    }
+    if (ev->type() == QEvent::TabletPress || ev->type() == QEvent::TabletMove
+        || ev->type() == QEvent::TabletRelease) {
+        if (forwardTabletEvent(static_cast<QTabletEvent*>(ev), devicePixelRatioF()))
+            return true;
     }
     if (ev->type() == QEvent::DevicePixelRatioChange) {
         forwardResizeToEngine(); // sends new physical size + new hidpi scale factor

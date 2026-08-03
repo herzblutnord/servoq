@@ -2,7 +2,8 @@
 
 Re-sorting of typical browser features by implementation effort,
 grouped by related work. Status was determined by auditing the codebase
-(June 2026). Legend:
+(August 2026). The Servo 0.4 release-specific audit is in
+[`SERVO_0_4_INTEGRATION.md`](SERVO_0_4_INTEGRATION.md). Legend:
 
 - ✅ **done** — implemented, no work planned
 - ◐ **partial** — exists but with noted gaps
@@ -32,7 +33,8 @@ grouped by related work. Status was determined by auditing the codebase
 | Web-content context menu | ✅ | `show_context_menu_sync` (modal QMenu pattern) |
 | Window.open / popup tabs | ✅ | `request_create_new` → `request_open_tab_for_id` |
 | Focus handling | ✅ | |
-| Mouse/keyboard input + scroll forwarding | ✅ | incl. Ctrl+C/X/V → EditingAction, Ctrl+A fix |
+| Mouse/keyboard/touch/pen input + scroll forwarding | ✅ | incl. typed Servo 0.4 touch events, Ctrl+C/X/V → EditingAction, Ctrl+A fix |
+| Desktop file drag-and-drop | ✅ | dropped local files open in the current tab; additional files open in background tabs |
 | Cursor changes | ✅ | |
 | Page zoom | ✅ | Ctrl+± / Ctrl+0, reset chip in location bar |
 | Fullscreen | ✅ | |
@@ -68,7 +70,7 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 | # | Feature | Status | Reference |
 |---|---|---|---|
 | 1.1 | Simple JS dialogs (`alert`/`confirm`/`prompt`) | ✅ | Ladybird `Tab.cpp` on_request_alert/confirm/prompt; Servo `SimpleDialog` |
-| 1.2 | `<select>` dropdown | ✅ | Ladybird `WebContentView.cpp` select dropdown; Servo `SelectElement` |
+| 1.2 | `<select>` dropdown | ✅ | single-select menu plus checkbox dialog for `<select multiple>`, optgroups, disabled options, and an empty selection |
 | 1.3 | Color picker (`<input type=color>`) | ✅ | Ladybird `Tab.cpp` on_request_color_picker; Servo `ColorPicker` |
 | 1.4 | File picker (`<input type=file>`) | ✅ | Ladybird `Tab.cpp` on_request_file_picker; Servo `FilePicker` |
 | 1.5 | `window.close()` from content | ✅ | Servo `notify_closed` → deferred tab close |
@@ -112,12 +114,12 @@ reference (`UI/Qt/Tab.cpp`, `UI/Qt/WebContentView.cpp`) and servoshell's
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 5.1 | Download panel + downloads | ✗ | Servo 0.2 has no download API; needs `load_web_resource`-based design |
-| 5.2 | User scripts/styles management | ◐ | user *scripts* load from `<AppData>/userscripts/*.js` in filename order (servoshell `--userscripts` equivalent, servo 0.3.0), gated by Settings → Advanced → "Enable user scripts" (default off; applies to pages loaded afterwards); missing: in-browser script editor/manager and user *stylesheets* |
+| 5.1 | Download panel + downloads | ✗ | Servo 0.4 has no download API; needs `load_web_resource`-based design |
+| 5.2 | User scripts/styles management | ◐ | user *scripts* load from `<AppData>/userscripts/*.js` in filename order (servoshell `--userscripts` equivalent, Servo 0.4.0), gated by Settings → Advanced → "Enable user scripts" (default off; applies to pages loaded afterwards); missing: in-browser script editor/manager and user *stylesheets* |
 | 5.3 | Profiles | ✗ | separate config/cache dirs; Servo storage paths |
 | 5.4 | Private windows | ✗ | blocked on Servo-side storage isolation |
 | 5.5 | Multi-window | ✗ | conflicts with single shared Wayland surface (DEVIATIONS.md); needs per-window surface rework |
 | 5.6 | Media session integration | ✅ | MPRIS via QtDBus (`MprisManager`): `notify_media_session_event` → `org.mpris.MediaPlayer2.servoq` metadata/playback state; desktop controls drive `media_session_action` → `WebView::notify_media_session_action_event` |
-| 5.7 | Accessibility tree bridge (AccessKit) | ✗ | hardest item in the table |
-| 5.8 | DevTools connection prompt | ✗ | with devtools server toggle |
+| 5.7 | Accessibility tree bridge (AccessKit) | ✗ | Servo's June work remains upstream WIP; a Qt accessibility-tree graft and action bridge are still required |
+| 5.8 | DevTools connection prompt | ✅ | Settings → Advanced opt-in; loopback-only `127.0.0.1:7000`, restart required; every tokenless inspector connection prompts Allow/Deny |
 | 5.9 | Local sync architecture | ✗ | out of scope until storage stabilizes |

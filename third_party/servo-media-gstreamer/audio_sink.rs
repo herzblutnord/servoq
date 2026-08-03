@@ -98,10 +98,6 @@ impl AudioSink for GStreamerAudioSink {
         // Allow only a single chunk.
         self.appsrc.set_max_bytes(1);
 
-        // ServoQ patch: do not `.unwrap()` the thread spawn. If the OS refuses a
-        // new thread we wire the `need-data` callback synchronously on this
-        // thread instead of aborting the process. (`Sender` is `Clone`, so the
-        // fallback keeps the original channel while the thread gets a clone.)
         let appsrc_for_thread = self.appsrc.clone();
         let sender_for_thread = graph_thread_channel.clone();
         let spawn_result = Builder::new()
@@ -121,8 +117,7 @@ impl AudioSink for GStreamerAudioSink {
             });
         if spawn_result.is_err() {
             log::warn!("[servoq] GstAppSrcCallbacks thread spawn failed; wiring callback inline");
-            let appsrc_inline = self.appsrc.clone();
-            appsrc_inline.set_callbacks(
+            self.appsrc.set_callbacks(
                 AppSrcCallbacks::builder()
                     .need_data(move |_: &AppSrc, _: u32| {
                         if let Err(e) = graph_thread_channel.send(AudioRenderThreadMsg::SinkNeedData)
@@ -145,8 +140,6 @@ impl AudioSink for GStreamerAudioSink {
             .map_err(|error| {
                 AudioSinkError::Backend(format!("audioconvert creation failed: {error:?}"))
             })?;
-        // ServoQ patch: prefer native pipewiresink with graceful fallback
-        // instead of always using autoaudiosink (see servoq_audio.rs).
         let sink = crate::servoq_audio::pick_audio_sink().map_err(AudioSinkError::Backend)?;
         self.pipeline
             .add_many([&appsrc, &resample, &convert, &sink])
@@ -216,11 +209,6 @@ impl AudioSink for GStreamerAudioSink {
             self.set_channels_if_changed(block.chan_count())?;
         }
 
-        // ServoQ patch: this runs on servo-media's audio render thread for every
-        // block. None of the steps below may panic — a panic here would either
-        // poison the render thread (killing all audio) or, with panic=abort,
-        // take down the whole browser. Every former unwrap/expect/assert now
-        // returns an AudioSinkError, which servo-media handles as a soft failure.
         let sample_rate = self.sample_rate.get() as u64;
         let audio_info_ref = self.audio_info.borrow();
         let Some(audio_info) = audio_info_ref.as_ref() else {
@@ -246,9 +234,7 @@ impl AudioSink for GStreamerAudioSink {
             let mut sample_offset = self.sample_offset.get();
             // Calculate the current timestamp (PTS) and the next one,
             // and calculate the duration from the difference instead of
-            // simply the number of samples to prevent rounding errors.
-            // `mul_div_floor` returns None on overflow or a zero sample rate;
-            // fall back to 0 rather than panicking.
+            // simply the number of samples to prevent rounding errors
             let pts = gstreamer::ClockTime::from_nseconds(
                 sample_offset
                     .mul_div_floor(gstreamer::ClockTime::SECOND.nseconds(), sample_rate)

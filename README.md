@@ -25,7 +25,10 @@ I still intend to keep an eye on upstream Ladybird UI changes and pull in the pa
 
 # Feature status
 
-See [FEATURE MILESTONES](docs/FEATURE_MILESTONES.md) for implemented and WIP browser features.
+See [FEATURE MILESTONES](docs/FEATURE_MILESTONES.md) for implemented and WIP browser features
+and [SERVO 0.4 INTEGRATION](docs/SERVO_0_4_INTEGRATION.md) for the current engine-release audit.
+The latest ServoShell/Ladybird comparison is in the
+[UPSTREAM REFERENCE AUDIT](docs/UPSTREAM_REFERENCE_AUDIT_2026_08.md).
 
 ## A note on how this was built
 

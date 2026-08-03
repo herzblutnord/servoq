@@ -23,10 +23,10 @@
 #[cfg(feature = "servo-engine")]
 mod engine {
     use std::cell::{Cell, RefCell};
-    use std::ffi::{c_char, c_void, CStr};
-    use std::ptr::NonNull;
     use std::collections::HashMap;
+    use std::ffi::{c_char, c_void, CStr};
     use std::path::{Path, PathBuf};
+    use std::ptr::NonNull;
     use std::rc::Rc;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -37,32 +37,35 @@ mod engine {
     use dpi::PhysicalSize;
     use euclid::{Box2D, Point2D, Scale};
     use glow::HasContext;
-    use servo::{Code, EventLoopWaker, Key, KeyState, Location, Modifiers, NamedKey};
-    use servo::protocol_handler::ProtocolRegistry;
-    use servo::{
-        DeviceIndependentPixel, DevicePixel, EditingActionEvent, InputEvent,
-        KeyboardEvent as ServoKeyboardEvent,
-        LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent,
-        NavigationRequest, Opts, PrefValue, Preferences, RenderingContext, Servo, ServoBuilder,
-        SoftwareRenderingContext, Theme, UrlRequest, WebResourceLoad, WebResourceResponse, WebView,
-        WebRenderDebugOption, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
-        WindowRenderingContext,
-    };
-    use servo::{AuthenticationRequest, PermissionFeature, PermissionRequest};
-    use servo::{ClipboardDelegate, StringRequest};
-    use servo::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, ScreenGeometry};
-    use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
-    use servo::{CreateNewWebViewRequest, EmbedderControl};
-    use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
-    use servo::{UserContentManager, UserScript};
-    use servo::{
-        MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState, StorageType,
-    };
-    use servo::CookieSource;
     use raw_window_handle::{
         DisplayHandle, RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle,
         WaylandWindowHandle, WindowHandle,
     };
+    use servo::input_events::{TouchEvent, TouchEventType, TouchId, TouchPointerType};
+    use servo::protocol_handler::ProtocolRegistry;
+    use servo::CookieSource;
+    use servo::{
+        AllowOrDenyRequest, AuthenticationRequest, PermissionFeature, PermissionRequest,
+        ServoDelegate as EngineServoDelegate, ServoError,
+    };
+    use servo::{ClipboardDelegate, StringRequest};
+    use servo::{Code, EventLoopWaker, Key, KeyState, Location, Modifiers, NamedKey};
+    use servo::{ConsoleLogLevel, ContextMenuAction, ContextMenuItem, Cursor, PixelFormat};
+    use servo::{CreateNewWebViewRequest, EmbedderControl};
+    use servo::{
+        DeviceIndependentPixel, DevicePixel, EditingActionEvent, InputEvent,
+        KeyboardEvent as ServoKeyboardEvent, LoadStatus, MouseButton, MouseButtonAction,
+        MouseButtonEvent, MouseMoveEvent, NavigationRequest, Opts, PrefValue, Preferences,
+        RenderingContext, Servo, ServoBuilder, SoftwareRenderingContext, Theme, UrlRequest,
+        WebRenderDebugOption, WebResourceLoad, WebResourceResponse, WebView, WebViewBuilder,
+        WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent, WindowRenderingContext,
+    };
+    use servo::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, ScreenGeometry};
+    use servo::{
+        MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState, StorageType,
+    };
+    use servo::{RgbColor, SelectElementOptionOrOptgroup, SimpleDialog};
+    use servo::{UserContentManager, UserScript};
     use url::Url;
 
     // ---- per-tab state stored in our engine registry ---------
@@ -425,6 +428,7 @@ mod engine {
         "dom_cookiestore_enabled",
         "dom_credential_management_enabled",
         "dom_exec_command_enabled",
+        "dom_entries_api_enabled",
         "dom_fontface_enabled",
         "dom_geolocation_enabled",
         "dom_indexeddb_enabled",
@@ -436,8 +440,11 @@ mod engine {
         "dom_sanitizer_enabled",
         "dom_storage_manager_api_enabled",
         "dom_wakelock_enabled",
+        "dom_web_animations_enabled",
         "dom_webgl2_enabled",
         "dom_webgpu_enabled",
+        "dom_touch_events_legacy_apis_enabled",
+        "layout_css_attr_enabled",
         "layout_columns_enabled",
         "layout_container_queries_enabled",
         "layout_grid_enabled",
@@ -447,6 +454,7 @@ mod engine {
     fn servo_preferences() -> Preferences {
         let mut preferences = Preferences {
             viewport_meta_enabled: true,
+            devtools_server_enabled: crate::bridge::ffi::devtools_server_enabled(),
             ..Preferences::default()
         };
         // Experimental features are enabled at startup via applySettings, not here.
@@ -545,6 +553,7 @@ mod engine {
             .protocol_registry(ProtocolRegistry::default())
             .event_loop_waker(Box::new(QtEventLoopWaker))
             .build();
+        servo.set_delegate(Rc::new(QtServoDelegate));
         servo.setup_logging();
         // Servo persists its network cookie jar when config_dir is set.
         // Clean session-only cookies at startup as well so a previous crash or
@@ -567,7 +576,7 @@ mod engine {
     }
 
     // User scripts live in <AppDataLocation>/userscripts, loaded in filename
-    // order like servoshell's --userscripts directory (servo 0.3.0).
+    // order like servoshell's --userscripts directory (Servo 0.4.0).
     fn user_scripts_dir() -> Option<PathBuf> {
         let app_data_dir = crate::bridge::ffi::servo_profile_data_dir();
         if app_data_dir.is_empty() {
@@ -615,8 +624,9 @@ mod engine {
             let mut files: Vec<PathBuf> = entries
                 .filter_map(|entry| entry.ok().map(|e| e.path()))
                 .filter(|path| {
-                    path.is_file() &&
-                        path.extension()
+                    path.is_file()
+                        && path
+                            .extension()
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
                 })
                 .collect();
@@ -636,7 +646,10 @@ mod engine {
                     }
                 }
             }
-            diag(format!("user_scripts loaded count={}", e.user_scripts.len()));
+            diag(format!(
+                "user_scripts loaded count={}",
+                e.user_scripts.len()
+            ));
         });
     }
 
@@ -702,7 +715,8 @@ mod engine {
             PermissionFeature::BackgroundSync => "background-sync",
             PermissionFeature::Bluetooth => "bluetooth",
             PermissionFeature::PersistentStorage => "persistent-storage",
-            PermissionFeature::ScreenWakeLock => "screen-wake-lock",
+            PermissionFeature::ScreenWakeLock(_) => "screen-wake-lock",
+            PermissionFeature::Gamepad => "gamepad",
         }
     }
 
@@ -750,7 +764,8 @@ mod engine {
             "Font" => "font",
             "Frame" | "IFrame" => "subdocument",
             "Image" => "image",
-            "AudioWorklet" | "PaintWorklet" | "Script" | "ServiceWorker" | "SharedWorker" | "Worker" => "script",
+            "AudioWorklet" | "PaintWorklet" | "Script" | "ServiceWorker" | "SharedWorker"
+            | "Worker" => "script",
             "Style" => "stylesheet",
             _ => "other",
         }
@@ -916,6 +931,26 @@ mod engine {
         }
     }
 
+    struct QtServoDelegate;
+
+    impl EngineServoDelegate for QtServoDelegate {
+        fn notify_error(&self, error: ServoError) {
+            eprintln!("ServoQ engine error: {error:?}");
+        }
+
+        fn notify_devtools_server_started(&self, port: u16, token: String) {
+            crate::bridge::ffi::notify_devtools_server_started(port, &token);
+        }
+
+        fn request_devtools_connection(&self, request: AllowOrDenyRequest) {
+            if crate::bridge::ffi::request_devtools_connection_sync() {
+                request.allow();
+            } else {
+                request.deny();
+            }
+        }
+    }
+
     // ---- delegate ------------------------------------------
 
     struct ServoDelegate {
@@ -938,11 +973,12 @@ mod engine {
                 webview.hide();
                 return;
             }
-            let Some(rendering_context) = self.rendering_context.software() else {
+            if self.rendering_context.software().is_none() {
                 record_wayland_frame_ready();
                 crate::bridge::ffi::request_wayland_window_repaint(self.tab_id);
                 return;
-            };
+            }
+            let rendering_context = webview.rendering_context();
 
             if crate::bridge::ffi::webcontent_frame_pending(self.tab_id) {
                 debug_log("skipped_frame_pending_qt_paint", self.tab_id);
@@ -1214,7 +1250,11 @@ mod engine {
             // PDFs are NOT intercepted here: request_navigation fires for subframes
             // too with no top-level signal, so it's routed from notify_url_changed.
             if content_blocking_allowed_for_url(&navigation_request.url)
-                && should_block_request(&navigation_request.url, &navigation_request.url, "document")
+                && should_block_request(
+                    &navigation_request.url,
+                    &navigation_request.url,
+                    "document",
+                )
             {
                 notify_request_blocked(self.tab_id, &navigation_request.url);
                 navigation_request.deny();
@@ -1231,7 +1271,8 @@ mod engine {
             let url = request.url.clone();
             let source_url = request.referrer_url.as_ref().unwrap_or(&url);
             let destination = format!("{:?}", request.destination);
-            let request_type = resource_type_for_destination(&destination, request.is_for_main_frame);
+            let request_type =
+                resource_type_for_destination(&destination, request.is_for_main_frame);
             // PDFs are not intercepted here either (this hook can't distinguish
             // a top-level document load from a subframe one). See notify_url_changed.
             if content_blocking_allowed_for_url(source_url)
@@ -1244,14 +1285,25 @@ mod engine {
         }
 
         fn notify_favicon_changed(&self, webview: WebView) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             if let Some(favicon) = webview.favicon() {
                 let w = favicon.width as i32;
                 let h = favicon.height as i32;
                 let raw = favicon.data();
                 if debug_enabled() {
-                    eprintln!("[servoq favicon] tab_id={} format={:?} size={}x{} bytes={}", self.tab_id, favicon.format, w, h, raw.len());
+                    eprintln!(
+                        "[servoq favicon] tab_id={} format={:?} size={}x{} bytes={}",
+                        self.tab_id,
+                        favicon.format,
+                        w,
+                        h,
+                        raw.len()
+                    );
                 }
                 let rgba8: Vec<u8> = match favicon.format {
                     PixelFormat::RGBA8 => raw.to_vec(),
@@ -1262,15 +1314,15 @@ mod engine {
                         }
                         out
                     }
-                    PixelFormat::RGB8 => {
-                        raw.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255u8]).collect()
-                    }
-                    PixelFormat::K8 => {
-                        raw.iter().flat_map(|&k| [k, k, k, 255u8]).collect()
-                    }
-                    PixelFormat::KA8 => {
-                        raw.chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect()
-                    }
+                    PixelFormat::RGB8 => raw
+                        .chunks(3)
+                        .flat_map(|c| [c[0], c[1], c[2], 255u8])
+                        .collect(),
+                    PixelFormat::K8 => raw.iter().flat_map(|&k| [k, k, k, 255u8]).collect(),
+                    PixelFormat::KA8 => raw
+                        .chunks(2)
+                        .flat_map(|c| [c[0], c[0], c[0], c[1]])
+                        .collect(),
                 };
                 crate::bridge::ffi::notify_favicon_changed(self.tab_id, &rgba8, w, h);
             } else {
@@ -1279,8 +1331,12 @@ mod engine {
         }
 
         fn notify_cursor_changed(&self, _webview: WebView, cursor: Cursor) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             // Cursor changes fire frequently while moving over a page; keep the
             // Debug-format of the cursor off the hot path unless logging is on.
             if debug_enabled() {
@@ -1289,17 +1345,30 @@ mod engine {
             crate::bridge::ffi::notify_cursor_changed(self.tab_id, cursor_to_servoq_code(&cursor));
         }
 
-        fn notify_history_changed(&self, _webview: WebView, entries: Vec<url::Url>, current: usize) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+        fn notify_history_changed(
+            &self,
+            _webview: WebView,
+            entries: Vec<url::Url>,
+            current: usize,
+        ) {
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             let urls: Vec<&str> = entries.iter().map(|u| u.as_str()).collect();
             let serialized = urls.join("\n");
             crate::bridge::ffi::notify_history_changed(self.tab_id, &serialized, current as i32);
         }
 
         fn notify_fullscreen_state_changed(&self, _webview: WebView, is_fullscreen: bool) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             crate::bridge::ffi::notify_fullscreen_changed(self.tab_id, is_fullscreen);
         }
 
@@ -1317,10 +1386,14 @@ mod engine {
                 ConsoleLogLevel::Warn => 3,
                 ConsoleLogLevel::Error => 4,
                 ConsoleLogLevel::Trace => 5,
+                ConsoleLogLevel::Dir => 6,
             };
             if debug_enabled() {
-                const NAMES: [&str; 6] = ["LOG", "DEBUG", "INFO", "WARN", "ERROR", "TRACE"];
-                eprintln!("[servoq console][tab={}][{}] {}", self.tab_id, NAMES[level_code as usize], message);
+                const NAMES: [&str; 7] = ["LOG", "DEBUG", "INFO", "WARN", "ERROR", "TRACE", "DIR"];
+                eprintln!(
+                    "[servoq console][tab={}][{}] {}",
+                    self.tab_id, NAMES[level_code as usize], message
+                );
             }
             if capture && tab_exists(self.tab_id) {
                 crate::bridge::ffi::notify_console_message(self.tab_id, level_code, &message);
@@ -1328,12 +1401,24 @@ mod engine {
         }
 
         fn notify_media_session_event(&self, _webview: WebView, event: MediaSessionEvent) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             match event {
                 MediaSessionEvent::SetMetadata(m) => {
                     crate::bridge::ffi::notify_media_session_event(
-                        self.tab_id, 0, 0, &m.title, &m.artist, &m.album, 0.0, 0.0, 0.0,
+                        self.tab_id,
+                        0,
+                        0,
+                        &m.title,
+                        &m.artist,
+                        &m.album,
+                        0.0,
+                        0.0,
+                        0.0,
                     );
                 }
                 MediaSessionEvent::PlaybackStateChange(state) => {
@@ -1343,27 +1428,55 @@ mod engine {
                         MediaSessionPlaybackState::Paused => 3,
                     };
                     crate::bridge::ffi::notify_media_session_event(
-                        self.tab_id, 1, code, "", "", "", 0.0, 0.0, 0.0,
+                        self.tab_id,
+                        1,
+                        code,
+                        "",
+                        "",
+                        "",
+                        0.0,
+                        0.0,
+                        0.0,
                     );
                 }
                 MediaSessionEvent::SetPositionState(p) => {
                     crate::bridge::ffi::notify_media_session_event(
-                        self.tab_id, 2, 0, "", "", "", p.duration, p.position, p.playback_rate,
+                        self.tab_id,
+                        2,
+                        0,
+                        "",
+                        "",
+                        "",
+                        p.duration,
+                        p.position,
+                        p.playback_rate,
                     );
                 }
             }
         }
 
         fn request_create_new(&self, _parent_webview: WebView, request: CreateNewWebViewRequest) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
             let new_id = crate::servo_controller::create_tab();
             let (rc, clipboard, engine_rc, size, scale) = ENGINE.with(|s| {
                 let s = s.borrow();
                 let e = match s.as_ref() {
                     Some(e) => e,
-                    None => return (None, None, None, PhysicalSize::new(800, 600), Scale::new(1.0f32)),
+                    None => {
+                        return (
+                            None,
+                            None,
+                            None,
+                            PhysicalSize::new(800, 600),
+                            Scale::new(1.0f32),
+                        )
+                    }
                 };
-                let (size, scale) = e.tabs.get(&self.tab_id)
+                let (size, scale) = e
+                    .tabs
+                    .get(&self.tab_id)
                     .map(|t| (t.physical_size, t.hidpi_scale_factor))
                     .unwrap_or((PhysicalSize::new(800, 600), Scale::new(1.0)));
                 (
@@ -1374,14 +1487,17 @@ mod engine {
                     scale,
                 )
             });
-            let (Some(rc), Some(clipboard), Some(engine_rc)) = (rc, clipboard, engine_rc) else { return; };
+            let (Some(rc), Some(clipboard), Some(engine_rc)) = (rc, clipboard, engine_rc) else {
+                return;
+            };
             let delegate: Rc<dyn WebViewDelegate> = Rc::new(ServoDelegate {
                 tab_id: new_id,
                 rendering_context: engine_rc,
                 animating: Cell::new(false),
                 initial_resize_done: Cell::new(false),
             });
-            let webview = request.builder(rc)
+            let webview = request
+                .builder(rc)
                 .hidpi_scale_factor(scale)
                 .clipboard_delegate(clipboard)
                 .delegate(delegate)
@@ -1389,20 +1505,23 @@ mod engine {
             configure_webview_diagnostics(&webview);
             ENGINE.with(|s| {
                 if let Some(e) = s.borrow_mut().as_mut() {
-                    e.tabs.insert(new_id, TabEntry {
-                        webview,
-                        current_url: String::new(),
-                        // Empty until the page reports one: the shell derives a
-                    // file-name/URL fallback ("New Tab" only for blank URLs).
-                    title: String::new(),
-                        loading: false,
-                        status_text: String::new(),
-                        active: true,
-                        qt_modifiers: 0,
-                        paint_hold: navigation_paint_hold(),
-                        physical_size: size,
-                        hidpi_scale_factor: scale,
-                    });
+                    e.tabs.insert(
+                        new_id,
+                        TabEntry {
+                            webview,
+                            current_url: String::new(),
+                            // Empty until the page reports one: the shell derives a
+                            // file-name/URL fallback ("New Tab" only for blank URLs).
+                            title: String::new(),
+                            loading: false,
+                            status_text: String::new(),
+                            active: true,
+                            qt_modifiers: 0,
+                            paint_hold: navigation_paint_hold(),
+                            physical_size: size,
+                            hidpi_scale_factor: scale,
+                        },
+                    );
                 }
             });
             debug_log_detail("popup_new_webview", new_id, "url=<pending>");
@@ -1410,28 +1529,45 @@ mod engine {
         }
 
         fn show_embedder_control(&self, _webview: WebView, embedder_control: EmbedderControl) {
-            if SHUTTING_DOWN.load(Ordering::Acquire) { return; }
-            if !tab_exists(self.tab_id) { return; }
+            if SHUTTING_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !tab_exists(self.tab_id) {
+                return;
+            }
             match embedder_control {
                 EmbedderControl::ContextMenu(menu) => {
                     let mut items_str = String::new();
                     for item in menu.items() {
                         match item {
-                            ContextMenuItem::Item { label, action, enabled } => {
-                                items_str.push_str(&format!("{}\t{}\t{}\n",
-                                    context_menu_action_id(*action), label, enabled));
+                            ContextMenuItem::Item {
+                                label,
+                                action,
+                                enabled,
+                            } => {
+                                items_str.push_str(&format!(
+                                    "{}\t{}\t{}\n",
+                                    context_menu_action_id(*action),
+                                    label,
+                                    enabled
+                                ));
                             }
                             ContextMenuItem::Separator => {
                                 items_str.push_str("sep\n");
                             }
                         }
                     }
-                    let link_url = menu.element_info().link_url
+                    let link_url = menu
+                        .element_info()
+                        .link_url
                         .as_ref()
                         .map(|u| u.to_string())
                         .unwrap_or_default();
                     let selected = crate::bridge::ffi::show_context_menu_sync(
-                        self.tab_id, &items_str, &link_url);
+                        self.tab_id,
+                        &items_str,
+                        &link_url,
+                    );
                     if let Some(action) = context_menu_action_from_id(selected) {
                         menu.select(action);
                     } else {
@@ -1447,7 +1583,10 @@ mod engine {
                         alert.confirm();
                     }
                     SimpleDialog::Confirm(confirm) => {
-                        if crate::bridge::ffi::show_confirm_dialog_sync(self.tab_id, confirm.message()) {
+                        if crate::bridge::ffi::show_confirm_dialog_sync(
+                            self.tab_id,
+                            confirm.message(),
+                        ) {
                             confirm.confirm();
                         } else {
                             confirm.dismiss();
@@ -1455,7 +1594,10 @@ mod engine {
                     }
                     SimpleDialog::Prompt(mut prompt) => {
                         let result = crate::bridge::ffi::show_prompt_dialog_sync(
-                            self.tab_id, prompt.message(), prompt.current_value());
+                            self.tab_id,
+                            prompt.message(),
+                            prompt.current_value(),
+                        );
                         if result.accepted {
                             prompt.set_current_value(&result.value);
                             prompt.confirm();
@@ -1470,17 +1612,18 @@ mod engine {
                     let escape = |s: &str| s.replace(['\t', '\n'], " ");
                     let selected = select.selected_options();
                     let mut items = String::new();
-                    let push_option =
-                        |items: &mut String, option: &servo::SelectElementOption, in_group: bool| {
-                            items.push_str(&format!(
-                                "opt\t{}\t{}\t{}\t{}\t{}\n",
-                                option.id,
-                                escape(&option.label),
-                                option.is_disabled as u8,
-                                selected.contains(&option.id) as u8,
-                                in_group as u8
-                            ));
-                        };
+                    let push_option = |items: &mut String,
+                                       option: &servo::SelectElementOption,
+                                       in_group: bool| {
+                        items.push_str(&format!(
+                            "opt\t{}\t{}\t{}\t{}\t{}\n",
+                            option.id,
+                            escape(&option.label),
+                            option.is_disabled as u8,
+                            selected.contains(&option.id) as u8,
+                            in_group as u8
+                        ));
+                    };
                     for entry in select.options() {
                         match entry {
                             SelectElementOptionOrOptgroup::Option(option) => {
@@ -1495,17 +1638,20 @@ mod engine {
                         }
                     }
                     let position = select.position();
-                    let chosen = crate::bridge::ffi::show_select_dropdown_sync(
+                    let result = crate::bridge::ffi::show_select_dropdown_sync(
                         self.tab_id,
                         &items,
                         position.min.x,
                         position.max.y,
                         position.width(),
+                        select.allow_select_multiple(),
                     );
-                    if chosen >= 0 {
-                        // selected_options carries option ids, mirroring
-                        // servoshell desktop/dialog.rs.
-                        select.select(vec![chosen as usize]);
+                    if let Some(ids) = result.strip_prefix("ok") {
+                        let chosen = ids
+                            .lines()
+                            .filter_map(|id| id.parse::<usize>().ok())
+                            .collect();
+                        select.select(chosen);
                         select.submit();
                     }
                     // Dismissed: dropping resubmits the unchanged selection.
@@ -1517,7 +1663,11 @@ mod engine {
                         blue: 0,
                     });
                     let result = crate::bridge::ffi::show_color_picker_sync(
-                        self.tab_id, current.red, current.green, current.blue);
+                        self.tab_id,
+                        current.red,
+                        current.green,
+                        current.blue,
+                    );
                     if result >= 0 {
                         picker.select(Some(RgbColor {
                             red: ((result >> 16) & 0xff) as u8,
@@ -1536,7 +1686,10 @@ mod engine {
                         .collect::<Vec<_>>()
                         .join("\n");
                     let result = crate::bridge::ffi::show_file_picker_sync(
-                        self.tab_id, &filters, picker.allow_select_multiple());
+                        self.tab_id,
+                        &filters,
+                        picker.allow_select_multiple(),
+                    );
                     if result.is_empty() {
                         picker.dismiss();
                     } else {
@@ -1694,7 +1847,9 @@ mod engine {
     }
 
     fn resize_webview_to_entry(entry: &TabEntry) {
-        entry.webview.set_hidpi_scale_factor(entry.hidpi_scale_factor);
+        entry
+            .webview
+            .set_hidpi_scale_factor(entry.hidpi_scale_factor);
         entry.webview.resize(entry.physical_size);
     }
 
@@ -1733,12 +1888,14 @@ mod engine {
                 return;
             }
             eprintln!("[servoq] init_servo: initializing Servo at startup");
-            *state = Some(create_engine_state(EngineRenderingContext::Software(Rc::new(
-                // Placeholder size -- resized to the actual widget dimensions in
-                // create_webview() before any WebView is built.
+            *state = Some(create_engine_state(EngineRenderingContext::Software(
+                Rc::new(
+                    // Placeholder size -- resized to the actual widget dimensions in
+                    // create_webview() before any WebView is built.
                     SoftwareRenderingContext::new(PhysicalSize::new(800, 600))
                         .expect("SoftwareRenderingContext::new failed"),
-            ))));
+                ),
+            )));
             eprintln!("[servoq] init_servo: done");
         });
     }
@@ -1956,8 +2113,10 @@ mod engine {
 
         let software_webviews_already_exist = ENGINE.with(|state| {
             state.borrow().as_ref().is_some_and(|engine| {
-                matches!(engine.rendering_context, EngineRenderingContext::Software(_))
-                    && !engine.tabs.is_empty()
+                matches!(
+                    engine.rendering_context,
+                    EngineRenderingContext::Software(_)
+                ) && !engine.tabs.is_empty()
             })
         });
         if software_webviews_already_exist {
@@ -1975,8 +2134,8 @@ mod engine {
             }
         };
 
-        let (software_gl, gl_renderer) =
-            detect_and_log_wayland_gl(&wayland_context, size, scale).unwrap_or((false, String::new()));
+        let (software_gl, gl_renderer) = detect_and_log_wayland_gl(&wayland_context, size, scale)
+            .unwrap_or((false, String::new()));
 
         if software_gl {
             if !allow_software_gl {
@@ -2223,7 +2382,9 @@ mod engine {
         if !active {
             debug_log_detail("wayland_present_skipped_inactive_tab", id, &url);
             if diag_enabled() {
-                diag(format!("present_wayland_webview SKIPPED inactive tab id={id} url={url}"));
+                diag(format!(
+                    "present_wayland_webview SKIPPED inactive tab id={id} url={url}"
+                ));
             }
             return;
         }
@@ -2250,8 +2411,10 @@ mod engine {
         // blank is correct). Read failures fail open and present (§0g).
         if paint_hold_active(id) {
             let surface_size = context.size2d().to_i32();
-            let rect: Box2D<i32, DevicePixel> =
-                Box2D::new(Point2D::origin(), Point2D::new(surface_size.width, surface_size.height));
+            let rect: Box2D<i32, DevicePixel> = Box2D::new(
+                Point2D::origin(),
+                Point2D::new(surface_size.width, surface_size.height),
+            );
             match context.read_to_image(rect) {
                 Some(image) if frame_is_blank_white(image.as_raw()) => {
                     let surface_shows_other_tab = WAYLAND_SURFACE_CONTENT_TAB
@@ -2278,7 +2441,11 @@ mod engine {
             &url,
         );
         if debug_enabled() {
-            debug_log_detail("wayland_present_leave", id, format!("url={url} swap_ms={:.2}", swap_time.as_secs_f64() * 1000.0));
+            debug_log_detail(
+                "wayland_present_leave",
+                id,
+                format!("url={url} swap_ms={:.2}", swap_time.as_secs_f64() * 1000.0),
+            );
         }
     }
 
@@ -2400,6 +2567,38 @@ mod engine {
         }
     }
 
+    pub fn forward_touch(
+        id: i32,
+        event_type: i32,
+        touch_id: i32,
+        x: f32,
+        y: f32,
+        pointer_type: i32,
+    ) {
+        let event_type = match event_type {
+            0 => TouchEventType::Down,
+            1 => TouchEventType::Move,
+            2 => TouchEventType::Up,
+            3 => TouchEventType::Cancel,
+            _ => return,
+        };
+        let pointer_type = match pointer_type {
+            0 => TouchPointerType::Pen,
+            1 => TouchPointerType::Touch,
+            _ => return,
+        };
+        let point = WebViewPoint::Device(Point2D::new(x, y));
+        let event = InputEvent::Touch(TouchEvent::new(
+            event_type,
+            TouchId(touch_id),
+            point,
+            pointer_type,
+        ));
+        if let Some(webview) = clone_webview(id) {
+            webview.notify_input_event(event);
+        }
+    }
+
     pub fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32, mods: u32) {
         let action = match action {
             0 => MouseButtonAction::Down,
@@ -2436,7 +2635,9 @@ mod engine {
         let event = InputEvent::Wheel(WheelEvent::new(delta, point));
         if let Some(wv) = clone_webview(id) {
             if diag_enabled() {
-                diag(format!("wheel id={id} delta=({dx:.1},{dy:.1}) device=({x:.1},{y:.1})"));
+                diag(format!(
+                    "wheel id={id} delta=({dx:.1},{dy:.1}) device=({x:.1},{y:.1})"
+                ));
             }
             wv.notify_input_event(event);
         }
@@ -2447,7 +2648,9 @@ mod engine {
     pub fn forward_pinch_zoom(id: i32, scale: f32, x: f32, y: f32) {
         if let Some(wv) = clone_webview(id) {
             if diag_enabled() {
-                diag(format!("pinch_zoom id={id} scale={scale:.3} device=({x:.1},{y:.1})"));
+                diag(format!(
+                    "pinch_zoom id={id} scale={scale:.3} device=({x:.1},{y:.1})"
+                ));
             }
             wv.adjust_pinch_zoom(scale, Point2D::new(x, y));
         }
@@ -2552,7 +2755,9 @@ mod engine {
         let key = if ctrl_chord_active(mods) && qt_key == QT_KEY_A {
             // Ctrl+A: forward the corrected logical key 'a' so Servo's select-all
             // shortcut matches (under Ctrl, Qt's text() is SOH) — see §5b.
-            diag(format!("select_all id={id} down={down} via=keyboard Key::Character(\"a\")"));
+            diag(format!(
+                "select_all id={id} down={down} via=keyboard Key::Character(\"a\")"
+            ));
             Key::Character("a".to_string())
         } else {
             qt_key_to_key(key_char, qt_key)
@@ -2640,7 +2845,7 @@ mod engine {
         }
     }
 
-    // Servo 0.2.0: WebView::set_page_zoom(f32) — clamped to [0.1, 10.0] internally
+    // Servo 0.4.0: WebView::set_page_zoom(f32) — clamped to [0.1, 10.0] internally
     pub fn set_page_zoom(id: i32, zoom: f32) {
         ENGINE.with(|s| {
             let s = s.borrow();
@@ -2648,7 +2853,7 @@ mod engine {
                 return;
             };
             entry.webview.set_page_zoom(zoom);
-            // Servo 0.2.0 keeps WebView::set_animating() crate-private. A same-size
+            // Servo 0.4.0 keeps WebView::set_animating() crate-private. A same-size
             // resize uses public API and marks the painter for repaint after zoom.
             entry.webview.resize(entry.physical_size);
         });
@@ -2697,7 +2902,11 @@ mod engine {
             );
             return;
         };
-        debug_log_detail("evaluate_javascript", id, format!("request_id={request_id}"));
+        debug_log_detail(
+            "evaluate_javascript",
+            id,
+            format!("request_id={request_id}"),
+        );
         wv.evaluate_javascript(script, move |result| match result {
             Ok(value) => crate::bridge::ffi::notify_javascript_result(
                 id,
@@ -2776,7 +2985,9 @@ mod engine {
                 // renamed/removed pref is skipped, not fatal (docs/DEVIATIONS.md §6).
                 if Preferences::exists(pref) {
                     servo.set_preference(pref, PrefValue::Bool(enabled));
-                    diag(format!("experimental_pref applied name={pref} value={enabled}"));
+                    diag(format!(
+                        "experimental_pref applied name={pref} value={enabled}"
+                    ));
                 } else {
                     eprintln!(
                         "SERVOQ: skipping unknown experimental preference '{pref}' \
@@ -2972,7 +3183,9 @@ mod engine {
     pub fn list_site_data() -> String {
         ENGINE.with(|s| {
             let s = s.borrow();
-            let Some(e) = s.as_ref() else { return String::new() };
+            let Some(e) = s.as_ref() else {
+                return String::new();
+            };
             let sites = e.servo.site_data_manager().site_data(StorageType::all());
             sites
                 .iter()
@@ -3043,7 +3256,11 @@ mod engine {
                         c.value(),
                         c.domain().unwrap_or(""),
                         c.path().unwrap_or(""),
-                        if c.secure().unwrap_or(false) { "1" } else { "0" },
+                        if c.secure().unwrap_or(false) {
+                            "1"
+                        } else {
+                            "0"
+                        },
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3153,6 +3370,18 @@ pub fn notify_wayland_subsurface_unmapped() {
 pub fn forward_mouse_move(_id: i32, _x: f32, _y: f32) {
     #[cfg(feature = "servo-engine")]
     engine::forward_mouse_move(_id, _x, _y);
+}
+
+pub fn forward_touch(
+    _id: i32,
+    _event_type: i32,
+    _touch_id: i32,
+    _x: f32,
+    _y: f32,
+    _pointer_type: i32,
+) {
+    #[cfg(feature = "servo-engine")]
+    engine::forward_touch(_id, _event_type, _touch_id, _x, _y, _pointer_type);
 }
 
 pub fn forward_mouse_button(_id: i32, _action: i32, _button: i32, _x: f32, _y: f32, _mods: u32) {

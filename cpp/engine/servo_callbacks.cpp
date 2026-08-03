@@ -224,6 +224,26 @@ QHash<uint64_t, std::function<void(bool, QString const&)>>& g_js_result_handlers
 
 } // namespace
 
+bool devtools_server_enabled()
+{
+    return ServoQ::Settings::the()->devtools_server_enabled();
+}
+
+void notify_devtools_server_started(::std::uint16_t port, ::rust::Str token)
+{
+    Q_UNUSED(token);
+    qInfo().nospace() << "ServoQ remote DevTools listening on 127.0.0.1:" << port;
+}
+
+bool request_devtools_connection_sync()
+{
+    return QMessageBox::question(find_browser_window(),
+               QStringLiteral("Remote DevTools connection"),
+               QStringLiteral("A local application wants to inspect and control open pages. Allow this DevTools connection?"),
+               QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+        == QMessageBox::Yes;
+}
+
 bool servo_shutdown_started()
 {
     return g_servo_shutting_down().load(std::memory_order_acquire);

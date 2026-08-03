@@ -19,13 +19,17 @@
 #include <QAction>
 #include <QAbstractItemView>
 #include <QCompleter>
+#include <QClipboard>
+#include <QContextMenuEvent>
 #include <QItemSelectionModel>
 #include <QEasingCurve>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QGraphicsDropShadowEffect>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QMenu>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QRectF>
@@ -205,6 +209,20 @@ void LocationEdit::changeEvent(QEvent* event)
         updateChromeStyle();
 }
 
+void LocationEdit::contextMenuEvent(QContextMenuEvent* event)
+{
+    auto* menu = createStandardContextMenu();
+    auto clipboard_text = QGuiApplication::clipboard()->text().trimmed();
+    auto* paste_and_go = menu->addAction(create_chrome_icon(ChromeIcon::Forward, palette()), QStringLiteral("Paste and Go"));
+    paste_and_go->setEnabled(!isReadOnly() && !clipboard_text.isEmpty());
+    connect(paste_and_go, &QAction::triggered, this, [this, clipboard_text] {
+        setText(clipboard_text);
+        emit returnPressed();
+    });
+    menu->exec(event->globalPos());
+    delete menu;
+}
+
 void LocationEdit::focusInEvent(QFocusEvent* event)
 {
     // Focus returning from a popup (e.g. the context menu) must not rewrite
@@ -231,8 +249,10 @@ void LocationEdit::focusInEvent(QFocusEvent* event)
 
     if (!should_defer_full_url) {
         QTimer::singleShot(0, this, [this] {
-            if (hasFocus())
+            if (hasFocus()) {
                 selectAll();
+                updateHistorySuggestions(text());
+            }
         });
     }
 }

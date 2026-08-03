@@ -19,6 +19,8 @@
 
 class QAction;
 class QCloseEvent;
+class QDragEnterEvent;
+class QDropEvent;
 class QMenu;
 class QPaintEvent;
 class QTimer;
@@ -66,6 +68,8 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 

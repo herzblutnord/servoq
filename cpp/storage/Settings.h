@@ -109,6 +109,9 @@ public:
     void set_user_scripts_enabled(bool enabled);
     static QString user_scripts_directory();
 
+    bool devtools_server_enabled() const;
+    void set_devtools_server_enabled(bool enabled);
+
     QStringList bookmarks() const;
     void set_bookmarks(QStringList const& bookmarks);
     bool has_bookmark(QString const& url) const;

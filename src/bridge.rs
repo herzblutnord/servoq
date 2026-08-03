@@ -51,6 +51,9 @@ pub mod ffi {
         // characters Servo's built-in fallback list misses (CJK punctuation)
         // don't render as tofu. See servo_preferences().
         fn system_cjk_font_family(generic: &str) -> String;
+        // Remote DevTools is opt-in and starts with Servo, so changing this
+        // setting takes effect on the next application launch.
+        fn devtools_server_enabled() -> bool;
 
         // Frame and delegate notifications: Rust -> C++ (safe per CXX's unsafe extern "C++" contract)
         include!("servoq/cpp/engine/servo_callbacks.h");
@@ -96,8 +99,16 @@ pub mod ffi {
         // "opt\t<id>\t<label>\t<disabled 0/1>\t<selected 0/1>\t<in_group 0/1>"
         // or "group\t<label>". x/y anchor the menu at the element's bottom-left
         // corner and width is the element width, all in device pixels.
-        // Returns the chosen option id (>=0) or -1 for dismissed.
-        fn show_select_dropdown_sync(tab_id: i32, items: &str, x: i32, y: i32, width: i32) -> i32;
+        // Returns "ok\n<id>..." on acceptance (zero or more ids) or an empty
+        // string when dismissed. allow_multiple selects the checklist dialog.
+        fn show_select_dropdown_sync(
+            tab_id: i32,
+            items: &str,
+            x: i32,
+            y: i32,
+            width: i32,
+            allow_multiple: bool,
+        ) -> String;
         // <input type=color>: returns packed 0xRRGGBB (>=0) or -1 for cancelled.
         fn show_color_picker_sync(tab_id: i32, red: u8, green: u8, blue: u8) -> i32;
         // <input type=file>: filters = newline-separated extensions without dot
@@ -151,6 +162,8 @@ pub mod ffi {
         // console panel. Only forwarded while console capture is enabled
         // (set_console_capture_enabled) so loop-heavy pages don't flood the FFI.
         fn notify_console_message(tab_id: i32, level: i32, message: &str);
+        fn notify_devtools_server_started(port: u16, token: &str);
+        fn request_devtools_connection_sync() -> bool;
         // Posts a custom QEvent to the Qt main thread to wake the event loop.
         // Called from Servo's background threads (paint, layout, font loading).
         // QCoreApplication::postEvent() is thread-safe.
@@ -218,6 +231,16 @@ pub mod ffi {
 
         // Input forwarding: called by WebContentView event handlers
         fn forward_mouse_move(id: i32, x: f32, y: f32);
+        // event_type: 0 down, 1 move, 2 up, 3 cancel;
+        // pointer_type: 0 pen, 1 touch.
+        fn forward_touch(
+            id: i32,
+            event_type: i32,
+            touch_id: i32,
+            x: f32,
+            y: f32,
+            pointer_type: i32,
+        );
         fn forward_mouse_button(id: i32, action: i32, button: i32, x: f32, y: f32, mods: u32);
         fn forward_wheel(id: i32, dx: f64, dy: f64, x: f32, y: f32);
         // Touchpad pinch (Qt::ZoomNativeGesture): scale is the per-step
@@ -291,8 +314,9 @@ pub use crate::servo_engine::{
 pub use crate::servo_engine::{
     close_webview, create_webview, create_webview_wayland_window, forward_focus, forward_key,
     forward_mouse_button, forward_mouse_move, forward_pinch_zoom, forward_resize,
-    forward_theme_change, forward_wheel, init_servo, notify_wayland_subsurface_unmapped,
-    present_wayland_webview, set_webview_active, shutdown_servo, tick_servo, tick_webview,
+    forward_theme_change, forward_touch, forward_wheel, init_servo,
+    notify_wayland_subsurface_unmapped, present_wayland_webview, set_webview_active,
+    shutdown_servo, tick_servo, tick_webview,
 };
 
 // Page zoom — always present; no-ops when servo-engine feature is off

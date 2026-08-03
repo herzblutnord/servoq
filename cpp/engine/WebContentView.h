@@ -13,14 +13,18 @@
 #pragma once
 
 #include <QImage>
+#include <QHash>
 #include <QList>
+#include <QPointF>
 #include <QSize>
 #include <QString>
 #include <QWidget>
 
 class QKeyEvent;
 class QMouseEvent;
+class QTabletEvent;
 class QTimer;
+class QTouchEvent;
 class QWheelEvent;
 class QWindow;
 
@@ -130,6 +134,8 @@ protected:
 private:
     void forwardMouseButton(int action, int button, QMouseEvent* ev);
     void forwardWindowMouseButton(int action, int button, QMouseEvent* ev);
+    bool forwardTouchEvent(QTouchEvent* event, qreal dpr);
+    bool forwardTabletEvent(QTabletEvent* event, qreal dpr);
     void takeFocusFromContentClick();
     bool handleCtrlWheelZoom(QWheelEvent* event);
     bool handleMiddleClickLinkFallback(QMouseEvent* event);
@@ -170,6 +176,8 @@ private:
     qint64 m_last_present_duration_ms { 0 };
     bool m_present_throttle_scheduled { false };
     double m_ctrl_wheel_zoom_remainder { 0.0 };
+    QHash<int, QPointF> m_active_touch_points;
+    bool m_pen_active { false };
 };
 
 } // namespace ServoQ

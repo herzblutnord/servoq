@@ -174,6 +174,7 @@ public:
     void set_tab_layout(TabLayout layout) { setTabLayout(layout); }
     void refreshTabLayout();
     void refresh_tab_layout() { refreshTabLayout(); }
+    void setChromeVisible(bool visible);
 
     std::function<void(int)> onCurrentChanged;
     std::function<void(int)> onTabCloseRequested;
@@ -244,6 +245,7 @@ private:
     bool m_vertical_tabs_hover_expanded { false };
     bool m_is_resizing_vertical_tabs { false };
     bool m_main_window_filter_installed { false };
+    bool m_chrome_visible { true };
     int m_vertical_tabs_expanded_width { browser_chrome_layout_policy().expanded_sidebar_width };
     int m_vertical_tabs_resize_start_global_x { 0 };
     int m_vertical_tabs_resize_start_width { browser_chrome_layout_policy().expanded_sidebar_width };

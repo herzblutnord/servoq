@@ -14,7 +14,7 @@ QSettings INI (`~/.config/ServoQ/ServoQ.ini`).
 | Bookmarks | `bookmarks.json` | JSON tree | Chromium `Bookmarks` |
 | Session (open tabs, active tab, pinned flags, recently closed) | `session.json` | JSON | Firefox `sessionstore.jsonlz4` (uncompressed; it is tiny) |
 | Web permission decisions | `permissions.json` | JSON (origin → feature → allow/block) | Chromium content-settings exceptions in `Preferences` |
-| Settings, window geometry, search engines | QSettings INI | INI | — |
+| Settings, window geometry, search engines, DevTools opt-in | QSettings INI | INI | — |
 | Content-blocking lists | `blocklists/` | EasyList text | — |
 
 ## Rules (learned the hard way — see DEVIATIONS.md §0e)
@@ -79,9 +79,9 @@ stores above. Session cookies are cleared at startup and again before Servo
 shutdown so cookies without `Expires`/`Max-Age` do not become restart-persistent
 just because the public cookie jar is now saved on disk.
 
-Audited mechanics (Servo 0.2 `servo-net` `resource_thread.rs`; re-audited
-unchanged in 0.3.0 — the cookie-clearing APIs grew an optional completion
-callback, ServoQ passes `None` to stay on the synchronous ordered path, see
+Audited mechanics (Servo 0.4 `servo-net` `resource_thread.rs`; re-audited
+unchanged from 0.3.0 — the cookie-clearing APIs have an optional completion
+callback, and ServoQ passes `None` to stay on the synchronous ordered path, see
 DEVIATIONS.md §0p):
 
 - The jar/HSTS files are read once at startup and written **only** on the

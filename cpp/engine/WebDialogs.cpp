@@ -30,6 +30,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMap>
 #include <QMenu>
 #include <QMessageBox>
@@ -109,20 +110,78 @@ PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str me
     return result;
 }
 
-::std::int32_t show_select_dropdown_sync(::std::int32_t tab_id, ::rust::Str items, ::std::int32_t x, ::std::int32_t y, ::std::int32_t width)
+::rust::String show_select_dropdown_sync(::std::int32_t tab_id, ::rust::Str items, ::std::int32_t x, ::std::int32_t y, ::std::int32_t width, bool allow_multiple)
 {
     if (servo_shutdown_started())
-        return -1;
+        return {};
     auto* view = ServoQ::WebContentView::findByTabId(tab_id);
     if (!view)
-        return -1;
+        return {};
+
+    auto items_text = QString::fromUtf8(items.data(), static_cast<qsizetype>(items.size()));
+
+    if (allow_multiple) {
+        QDialog dialog(dialog_parent_for_view(view));
+        dialog.setWindowTitle(QStringLiteral("Select Options"));
+        auto* layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(QStringLiteral("Choose one or more options:"), &dialog));
+        auto* list = new QListWidget(&dialog);
+        list->setSelectionMode(QAbstractItemView::NoSelection);
+        list->setMinimumWidth(qMax(320, static_cast<int>(width / view->devicePixelRatioF())));
+        layout->addWidget(list);
+
+        for (auto const& line : items_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+            auto parts = line.split(QLatin1Char('\t'));
+            if (parts[0] == QStringLiteral("group") && parts.size() >= 2) {
+                auto* group = new QListWidgetItem(parts[1], list);
+                auto font = group->font();
+                font.setBold(true);
+                group->setFont(font);
+                group->setFlags(Qt::NoItemFlags);
+                continue;
+            }
+            if (parts[0] != QStringLiteral("opt") || parts.size() < 6)
+                continue;
+            bool ok = false;
+            int id = parts[1].toInt(&ok);
+            if (!ok)
+                continue;
+            bool disabled = parts[3] == QStringLiteral("1");
+            bool selected = parts[4] == QStringLiteral("1");
+            bool in_group = parts[5] == QStringLiteral("1");
+            auto label = in_group ? QStringLiteral("    %1").arg(parts[2]) : parts[2];
+            auto* option = new QListWidgetItem(label, list);
+            option->setData(Qt::UserRole, id);
+            option->setFlags(option->flags() | Qt::ItemIsUserCheckable);
+            option->setCheckState(selected ? Qt::Checked : Qt::Unchecked);
+            if (disabled)
+                option->setFlags(option->flags() & ~Qt::ItemIsEnabled);
+        }
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        if (dialog.exec() != QDialog::Accepted)
+            return {};
+
+        QStringList selected_ids;
+        for (int row = 0; row < list->count(); ++row) {
+            auto* item = list->item(row);
+            if (item->data(Qt::UserRole).isValid() && item->checkState() == Qt::Checked)
+                selected_ids.append(item->data(Qt::UserRole).toString());
+        }
+        auto result = QStringLiteral("ok");
+        if (!selected_ids.isEmpty())
+            result += QLatin1Char('\n') + selected_ids.join(QLatin1Char('\n'));
+        return result.toStdString();
+    }
 
     // No parent, like show_context_menu_sync: prevents double-free if the
     // view's Tab is deleted during menu.exec()'s nested event loop.
     QMenu menu;
     QMap<QAction*, int> option_ids;
 
-    auto items_text = QString::fromUtf8(items.data(), static_cast<qsizetype>(items.size()));
     for (auto const& line : items_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
         auto parts = line.split(QLatin1Char('\t'));
         if (parts[0] == QStringLiteral("group") && parts.size() >= 2) {
@@ -147,7 +206,7 @@ PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str me
         option_ids[action] = id;
     }
     if (menu.actions().isEmpty())
-        return -1;
+        return {};
 
     // x/y/width are device pixels relative to the webview origin, which
     // coincides with the view widget origin (see mouse forwarding).
@@ -157,7 +216,9 @@ PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str me
     menu.setMinimumWidth(static_cast<int>(width / dpr));
 
     auto* chosen = menu.exec(anchor);
-    return (chosen && option_ids.contains(chosen)) ? option_ids[chosen] : -1;
+    if (!chosen || !option_ids.contains(chosen))
+        return {};
+    return QStringLiteral("ok\n%1").arg(option_ids[chosen]).toStdString();
 }
 
 ::std::int32_t show_color_picker_sync(::std::int32_t tab_id, ::std::uint8_t red, ::std::uint8_t green, ::std::uint8_t blue)

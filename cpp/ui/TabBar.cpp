@@ -196,11 +196,6 @@ public:
     }
 
 private:
-    bool isHovered() const
-    {
-        return rect().contains(mapFromGlobal(QCursor::pos()));
-    }
-
     void enterEvent(QEnterEvent* event) override
     {
         QToolButton::enterEvent(event);
@@ -233,7 +228,7 @@ private:
             painter.setBrush(ChromeStyle::chrome_surface_pressed(palette()));
             painter.setPen(QPen(ChromeStyle::chrome_border(palette()), 1));
             painter.drawPath(path);
-        } else if (isHovered()) {
+        } else if (underMouse()) {
             painter.setBrush(tabHoverSurface(palette(), 1.0));
             painter.setPen(Qt::NoPen);
             painter.drawPath(path);
@@ -685,6 +680,7 @@ void TabBar::contextMenuEvent(QContextMenuEvent* event)
     int index = tabIndexAt(event->pos());
     if (index < 0)
         return;
+    m_pressed_tab_index = -1;
 
     auto* tab_widget = m_tab_widget;
     auto* browser_window = dynamic_cast<BrowserWindow*>(tab_widget ? tab_widget->parent() : nullptr);
@@ -1647,9 +1643,24 @@ void TabWidget::updateTabLayout()
 void TabWidget::updateTabChromeVisibility()
 {
     auto is_horizontal = m_tab_bar->tabLayout() == TabLayout::Horizontal;
-    m_tab_bar_row->setVisible(is_horizontal);
-    m_vertical_tab_bar_column->setVisible(!is_horizontal);
+    m_toolbar_container->setVisible(m_chrome_visible);
+    m_tab_bar_row->setVisible(m_chrome_visible && is_horizontal);
+    m_vertical_tab_bar_column->setVisible(m_chrome_visible && !is_horizontal);
+    m_vertical_tabs_reserved_space->setVisible(m_chrome_visible && !is_horizontal);
     updateVerticalTabsSeparator();
+}
+
+void TabWidget::setChromeVisible(bool visible)
+{
+    if (m_chrome_visible == visible)
+        return;
+    if (!visible)
+        setVerticalTabsHoverExpanded(false);
+    m_chrome_visible = visible;
+    updateTabChromeVisibility();
+    updateVerticalTabsOverlayGeometry();
+    updateVerticalTabsResizeHandle();
+    updateContainerGeometry();
 }
 
 void TabWidget::updateVerticalTabsButtonLayout()
@@ -1665,7 +1676,7 @@ void TabWidget::updateVerticalTabsButtonLayout()
 
 void TabWidget::updateVerticalTabsOverlayGeometry()
 {
-    if (m_tab_bar->tabLayout() == TabLayout::Horizontal) {
+    if (!m_chrome_visible || m_tab_bar->tabLayout() == TabLayout::Horizontal) {
         m_vertical_tab_bar_column->hide();
         return;
     }
@@ -1684,7 +1695,7 @@ void TabWidget::updateVerticalTabsOverlayGeometry()
 
 void TabWidget::updateVerticalTabsResizeHandle()
 {
-    auto show_handle = m_tab_bar->tabLayout() != TabLayout::Horizontal && m_vertical_tabs_expanded;
+    auto show_handle = m_chrome_visible && m_tab_bar->tabLayout() != TabLayout::Horizontal && m_vertical_tabs_expanded;
     m_vertical_tabs_resize_handle->setVisible(show_handle);
     if (!show_handle) {
         m_vertical_tabs_resize_handle->releaseMouse();
@@ -1703,7 +1714,7 @@ void TabWidget::updateVerticalTabsResizeHandle()
 
 void TabWidget::updateVerticalTabsSeparator()
 {
-    auto show_separator = m_tab_bar->tabLayout() != TabLayout::Horizontal;
+    auto show_separator = m_chrome_visible && m_tab_bar->tabLayout() != TabLayout::Horizontal;
     m_vertical_tabs_separator->setVisible(show_separator);
     if (!show_separator)
         return;

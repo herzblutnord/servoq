@@ -13,6 +13,7 @@
 
 class QAction;
 class QCompleter;
+class QContextMenuEvent;
 class QEvent;
 class QFocusEvent;
 class QModelIndex;
@@ -38,6 +39,7 @@ public:
 
 protected:
     void changeEvent(QEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;

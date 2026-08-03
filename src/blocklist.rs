@@ -11,9 +11,9 @@
 #[cfg(feature = "servo-engine")]
 mod inner {
     use adblock::{
-        Engine,
         lists::{FilterSet, ParseOptions},
         request::Request,
+        Engine,
     };
     use std::cell::RefCell;
 
@@ -41,11 +41,10 @@ mod inner {
     }
 
     pub fn user_blocklist_path() -> String {
-        let base = std::env::var("XDG_CONFIG_HOME")
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                format!("{home}/.config")
-            });
+        let base = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{home}/.config")
+        });
         format!("{base}/servoq/blocklist.txt")
     }
 
@@ -97,7 +96,11 @@ mod inner {
 pub use inner::{reload_blocklists, should_block, user_blocklist_path};
 
 #[cfg(not(feature = "servo-engine"))]
-pub fn reload_blocklists() -> bool { false }
+pub fn reload_blocklists() -> bool {
+    false
+}
 
 #[cfg(not(feature = "servo-engine"))]
-pub fn user_blocklist_path() -> String { String::new() }
+pub fn user_blocklist_path() -> String {
+    String::new()
+}

@@ -74,6 +74,9 @@
 #include <QWidgetAction>
 #include <QCloseEvent>
 #include <QDebug>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <memory>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -187,6 +190,7 @@ BrowserWindow::BrowserWindow(QWidget* parent)
 
     setWindowTitle("ServoQ");
     setWindowIcon(app_icon());
+    setAcceptDrops(true);
     updateWindowBorder();
     // Keep the floor only as large as the chrome needs to stay usable (toolbar
     // cluster + location bar + hamburger; vertical tab strip). Was 900x640,
@@ -769,6 +773,37 @@ void BrowserWindow::closeEvent(QCloseEvent* event)
     QMainWindow::closeEvent(event);
 }
 
+void BrowserWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (!event->mimeData()->hasUrls())
+        return;
+    for (auto const& url : event->mimeData()->urls()) {
+        if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile()) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
+}
+
+void BrowserWindow::dropEvent(QDropEvent* event)
+{
+    QStringList urls;
+    for (auto const& url : event->mimeData()->urls()) {
+        if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile())
+            urls.append(QUrl::fromLocalFile(url.toLocalFile()).toString());
+    }
+    if (urls.isEmpty())
+        return;
+
+    if (auto* tab = currentTab())
+        tab->navigate(urls.takeFirst());
+    else
+        createNewTab(urls.takeFirst(), false, false);
+    for (auto const& url : urls)
+        createNewTab(url, true, false);
+    event->acceptProposedAction();
+}
+
 void BrowserWindow::createInitialTab()
 {
     if (restoreSessionTabs())
@@ -931,8 +966,12 @@ void BrowserWindow::setFullscreen(bool fullscreen)
 {
     if (fullscreen) {
         m_was_maximized_before_fullscreen = isMaximized();
+        menuBar()->hide();
+        m_tabs->setChromeVisible(false);
         showFullScreen();
     } else {
+        m_tabs->setChromeVisible(true);
+        updateMenuBarVisibility();
         if (m_was_maximized_before_fullscreen)
             showMaximized();
         else

@@ -38,7 +38,7 @@ class ConsoleLog final : public QObject {
 public:
     struct Message {
         int tab_id;
-        int level; // 0 Log, 1 Debug, 2 Info, 3 Warn, 4 Error, 5 Trace
+        int level; // 0 Log, 1 Debug, 2 Info, 3 Warn, 4 Error, 5 Trace, 6 Dir
         QString text;
         QString time;
     };

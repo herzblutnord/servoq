@@ -113,8 +113,8 @@ bool show_confirm_dialog_sync(::std::int32_t tab_id, ::rust::Str message);
 PromptDialogResult show_prompt_dialog_sync(::std::int32_t tab_id, ::rust::Str message, ::rust::Str default_value);
 // items: lines "opt\t<id>\t<label>\t<disabled 0/1>\t<selected 0/1>\t<in_group 0/1>"
 // or "group\t<label>"; x/y = element bottom-left, width = element width (device px).
-// Returns the chosen option id (>=0) or -1 for dismissed.
-::std::int32_t show_select_dropdown_sync(::std::int32_t tab_id, ::rust::Str items, ::std::int32_t x, ::std::int32_t y, ::std::int32_t width);
+// Returns "ok\n<id>..." on acceptance or an empty string when dismissed.
+::rust::String show_select_dropdown_sync(::std::int32_t tab_id, ::rust::Str items, ::std::int32_t x, ::std::int32_t y, ::std::int32_t width, bool allow_multiple);
 // Returns packed 0xRRGGBB (>=0) or -1 for cancelled.
 ::std::int32_t show_color_picker_sync(::std::int32_t tab_id, ::std::uint8_t red, ::std::uint8_t green, ::std::uint8_t blue);
 // filters: newline-separated extensions without dot. Returns newline-separated
@@ -139,6 +139,12 @@ AuthDialogResult show_authentication_dialog_sync(::std::int32_t tab_id, ::rust::
 // per-origin decision first; otherwise shows a modal Allow/Block prompt.
 // Allow/Block persist; dismissing denies once without persisting.
 bool request_permission_sync(::std::int32_t tab_id, ::rust::Str origin, ::rust::Str feature);
+
+// Servo's remote DevTools server is opt-in, loopback-only, and prompts before
+// accepting a client that does not possess the per-launch bypass token.
+bool devtools_server_enabled();
+void notify_devtools_server_started(::std::uint16_t port, ::rust::Str token);
+bool request_devtools_connection_sync();
 
 // window.screen.* backing data in device pixels (WebContentView.cpp).
 ScreenGeometryResult get_screen_geometry(::std::int32_t tab_id);
@@ -171,7 +177,7 @@ void notify_media_session_event(::std::int32_t tab_id, ::std::int32_t kind,
                                 double position, double playback_rate);
 
 // Page console message for the servoq://debug console panel (M4.4). level:
-// 0 Log, 1 Debug, 2 Info, 3 Warn, 4 Error, 5 Trace. Only delivered while console
+// 0 Log, 1 Debug, 2 Info, 3 Warn, 4 Error, 5 Trace, 6 Dir. Only delivered while console
 // capture is enabled (servoq::set_console_capture_enabled).
 void notify_console_message(::std::int32_t tab_id, ::std::int32_t level, ::rust::Str message);
 
